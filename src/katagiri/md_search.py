@@ -856,7 +856,7 @@ def _filters(
         clauses.append("n.generated = 0")
 
     if path_prefix:
-        clauses.append(f"n.path LIKE ? ESCAPE '\\'")
+        clauses.append("n.path LIKE ? ESCAPE '\\'")
         params.append(_like_prefix(path_prefix))
 
     for tag in tags or ():
