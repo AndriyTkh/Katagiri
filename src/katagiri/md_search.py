@@ -45,14 +45,16 @@ and cannot drift out of agreement with ``md_note``.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import hashlib
 import json
 import os
 import re
 import sqlite3
+import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +65,7 @@ from katagiri.fts_index import (
     TOKENIZER_VERSION_KEY,
     TRIGRAM_MIN_CHARS,
     current_versions,
+    sanitize_query,
     shadow_text,
 )
 from katagiri.logging_setup import get_logger
@@ -790,10 +793,323 @@ def rebuild_md_index(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Query
+# ---------------------------------------------------------------------------
+
+INDEX_EMPTY_NOTE: Final = (
+    "md_note holds no rows, so the markdown index is empty and no note hit is "
+    "possible yet. Run rebuild_md_index() (python -m katagiri.md_search rebuild) "
+    "to index the vault."
+)
+
+_LIKE_SPECIALS: Final = re.compile(r"([%_\\])")
+
+#: ``snippet()`` counts *tokens*, and the two indexes tokenize very differently:
+#: a word-index token is a morph, a trigram token is a 3-character window at
+#: every offset — so N trigram tokens is roughly N characters, and asking for a
+#: dozen would return a dozen letters.
+_WORDS_SNIPPET_TOKENS: Final = 16
+_TRIGRAM_SNIPPET_TOKENS: Final = 64
+
+
+def _fts_phrase(query: str) -> str:
+    """Quote ``query`` as one FTS5 phrase, exactly as the other search paths do.
+
+    The quotes are what make the whole string data: a phrase matches as a literal
+    sequence of tokens, so nothing inside it can be re-read as an operator. Any
+    surviving ``"`` is doubled, FTS5's own escape.
+    """
+    return '"' + query.replace('"', '""') + '"'
+
+
+def _like_prefix(value: str) -> str:
+    """A LIKE pattern matching ``value`` as a literal prefix."""
+    return _LIKE_SPECIALS.sub(r"\\\1", value) + "%"
+
+
+def _as_values(value: str | Sequence[str]) -> list[str]:
+    return [value] if isinstance(value, str) else [str(item) for item in value]
+
+
+def _filters(
+    tags: Sequence[str] | None,
+    fields: Mapping[str, str | Sequence[str]] | None,
+    path_prefix: str | None,
+    include_generated: bool,
+) -> tuple[list[str], list[Any]]:
+    """SQL fragments and parameters for the non-text half of a query.
+
+    Frontmatter filters are ``EXISTS`` subqueries against ``md_frontmatter``
+    rather than joins: a note matches a tag once, and a join would multiply the
+    row out once per matching value and quietly break ``LIMIT``.
+
+    Semantics, stated once so a caller never has to guess: keys are ANDed, values
+    within one key are ORed, and every tag in ``tags`` must be present (a tag
+    filter narrows). Matching is ASCII-case-insensitive (``COLLATE NOCASE``),
+    which is what ``#Grammar`` vs ``#grammar`` needs and all it needs.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if not include_generated:
+        clauses.append("n.generated = 0")
+
+    if path_prefix:
+        clauses.append(f"n.path LIKE ? ESCAPE '\\'")
+        params.append(_like_prefix(path_prefix))
+
+    for tag in tags or ():
+        clauses.append(
+            f"EXISTS (SELECT 1 FROM {FRONTMATTER_TABLE} f WHERE "
+            "f.note_rowid = n.rowid AND f.key = 'tags' AND f.value = ? COLLATE NOCASE)"
+        )
+        params.append(tag)
+
+    for key, value in (fields or {}).items():
+        values = _as_values(value)
+        if not values:
+            continue
+        placeholders = ", ".join("?" for _ in values)
+        clauses.append(
+            f"EXISTS (SELECT 1 FROM {FRONTMATTER_TABLE} f WHERE "
+            "f.note_rowid = n.rowid AND f.key = ? COLLATE NOCASE AND "
+            f"f.value COLLATE NOCASE IN ({placeholders}))"
+        )
+        params.append(str(key).lower())
+        params.extend(values)
+
+    return clauses, params
+
+
+def _hit(row: sqlite3.Row, *, source_index: str | None) -> dict[str, Any]:
+    try:
+        frontmatter = json.loads(row["frontmatter"]) if row["frontmatter"] else {}
+    except json.JSONDecodeError:  # pragma: no cover - json_valid CHECK prevents it
+        frontmatter = {}
+    return {
+        "path": row["path"],
+        "title": row["title"],
+        "generated": bool(row["generated"]),
+        "frontmatter": frontmatter,
+        "frontmatter_ok": bool(row["frontmatter_ok"]),
+        "excerpt": row["excerpt"] if "excerpt" in row.keys() else None,
+        "source_index": source_index,
+    }
+
+
+def search_notes(
+    conn: sqlite3.Connection,
+    query: str | None = None,
+    *,
+    tags: Sequence[str] | None = None,
+    fields: Mapping[str, str | Sequence[str]] | None = None,
+    path_prefix: str | None = None,
+    include_generated: bool = False,
+    limit: int = DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Search indexed notes by body text, by frontmatter, or by both.
+
+    A pure function of ``conn`` and its arguments: no config, no I/O, no vault
+    access. A tool adapter is a thin wrapper that opens the database and hands
+    the result through.
+
+    Body search is length-routed exactly as ``mcp_server.search_db_query`` routes
+    sentence search, and for the same reason: FTS5's trigram tokenizer indexes
+    3-character windows, so a 1- or 2-character query matches *nothing* — and it
+    fails silently, which is the dangerous part. Those go to the ``unicode61``
+    index over the fugashi-segmented shadow text, longer ones to trigram over the
+    raw text. The one difference from ``search_db``: the query is sanitized of
+    FTS5 syntax *before* its length is measured, so ``評価*`` routes as the two
+    characters it really is.
+
+    ``query`` may be omitted, in which case this is a pure frontmatter query
+    (``tags``/``fields``/``path_prefix``) and results come back in path order.
+    ``.derived/`` notes are excluded unless ``include_generated`` is set, so
+    dashboard output does not drown out prose.
+    """
+    if limit < 1:
+        raise ValueError(f"limit must be at least 1; got {limit}.")
+
+    text = sanitize_query(query or "").strip()
+    has_filters = bool(tags or fields or path_prefix)
+    if not text and not has_filters:
+        raise ValueError(
+            "search_notes needs a query or at least one frontmatter filter; "
+            f"{query!r} is empty once FTS5 syntax and bare operators are removed."
+        )
+
+    clauses, params = _filters(tags, fields, path_prefix, include_generated)
+
+    columns = (
+        "n.rowid AS rowid, n.path AS path, n.title AS title, "
+        "n.generated AS generated, n.frontmatter AS frontmatter, "
+        "n.frontmatter_ok AS frontmatter_ok"
+    )
+
+    if text:
+        route = "words" if len(text) < TRIGRAM_MIN_CHARS else "trigram"
+        index, column, window = (
+            (WORD_INDEX, "shadow_text", _WORDS_SNIPPET_TOKENS)
+            if route == "words"
+            else (TRIGRAM_INDEX, "body", _TRIGRAM_SNIPPET_TOKENS)
+        )
+        route_reason = (
+            f"query is {len(text)} character(s), under {TRIGRAM_MIN_CHARS}: the "
+            f"trigram index cannot match it, so the unicode61 word index "
+            f"({WORD_INDEX}) is used. Excerpts from it show fugashi-segmented "
+            "text, because that is what it indexes"
+            if route == "words"
+            else f"query is {len(text)} character(s): substring search via the "
+            f"trigram index ({TRIGRAM_INDEX})"
+        )
+        # `index`/`column` are module constants chosen by the route, never caller
+        # input: an FTS5 table name cannot be a bound parameter.
+        sql = (
+            f"SELECT {columns}, snippet({index}, 0, '[', ']', ' … ', {window}) "
+            "AS excerpt "
+            f"FROM {index} JOIN {NOTE_TABLE} n ON n.rowid = {index}.rowid "
+            f"WHERE {index} MATCH ?"
+            + "".join(f" AND {clause}" for clause in clauses)
+            + " ORDER BY rank LIMIT ?"
+        )
+        try:
+            rows = conn.execute(sql, (_fts_phrase(text), *params, limit)).fetchall()
+        except sqlite3.OperationalError as exc:
+            raise ValueError(
+                f"SQLite rejected the full-text query {text!r} against {index} "
+                f"({column}): {exc}"
+            ) from exc
+        source_index: str | None = index
+    else:
+        route = None
+        route_reason = (
+            "no text query: frontmatter filters only, results in path order"
+        )
+        where = " AND ".join(clauses) or "1"
+        rows = conn.execute(
+            f"SELECT {columns} FROM {NOTE_TABLE} n WHERE {where} "
+            "ORDER BY n.path LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        source_index = None
+
+    indexed_notes = int(conn.execute(f"SELECT COUNT(*) FROM {NOTE_TABLE}").fetchone()[0])
+    hits = [_hit(row, source_index=source_index) for row in rows]
+
+    return {
+        "query": text or None,
+        "limit": limit,
+        "route": route,
+        "route_reason": route_reason,
+        "filters": {
+            "tags": list(tags or ()),
+            "fields": {
+                str(key).lower(): _as_values(value)
+                for key, value in (fields or {}).items()
+            },
+            "path_prefix": path_prefix,
+            "include_generated": include_generated,
+        },
+        "hits": hits,
+        "hit_count": len(hits),
+        "indexed_notes": indexed_notes,
+        "index_empty": indexed_notes == 0,
+        "note": INDEX_EMPTY_NOTE if indexed_notes == 0 else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _use_utf8_stderr() -> None:
+    """Make Japanese printable on a cp1252 Windows console instead of crashing."""
+    reconfigure = getattr(sys.stderr, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):  # pragma: no cover - redirected stderr
+            pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m katagiri.md_search [rebuild|search] ...``. Output goes to stderr.
+
+    ``rebuild`` is also how SC-003 is observed by hand: it prints the same report
+    the function returns, next to the stderr line the run logged.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m katagiri.md_search",
+        description=(
+            "Index or search the vault's markdown. 'rebuild' brings the derived "
+            "index in line with the vault (incrementally unless --full); "
+            "'search' queries it. Both write to stderr, like every other "
+            "Katagiri diagnostic, and neither needs Obsidian running."
+        ),
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    rebuild = sub.add_parser("rebuild", help="index the vault")
+    rebuild.add_argument("--root", default=None, help="vault path (default: config)")
+    rebuild.add_argument(
+        "--full", action="store_true", help="drop every row and re-read every file"
+    )
+
+    search = sub.add_parser("search", help="query the index")
+    search.add_argument("query", nargs="?", default=None)
+    search.add_argument("--tag", action="append", dest="tags", default=None)
+    search.add_argument("--path-prefix", default=None)
+    search.add_argument("--include-generated", action="store_true")
+    search.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+
+    args = parser.parse_args(argv)
+    _use_utf8_stderr()
+
+    # Imported here so that importing this module does not touch the filesystem
+    # or the configured database path.
+    from katagiri.db import open_db
+
+    conn = open_db()
+    try:
+        if args.command == "rebuild":
+            print(
+                rebuild_md_index(conn, root=args.root, full=args.full).render(),
+                file=sys.stderr,
+            )
+            return 0
+        result = search_notes(
+            conn,
+            args.query,
+            tags=args.tags,
+            path_prefix=args.path_prefix,
+            include_generated=args.include_generated,
+            limit=args.limit,
+        )
+    except (MdSearchError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+
+    print(f"route  : {result['route']} ({result['route_reason']})", file=sys.stderr)
+    print(f"hits   : {result['hit_count']} of {result['indexed_notes']} notes",
+          file=sys.stderr)
+    for hit in result["hits"]:
+        print(f"  {hit['path']} — {hit['title']}", file=sys.stderr)
+        if hit["excerpt"]:
+            print(f"      {hit['excerpt']}", file=sys.stderr)
+    if result["note"]:
+        print(result["note"], file=sys.stderr)
+    return 0
+
+
 __all__ = [
     "DEFAULT_LIMIT",
     "FRONTMATTER_TABLE",
     "GENERATED_DIR",
+    "INDEX_EMPTY_NOTE",
     "MARKDOWN_SUFFIXES",
     "MD_INDEX_VERSION",
     "NOTE_TABLE",
@@ -809,9 +1125,15 @@ __all__ = [
     "VaultNotFoundError",
     "is_generated",
     "iter_markdown_files",
+    "main",
     "parse_frontmatter",
     "read_note",
     "rebuild_md_index",
     "relative_path",
+    "search_notes",
     "vault_root",
 ]
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
