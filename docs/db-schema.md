@@ -52,10 +52,14 @@ database is complete and usable in one step.
 `lesson_outcome` views read derived tables (`anki_cards`, `anki_item_map`); a
 drop-and-recreate performed in autocommit leaves a window in which any query
 touching those views fails with `no such table`. One transaction makes the swap
-atomic — readers see the old shape or the new one, never the gap. There are 18
+atomic — readers see the old shape or the new one, never the gap. There are 22
 derived tables and all of them are droppable with `foreign_keys = ON` (verified by
-`tests/test_db.py::test_derived_tables_are_all_droppable_under_foreign_keys_on`).
-Drop FTS indexes before the `sentence_text` content table they read.
+`tests/test_db.py::test_derived_tables_are_all_droppable_under_foreign_keys_on`,
+which derives which FTS shadow tables to exclude from a `FTS_SHADOW_PREFIXES`
+constant rather than hard-coding the sentence-search prefixes).
+Drop FTS indexes before the `sentence_text` content table they read. `fts_md_words`
+/ `fts_md_tri` carry no such ordering rule — they are self-contained, not
+external-content, tables (see the markdown-search row below).
 
 Consequences encoded in the DDL:
 
@@ -120,10 +124,20 @@ instead. Day keys (`event.day_key`, `lesson.revisit_after`) are local `YYYY-MM-D
 | `sentence_text` | Content table behind both sentence FTS indexes: raw Japanese, segmented shadow text, and the versions that produced them. | Sentence items |
 | `fts_sentence_words` | FTS5 `unicode61` index over the space-segmented shadow text — word matching. | `sentence_text` |
 | `fts_sentence_tri` | FTS5 `trigram` index over raw Japanese — substring matching. | `sentence_text` |
+| `md_note` | One row per vault markdown file: path (unique, vault-relative, POSIX separators), title, `generated` flag for `.derived/` output, frontmatter JSON + ok/error, size/mtime/hash freshness triple, body char count, version stamps, `indexed_ts`. | Vault files, walked by `md_search.py` |
+| `md_frontmatter` | Frontmatter exploded to rows so fields are queryable separately from body text: `note_rowid` / `key` / `idx` / `value`. Keys lowercased at index time; NOCASE index on `(key, value)`. | `md_note`'s source files |
+| `fts_md_words` | FTS5 `unicode61` index over the fugashi-segmented shadow text of each note's title + body — word matching. Self-contained, not external-content (deliberate divergence from the sentence pair): the index is updated one edited file at a time and deletes by rowid instead. | Vault files |
+| `fts_md_tri` | FTS5 `trigram` index over each note's raw title + body — substring matching. Also self-contained. | Vault files |
 | `sub_lines` | Subtitle lines with start/end times, for "what was said around this moment" window queries. | Transcript files |
 | `coverage_cache` | Known-token ratio and comprehension band per media / episode / sentence / topic. Folds over the `known_set` view plus `sub_lines` / `sentence_text` token counts, so it is stale whenever either side changes. | `known_set` + `sub_lines` |
 | `item_stat_cache` | Per-item strength, comprehension debt, frequency rank, review count. | Fold over `event` / `observation` |
 | `ankimorphs_morphs` | Per-morph knowledge from AnkiMorphs: lemma, inflection, and the highest learning interval of each. PK `(lemma, inflection, source)`. | AnkiMorphs add-on database + known-morphs CSV export |
+
+`md_note`, `md_frontmatter`, `fts_md_words`, and `fts_md_tri` are the inverse
+case: their DDL lives **only** in `0001_init.sql`, never re-declared elsewhere,
+per D-27 — this module rebuilds rows, never schema. `md_search.rebuild_md_index()`
+walks the vault and repopulates all four inside one transaction; nothing else
+writes to them.
 
 `ankimorphs_morphs` is **not** in `0001_init.sql` — it is created on first use by
 `src/katagiri/ankimorphs_ingest.py` (`CREATE TABLE IF NOT EXISTS` inside the same
@@ -315,5 +329,16 @@ Everything not listed here means what its name says.
   than three characters, and the word index cannot do substring search. They are
   external-content indexes over `sentence_text`; population (and sync strategy)
   is A3's job, not this migration's.
+- **`md_note.rowid` is likewise a declared `INTEGER PRIMARY KEY`**, for the same
+  VACUUM-safety reason, even though `fts_md_words` / `fts_md_tri` are
+  self-contained rather than external-content and so do not join on it directly.
+- **`md_note`'s freshness triple is `size_bytes` + `mtime_ns` + `content_sha256`**
+  — size and mtime decide whether a file needs re-reading at all, the hash
+  decides whether a re-read file actually changed. `index_version` /
+  `dict_version` / `tokenizer_version` answer the other staleness question: rows
+  built by an older pipeline, dictionary, or tokenizer are re-indexed even when
+  the file on disk did not change.
+- **`md_frontmatter` has no foreign key to `md_note`** — both are derived, and a
+  rebuild must be able to drop them in either order.
 - **`anki_cards.ivl` / `due` are mirrored, never written** — `ivl >= 21` days is
   the maturity rule feeding `known_set`, and `manual_marks` overrides it.
