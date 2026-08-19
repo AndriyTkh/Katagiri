@@ -214,6 +214,7 @@ def test_registry_holds_every_phase_b_section():
         "known_trend",
         "weakest_morphs",
         "resume",
+        "lesson_memory",
     ]
     # No duplicates; the key is what a later phase looks a section up by.
     assert len(set(keys)) == len(keys)
