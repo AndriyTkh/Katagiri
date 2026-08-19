@@ -1,5 +1,7 @@
 # Tasks: Phase C — Prose Search
 
+**✅ PHASE COMPLETE 2026-08-19** — C-verify green (tests/test_cverify.py 17/17 cold gate, full suite 847 passed). Entry gate was user-waived (D-30); SC-002 learner metric unmet at close (0 logged study days) and carried with the kata-bvf adoption metric as user-side prerequisites for Phase D entry (specs/003 T001). Closure details: D-31 in docs/decisions-ledger.md.
+
 **Input**: Design documents from `/specs/002-phase-c-prose-search/`
 
 **Prerequisites**: plan.md, spec.md
@@ -54,8 +56,8 @@ Phase C is single-lane: worktree isolation buys context isolation, not paralleli
 
 **[was: kata-cvf]** Blocking; max two rerun cycles.
 
-- [ ] T009 [Gate] Cumulative cold-subagent scenarios A..C: same question answered via `search_db` and via markdown search, the latter with Obsidian closed. Write: NEW tests/test_cverify.py. Read: quickstart.md (runbook), tests/test_md_search.py fixtures. [was: kata-cvf]
-- [ ] T010 [Gate] Learner metric from event log; ledger/coverage update; weekly status line; mark phase complete in this file. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: event log via `recent_events`, docs/decisions-ledger.md coverage table. [was: kata-cvf]
+- [x] T009 [Gate] Cumulative cold-subagent scenarios A..C: same question answered via `search_db` and via markdown search, the latter with Obsidian closed. Write: NEW tests/test_cverify.py. Read: quickstart.md (runbook), tests/test_md_search.py fixtures. [was: kata-cvf]
+- [x] T010 [Gate] Learner metric from event log; ledger/coverage update; weekly status line; mark phase complete in this file. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: event log via `recent_events`, docs/decisions-ledger.md coverage table. [was: kata-cvf]
 
 ## Dependencies & Execution Order
 

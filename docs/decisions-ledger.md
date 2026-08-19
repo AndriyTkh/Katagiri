@@ -16,6 +16,7 @@ Last updated: 2026-08-19.
 | dev-plan v1 (structure, process, security, pedagogy) | 7-role panel | round 5, 2026-08-19 | done — findings merged into v1.1 |
 | dev-plan v1.1 revisions themselves | nobody | — | unreviewed delta; spot-check only the *changes* if ever re-reviewed |
 | Beads DAG (38 beads, created 2026-08-19) | nobody | — | unreviewed; per-phase estimates/workfiles/parallel lanes computed at implementation time |
+| Phase C scope (src/katagiri/md_search.py + search_notes registration) | nobody | shipped 2026-08-19, C-verify green | unreviewed — gate-verified only, not panel-audited |
 
 Rule: a new review round scopes only the delta since the last one. Re-reviewing a settled row
 is waste unless new external facts invalidate it (note the invalidation here first).
@@ -54,6 +55,7 @@ is waste unless new external facts invalidate it (note the invalidation here fir
 | D-28 | 2026-08-19 | i+1 gated on curriculum grammar-DAG reachability, not vocabulary coverage alone | round 5, cluster 10 |
 | D-29 | 2026-08-19 | Estimates bottom-up per bead before creation; actuals logged; re-baseline after Phase A; task-level DAG; weekly status line; 1.5× slip rule | round 5, cluster 13 |
 | D-30 | 2026-08-19 | Phase C entry gate waived by user — specs/002 T001 entry criteria (Phase B complete + B-verify green + ≥4 study days prior week) NOT satisfied: kata-bvf still open pending user-side Today.md adoption metric, event log shows 0 study days. User explicitly chose to override and start Phase C on 2026-08-19. Consequence: Phase C proceeds; kata-bvf stays open and must close before Phase D entry (specs/003 T001) unless separately waived | user override, 2026-08-19 |
+| D-31 | 2026-08-19 | Phase C complete — C-verify green. tests/test_cverify.py 17 passed 0 skipped (cold cumulative gate: contract = 11 Phase B tools + search_notes; SC-001 same question via search_db and search_notes with Obsidian closed, strict branch; SC-003 incremental indexed=1/unchanged=5 with strict stderr log-line assertion). Full suite 847 passed. Learner metric SC-002 NOT met: event log empty, 0 study days during phase — recorded under the D-30 waiver context; adoption metrics (SC-002 + kata-bvf Today.md metric) remain user-side prerequisites for Phase D entry (specs/003 T001) | C-verify, 2026-08-19 |
 
 ## Deferred options (not cut — revisit condition attached)
 

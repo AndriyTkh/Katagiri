@@ -269,3 +269,9 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   and ordered Phase C start; waiver recorded in decisions-ledger. kata-bvf close + adoption
   metric remain a parallel user-side item blocking nothing in C but required before D entry
   review.
+- 2026-08-19 — Phase C complete (specs/002): md_search module (4 derived tables, incremental,
+  frontmatter-aware, Obsidian-independent) + search_notes MCP tool. C-verify green (17/17 cold
+  gate; full suite 847). SC-002 learner metric unmet (0 logged study days) — carried as
+  user-side item with kata-bvf metric; both gate Phase D entry. Incident: vendor/unidic
+  destroyed by junction-following worktree removal, restored same day from pinned-checksum
+  re-download (638718c4…, bit-identical).
