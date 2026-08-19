@@ -417,6 +417,11 @@ class MdIndexResult:
     their file is gone; ``files_unchanged`` files skipped as already current;
     ``files_failed`` files that could not be read (their existing rows are kept,
     never silently dropped).
+
+    ``frontmatter_errors`` and ``generated_files`` describe the *whole* corpus
+    scanned, not just the part re-indexed: for a file skipped as unchanged they
+    are read back from its row. Otherwise an incremental run would report zero
+    flagged notes and look like the flags had cleared themselves.
     """
 
     root: str
@@ -518,12 +523,37 @@ def _clear(conn: sqlite3.Connection) -> None:
         conn.execute(f"DELETE FROM {table}")
 
 
-def _indexed_paths(conn: sqlite3.Connection) -> set[str]:
-    """Every note path currently in the index."""
+def _indexed_rows(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    """Every indexed note, keyed by path: the whole freshness picture in one read.
+
+    One query rather than a lookup per file. A vault is thousands of notes at
+    most, and the alternative — a SELECT inside the walk — turns an incremental
+    run into one round trip per file whether or not anything changed.
+    """
     return {
-        str(row[0])
-        for row in conn.execute(f"SELECT path FROM {NOTE_TABLE}")
+        str(row["path"]): row
+        for row in conn.execute(
+            f"SELECT rowid, path, generated, frontmatter_ok, size_bytes, mtime_ns, "
+            f"content_sha256, index_version, dict_version, tokenizer_version "
+            f"FROM {NOTE_TABLE}"
+        )
     }
+
+
+def _stamps_current(
+    row: sqlite3.Row, *, dict_version: str, tokenizer_version: str
+) -> bool:
+    """True when ``row`` was built by the pipeline, dictionary and tokenizer in force.
+
+    A stale stamp forces a re-index even for a file that has not been touched:
+    ``shadow_text`` is a *function of the tokenizer*, so a dictionary upgrade
+    invalidates rows whose bytes on disk are identical.
+    """
+    return (
+        row["index_version"] == MD_INDEX_VERSION
+        and row["dict_version"] == dict_version
+        and row["tokenizer_version"] == tokenizer_version
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -619,16 +649,27 @@ def rebuild_md_index(
 ) -> MdIndexResult:
     """Bring the markdown index in line with the vault, and report what changed.
 
-    Every run currently re-reads and re-tokenizes every note: this is the
-    derived-tier drop-and-rebuild, and ``full`` selects nothing different yet.
-    Change detection — the part that makes a run cost what changed rather than
-    what exists — is T005, and it plugs in here.
+    Incremental by default. Three questions are asked per file, cheapest first:
 
-    A note that cannot be read is counted in ``files_failed`` and logged; it does
-    not abort the run and its previously indexed rows are not silently dropped.
+    1. Do the stamps still match (pipeline, dictionary, tokenizer)? A stale stamp
+       re-indexes regardless of the file, because ``shadow_text`` is a function
+       of the tokenizer.
+    2. Do size and mtime still match? If so the file is not even opened.
+    3. Does the content hash still match? A file whose mtime moved but whose
+       bytes did not (a save with no edit, a sync, a ``touch``) has its freshness
+       metadata updated and is counted as unchanged, not re-tokenized.
 
-    The returned :class:`MdIndexResult` and the single stderr line logged from it
-    are what make "editing one note re-indexed one file" checkable (SC-003).
+    So the cost of a run is proportional to what changed, and editing one note
+    re-indexes exactly one file (SC-003 — the returned report and the stderr line
+    logged from it are the evidence).
+
+    ``full=True`` is the derived-tier drop-and-rebuild: every row is deleted up
+    front and every file re-read, no questions asked.
+
+    Notes whose file disappeared — deleted, or renamed, which is a delete plus an
+    add — have every row removed, so a stale path can never produce a ghost hit.
+    A note that cannot be *read* is different: it is counted in ``files_failed``,
+    logged, and its existing rows are kept rather than treated as a deletion.
     """
     started = time.perf_counter()
     versions = current_versions(conn)
@@ -641,37 +682,82 @@ def rebuild_md_index(
     frontmatter_errors = generated_files = 0
 
     with _atomic(conn):
-        known = _indexed_paths(conn)
-        _clear(conn)
+        known = _indexed_rows(conn)
+        if full:
+            _clear(conn)
         seen: set[str] = set()
+
         for path in iter_markdown_files(root_path):
             scanned += 1
+            rel = relative_path(root_path, path)
+            row = None if full else known.get(rel)
+
+            try:
+                stat = path.stat()
+            except OSError as exc:
+                failed += 1
+                seen.add(rel)  # not a deletion: keep whatever rows it has
+                _logger.warning("skipping unreadable note %s: %s", rel, exc)
+                continue
+
+            fresh = row is not None and _stamps_current(
+                row, dict_version=dict_version, tokenizer_version=tokenizer_version
+            )
+            if (
+                fresh
+                and row["size_bytes"] == stat.st_size
+                and row["mtime_ns"] == stat.st_mtime_ns
+            ):
+                seen.add(rel)
+                unchanged += 1
+                generated_files += int(row["generated"])
+                frontmatter_errors += int(not row["frontmatter_ok"])
+                continue
+
             try:
                 note = read_note(root_path, path)
             except NoteReadError as exc:
                 failed += 1
-                _logger.warning("skipping unreadable note: %s", exc)
+                seen.add(rel)
+                _logger.warning("skipping unreadable note %s: %s", rel, exc)
                 continue
+
             seen.add(note.path)
+            generated_files += int(note.generated)
+            frontmatter_errors += int(not note.frontmatter.ok)
             if not note.frontmatter.ok:
-                frontmatter_errors += 1
                 _logger.debug(
-                    "frontmatter problem in %s: %s",
-                    note.path,
-                    note.frontmatter.error,
+                    "frontmatter problem in %s: %s", note.path, note.frontmatter.error
                 )
-            if note.generated:
-                generated_files += 1
+
+            if fresh and row["content_sha256"] == note.sha256:
+                # Same bytes, new mtime. Record the new metadata so the next run
+                # can stop at question 2, and leave the indexed rows alone.
+                conn.execute(
+                    f"UPDATE {NOTE_TABLE} SET size_bytes = ?, mtime_ns = ? "
+                    "WHERE rowid = ?",
+                    (note.size_bytes, note.mtime_ns, row["rowid"]),
+                )
+                unchanged += 1
+                continue
+
             _write_note(
                 conn,
                 note,
-                rowid=None,
+                rowid=None if row is None else int(row["rowid"]),
                 dict_version=dict_version,
                 tokenizer_version=tokenizer_version,
                 now=now,
             )
             indexed += 1
-        removed = len(known - seen)
+
+        for rel, row in known.items():
+            if rel in seen:
+                continue
+            if not full:  # a full run already cleared every row
+                _delete_note(conn, int(row["rowid"]))
+            removed += 1
+            _logger.debug("removed vanished note from the index: %s", rel)
 
     duration = time.perf_counter() - started
     result = MdIndexResult(
