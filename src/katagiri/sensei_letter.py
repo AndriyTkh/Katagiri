@@ -7,15 +7,19 @@ reads one ISO week out of the ``event`` table, reduces it to a small
 table. Nothing here judges, and nothing here invents: every figure is a count of
 something that was actually appended to the log.
 
-**The log is the only source.** No Anki mirror, no vault scraping, no
-recomputation of the known set. That keeps the letter reproducible — the same
-week always renders the same bytes — and keeps it honest about what it does not
-know (a quiet week reads as a quiet week, not as failure).
+**Only append-only sources.** The ``event`` log, and — since D5 — the two other
+source-of-truth logs the teacher loop writes: ``observation`` (rubric-scored
+performances) and ``lesson_unresolved`` (questions served and not answered). No
+Anki mirror, no vault scraping, no derived cache, no recomputation of the known
+set. That keeps the letter reproducible — the same week always renders the same
+bytes — and keeps it honest about what it does not know (a quiet week reads as a
+quiet week, not as failure).
 
-Phase D (D5) enriches this: error-museum highlights, media notes, input/output
-clocks. The two extension seams meant for that are
-:meth:`WeekStats.table_rows` and :data:`BODY_SECTIONS` — add a row builder or a
-paragraph builder there rather than rewriting :func:`render_letter`.
+Phase D (D5) enriches this: the error museum, open threads, and the probe /
+observation record are three more paragraphs. The two extension seams meant for
+that are :meth:`WeekStats.table_rows` and :data:`BODY_SECTIONS` — add a row
+builder or a paragraph builder there rather than rewriting
+:func:`render_letter`.
 
 The study-day rule (``study_session`` minutes summing to >= 10, or any durable
 study artifact on that day) is deliberately the *same* rule the stop gate in
@@ -25,8 +29,20 @@ transport dependency in behind it. If the rule changes, it changes in both
 places — the constants below name their twin so the grep finds them.
 
 SECRETS: the letter is written into the vault and its path is appended to the
-event log. Only aggregate counts and the ISO week reach either, never payload
-text, note bodies, or file contents.
+event log. Only aggregate counts and the ISO week reach the *event log*, never
+payload text, note bodies, or file contents.
+
+The letter body itself quotes exactly three kinds of short label, and nothing
+else: an error ``pattern`` whose own event payload records **no** untrusted
+provenance for that field, an observation's ``task_type``, and the enum-valued
+``coverage_band`` / ``rubric_version``. Media-derived text is counted and named
+as counted, never repeated — a generated vault note is a bad place to replay
+text a subtitle file wrote. Unresolved-thread text is never quoted at all: the
+``lesson`` tables carry no provenance column, so the module cannot prove who
+wrote a thread, and ``lessons(unresolved_only=True)`` is the honest place to read
+them. Every quoted label is whitespace-collapsed and length-capped
+(:data:`MAX_LABEL_CHARS`) so one 2 000-character "pattern" cannot become the
+letter.
 """
 
 from __future__ import annotations
@@ -77,6 +93,33 @@ REVIEW_BATCH_TYPE: Final = "review_batch"
 REVIEW_EVENT_TYPE: Final = "review"
 MARK_KNOWN_TYPE: Final = "mark_known"
 MINING_TYPE: Final = "mining"
+
+# --- D5 sources. Names kept in step with their writers rather than imported:
+# session_tools imports the envelope machinery and mcp_server imports the MCP
+# SDK, and a letter renderer must not drag either in behind it (same rule as
+# STUDY_MINUTES_PER_DAY above). If a name changes, it changes in both places.
+ERROR_EVENT_TYPE: Final = "error_logged"  # session_tools.ERROR_EVENT
+PROBE_BATTERY_TYPE: Final = "probe_battery"  # mcp_server.PROBE_EVENT_TYPE
+
+#: Severities, worst first — the order they are reported in. session_tools.SEVERITIES.
+ERROR_SEVERITIES: Final[tuple[str, ...]] = ("high", "medium", "low")
+
+#: Coverage bands, best first. Schema enum (docs/db-schema.md) and
+#: session_tools.COVERAGE_BANDS. Fixed order, so a letter never reorders on
+#: dict-iteration luck.
+COVERAGE_BAND_ORDER: Final[tuple[str, ...]] = (">=95", "80-95", "<80")
+
+#: How many repeat patterns / task types the letter names. A museum tour, not an
+#: inventory: past three, prose stops teaching and starts listing.
+MAX_ERROR_PATTERNS: Final = 3
+MAX_TASK_TYPES: Final = 3
+
+#: Cap on any label quoted into the letter. Upstream caps ``pattern`` at 2 000
+#: characters, which is a paragraph, not a label.
+MAX_LABEL_CHARS: Final = 60
+
+#: Payload key under which the write tools record which fields arrived enveloped.
+UNTRUSTED_KEY: Final = "untrusted"
 
 # Payload keys an event may carry a running known-set total under. None of the
 # read-only tools write one today; when something does, the delta is used as a
@@ -199,9 +242,137 @@ def _count_from(payload: dict[str, Any], keys: Iterable[str]) -> int | None:
     return None
 
 
+def _clean_label(value: object, *, limit: int = MAX_LABEL_CHARS) -> str | None:
+    """A short single-line label from the log, or ``None`` if there isn't one.
+
+    Whitespace is collapsed because a label carrying a newline would break the
+    paragraph it lands in, and the result is truncated because upstream caps
+    these fields at paragraph length, not label length.
+    """
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    if not text:
+        return None
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _is_untrusted(payload: dict[str, Any], field_name: str) -> bool:
+    """Did ``field_name`` arrive through the untrusted-data envelope?
+
+    The write tools record provenance per field under ``payload['untrusted']``.
+    An unreadable or absent record is read as *untrusted* rather than trusted:
+    the letter quotes a label only when the log positively says nobody else
+    wrote it, so a payload shape this module does not recognise costs a quote,
+    never a leak.
+    """
+    provenance = payload.get(UNTRUSTED_KEY)
+    if provenance is None:
+        return False
+    if not isinstance(provenance, dict):
+        return True
+    return field_name in provenance
+
+
+def _percent(part: int, whole: int) -> int:
+    """``part`` as a whole-number percentage of ``whole`` (0 when ``whole`` is 0)."""
+    return 0 if whole <= 0 else int(round(100 * part / whole))
+
+
 # ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ErrorMuseum:
+    """The week's ``error_logged`` events, reduced to what prose can stand on.
+
+    ``patterns`` holds the quotable repeat offenders, worst first, already
+    capped at :data:`MAX_ERROR_PATTERNS`. ``unquotable`` counts mistakes whose
+    pattern came in enveloped (media-derived) — they are real mistakes and are
+    counted, but their text is not repeated into the vault. ``patternless``
+    counts mistakes logged with no usable pattern at all: an anecdote rather
+    than a lesson, and worth saying so.
+    """
+
+    total: int = 0
+    by_severity: dict[str, int] = field(default_factory=dict)
+    patterns: tuple[tuple[str, int], ...] = ()
+    unquotable: int = 0
+    patternless: int = 0
+
+    @property
+    def severity_label(self) -> str:
+        """``"1 high, 4 medium"`` over the severities actually recorded."""
+        return ", ".join(
+            f"{self.by_severity[name]} {name}"
+            for name in ERROR_SEVERITIES
+            if self.by_severity.get(name)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadState:
+    """Unresolved lesson threads as they stood at the end of the week.
+
+    "Open" is evaluated **as of the week's end**, not as of now: a thread
+    answered three weeks later must not silently rewrite this week's letter.
+    ``oldest_open_day`` is the local day part of the oldest still-open thread's
+    ``created_ts``.
+    """
+
+    opened: int = 0
+    resolved: int = 0
+    still_open: int = 0
+    oldest_open_day: date | None = None
+    lessons_with_open: int = 0
+
+    @property
+    def eventful(self) -> bool:
+        """Did anything happen to a thread *this week*?
+
+        Deliberately excludes ``still_open``: an old thread rotting through a
+        week with no study in it does not make that week busy, and the quiet
+        opening already says the useful thing.
+        """
+        return bool(self.opened or self.resolved)
+
+
+@dataclass(frozen=True, slots=True)
+class BandResult:
+    """One coverage band's slice of the week's observations."""
+
+    band: str
+    total: int
+    unassisted: int
+
+    @property
+    def label(self) -> str:
+        return f"{self.band} — {self.unassisted} of {self.total} unassisted"
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeResults:
+    """The week's ``observation`` rows: the unassisted pass-rate series.
+
+    ``battery_logged`` records whether a ``probe_battery`` event landed in the
+    same week, because that is the specific thing the D6 gate looks for — a
+    week of ordinary observations is not a probe battery.
+    """
+
+    total: int = 0
+    unassisted: int = 0
+    bands: tuple[BandResult, ...] = ()
+    task_types: tuple[str, ...] = ()
+    rubric_versions: tuple[str, ...] = ()
+    battery_logged: bool = False
+
+    @property
+    def unassisted_percent(self) -> int:
+        return _percent(self.unassisted, self.total)
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +405,12 @@ class WeekStats:
     items_mined: int
     event_count: int
     extras: dict[str, Any] = field(default_factory=dict)
+    # D5 additions. Defaulted, so a caller that builds a WeekStats by hand from
+    # the A9 figures alone still gets a letter — one that simply has nothing to
+    # say about errors, threads or probes.
+    errors: ErrorMuseum = field(default_factory=ErrorMuseum)
+    threads: ThreadState = field(default_factory=ThreadState)
+    probes: ProbeResults = field(default_factory=ProbeResults)
 
     @property
     def label(self) -> str:
@@ -241,7 +418,16 @@ class WeekStats:
 
     @property
     def is_quiet(self) -> bool:
-        """True when the log has nothing to say about this week."""
+        """True when the logs have nothing to say about this week.
+
+        A mistake logged or a performance scored is study, so either one is
+        enough to make the week loud — checked before the ``event_count`` test,
+        because those two live in their own tables and a hand-seeded fixture (or
+        a future writer) must not be able to produce a week that has
+        observations *and* reads as empty.
+        """
+        if self.errors.total or self.probes.total or self.threads.eventful:
+            return False
         return self.event_count == 0 or (
             self.study_days == 0
             and self.reviews_total == 0
@@ -364,6 +550,166 @@ def _known_total_at(
     return None
 
 
+def _error_museum(payloads: Iterable[dict[str, Any]]) -> ErrorMuseum:
+    """Fold this week's ``error_logged`` payloads into an :class:`ErrorMuseum`.
+
+    Takes payloads rather than a connection because the week's events are
+    already in hand: the museum is a second reading of the same rows, not a
+    second query.
+    """
+    total = 0
+    by_severity: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    unquotable = 0
+    patternless = 0
+
+    for payload in payloads:
+        total += 1
+        severity = _clean_label(payload.get("severity"), limit=16)
+        if severity in ERROR_SEVERITIES:
+            # ``severity`` is a closed enum upstream; anything else is not
+            # counted under a name it does not have.
+            by_severity[str(severity)] = by_severity.get(str(severity), 0) + 1
+        pattern = _clean_label(payload.get("pattern"))
+        if pattern is None:
+            patternless += 1
+        elif _is_untrusted(payload, "pattern"):
+            unquotable += 1
+        else:
+            counts[pattern] = counts.get(pattern, 0) + 1
+
+    # Repeats first, then alphabetical: two patterns seen twice must not swap
+    # places between renders of the same week.
+    ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    return ErrorMuseum(
+        total=total,
+        by_severity=by_severity,
+        patterns=tuple(ranked[:MAX_ERROR_PATTERNS]),
+        unquotable=unquotable,
+        patternless=patternless,
+    )
+
+
+def _day_part(stamp: object) -> str | None:
+    """The ``YYYY-MM-DD`` head of an ISO-UTC timestamp, or ``None``.
+
+    ``observation.ts`` and ``lesson_unresolved.created_ts`` are UTC to the
+    second; ``event.day_key`` is a *local* day. Aligning the two means taking
+    the UTC date, so a thread created just before local midnight can land in the
+    neighbouring week. Accepted rather than papered over: the alternative is
+    guessing a zone that was never recorded on those rows, and a letter that
+    guesses is worse than one that is a few hours coarse at the boundary.
+    """
+    if not isinstance(stamp, str) or len(stamp) < 10:
+        return None
+    head = stamp[:10]
+    try:
+        date.fromisoformat(head)
+    except ValueError:
+        return None
+    return head
+
+
+def _thread_state(
+    conn: sqlite3.Connection, first_day: str, last_day: str
+) -> ThreadState:
+    """Unresolved lesson threads as of ``last_day``.
+
+    Only threads created on or before the week's end are considered, and a
+    thread resolved *after* the week's end still counts as open here — that is
+    what makes a past week's letter reproducible.
+    """
+    opened = 0
+    resolved = 0
+    still_open = 0
+    oldest: str | None = None
+    lessons: set[str] = set()
+
+    for row in conn.execute(
+        "SELECT lesson_id, created_ts, resolved_ts FROM lesson_unresolved"
+    ):
+        created = _day_part(row["created_ts"])
+        if created is None or created > last_day:
+            continue
+        closed = _day_part(row["resolved_ts"])
+        if first_day <= created <= last_day:
+            opened += 1
+        if closed is not None and first_day <= closed <= last_day:
+            resolved += 1
+        if closed is None or closed > last_day:
+            still_open += 1
+            lessons.add(str(row["lesson_id"]))
+            if oldest is None or created < oldest:
+                oldest = created
+
+    return ThreadState(
+        opened=opened,
+        resolved=resolved,
+        still_open=still_open,
+        oldest_open_day=None if oldest is None else date.fromisoformat(oldest),
+        lessons_with_open=len(lessons),
+    )
+
+
+def _probe_results(
+    conn: sqlite3.Connection,
+    first_day: str,
+    last_day: str,
+    *,
+    battery_logged: bool,
+) -> ProbeResults:
+    """The week's ``observation`` rows, banded.
+
+    ``unassisted`` is the pass-rate numerator the D6 gate reads (spec US5): an
+    assisted production is a different observation, not a slightly worse one, so
+    it is counted separately rather than discounted.
+    """
+    total = 0
+    unassisted_total = 0
+    per_band: dict[str, list[int]] = {}
+    task_counts: dict[str, int] = {}
+    versions: set[str] = set()
+
+    for row in conn.execute(
+        "SELECT task_type, unassisted, coverage_band, rubric_version "
+        "FROM observation WHERE substr(ts, 1, 10) BETWEEN ? AND ?",
+        (first_day, last_day),
+    ):
+        total += 1
+        unassisted = 1 if row["unassisted"] else 0
+        unassisted_total += unassisted
+        band = _clean_label(row["coverage_band"], limit=8)
+        if band is not None:
+            slot = per_band.setdefault(band, [0, 0])
+            slot[0] += 1
+            slot[1] += unassisted
+        task = _clean_label(row["task_type"])
+        if task is not None:
+            task_counts[task] = task_counts.get(task, 0) + 1
+        version = _clean_label(row["rubric_version"], limit=24)
+        if version is not None:
+            versions.add(version)
+
+    # Schema order first (best band first), then anything the enum does not
+    # cover, alphabetically — a band the CHECK constraint forbids can only get
+    # here through a hand-written row, and dropping it silently would hide it.
+    ordered = [band for band in COVERAGE_BAND_ORDER if band in per_band]
+    ordered += sorted(band for band in per_band if band not in COVERAGE_BAND_ORDER)
+    ranked_tasks = sorted(task_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+
+    return ProbeResults(
+        total=total,
+        unassisted=unassisted_total,
+        bands=tuple(
+            BandResult(band=band, total=per_band[band][0], unassisted=per_band[band][1])
+            for band in ordered
+        ),
+        task_types=tuple(name for name, _ in ranked_tasks[:MAX_TASK_TYPES]),
+        rubric_versions=tuple(sorted(versions)),
+        battery_logged=battery_logged,
+    )
+
+
 def compute_week_stats(
     conn: sqlite3.Connection,
     iso_year: int | None = None,
@@ -390,6 +736,11 @@ def compute_week_stats(
       known-set total grew by more than that.
     * **minutes_total / items_mined** — summed from usable payload fields only.
       ``mining`` events without a count contribute 1 item each.
+    * **errors** — every ``error_logged`` event in the week, grouped by pattern
+      and severity (D5).
+    * **threads / probes** — the other two append-only logs, read for the same
+      week: open lesson threads as of the week's end, and the week's
+      rubric-scored observations (D5).
     """
     if (iso_year is None) != (iso_week is None):
         raise SenseiLetterError(
@@ -413,10 +764,16 @@ def compute_week_stats(
     items_mined = 0
     known_items: set[str] = set()
     known_unattributed = 0
+    error_payloads: list[dict[str, Any]] = []
+    battery_logged = False
 
     for row in rows:
         kind = str(row["type"])
         payload = _payload(row["payload"])
+        if kind == ERROR_EVENT_TYPE:
+            error_payloads.append(payload)
+        elif kind == PROBE_BATTERY_TYPE:
+            battery_logged = True
         if kind == REVIEW_BATCH_TYPE:
             count = _count_from(payload, ("reviews", "count", "n"))
             reviews_batched += 1 if count is None else count
@@ -470,6 +827,9 @@ def compute_week_stats(
         minutes_total=int(round(minutes_total)),
         items_mined=items_mined,
         event_count=len(rows),
+        errors=_error_museum(error_payloads),
+        threads=_thread_state(conn, first_day, last_day),
+        probes=_probe_results(conn, first_day, last_day, battery_logged=battery_logged),
     )
 
 
@@ -528,6 +888,153 @@ def _middle(stats: WeekStats) -> str | None:
     return f"What the log actually holds: {body}."
 
 
+def _errors(stats: WeekStats) -> str | None:
+    """The error museum: what the week's mistakes had in common.
+
+    Empty state is a nudge rather than silence, on the same reasoning as
+    :func:`_middle`'s "no reviews" branch: on a week that had study in it, an
+    empty museum usually means the tool went unused, and that is the fixable
+    thing. A quiet week skips the paragraph entirely — nagging an empty week is
+    how a teacher loses a learner.
+    """
+    if stats.is_quiet:
+        return None
+    museum = stats.errors
+    if museum.total == 0:
+        return (
+            "Nothing in the error museum this week. That is not the same as no "
+            "mistakes — an unlogged one is simply one you get to make again, so "
+            "let the next one get written down while it is still warm."
+        )
+
+    severities = museum.severity_label
+    lead = f"{museum.total} mistake(s) logged"
+    lead += f" ({severities})." if severities else "."
+
+    parts = [lead]
+    if museum.patterns:
+        named = "; ".join(
+            f"{pattern} ×{count}" if count > 1 else pattern
+            for pattern, count in museum.patterns
+        )
+        repeats = any(count > 1 for _, count in museum.patterns)
+        parts.append(
+            f"The museum's current exhibits: {named}."
+            + (
+                " A pattern that shows up twice is not bad luck; it is the next "
+                "drill, already written."
+                if repeats
+                else ""
+            )
+        )
+    if museum.unquotable:
+        parts.append(
+            f"{museum.unquotable} came in from media-derived text and are "
+            "counted here, not quoted — this letter does not repeat text it "
+            "cannot vouch for."
+        )
+    if museum.patternless:
+        parts.append(
+            f"{museum.patternless} arrived without a pattern, which leaves it "
+            "an anecdote; the pattern is the part a later drill can group by."
+        )
+    return " ".join(parts)
+
+
+def _unresolved(stats: WeekStats) -> str | None:
+    """Open lesson threads — the "what you're avoiding" paragraph.
+
+    Counts only, never the thread text: see the module docstring's SECRETS note.
+    Nothing at all to report means no paragraph, because an empty thread list is
+    a good and unremarkable state, not a finding.
+    """
+    if stats.is_quiet:
+        return None
+    threads = stats.threads
+    if not (threads.opened or threads.resolved or threads.still_open):
+        return None
+
+    parts: list[str] = []
+    if threads.opened or threads.resolved:
+        movement: list[str] = []
+        if threads.opened:
+            movement.append(f"{threads.opened} new question(s) went unanswered")
+        if threads.resolved:
+            movement.append(f"{threads.resolved} older one(s) got answered")
+        parts.append(f"Threads this week: {', and '.join(movement)}.")
+
+    if threads.still_open:
+        where = (
+            f" across {threads.lessons_with_open} lesson(s)"
+            if threads.lessons_with_open > 1
+            else ""
+        )
+        line = (
+            f"{threads.still_open} question(s) are still open{where} as of "
+            f"{stats.end_day.isoformat()}"
+        )
+        if threads.oldest_open_day is not None:
+            age = (stats.end_day - threads.oldest_open_day).days
+            line += (
+                f", the oldest since {threads.oldest_open_day.isoformat()} "
+                f"({age} day(s))"
+            )
+        parts.append(
+            line + ". `lessons(unresolved_only=True)` has the actual questions; "
+            "an unanswered one compounds, an answered one becomes a lesson."
+        )
+    else:
+        parts.append("Nothing is left open. That is a clean desk, and it is rare.")
+    return " ".join(parts)
+
+
+def _probes(stats: WeekStats) -> str | None:
+    """Probe and observation results: the unassisted pass-rate series.
+
+    Named as a gap rather than skipped when the week scored nothing, because the
+    D6 gate reads this series and a silent gap in it is exactly the failure mode
+    the gate exists to catch.
+    """
+    if stats.is_quiet:
+        return None
+    probes = stats.probes
+    if probes.total == 0:
+        return (
+            "No rubric-scored observations this week, so the unassisted "
+            "pass-rate series has a gap here. One probe battery says more than a "
+            "week of feeling like it went well — and the gate reads the series, "
+            "not the feeling."
+        )
+
+    parts = [
+        f"Scored performances: {probes.total}, "
+        f"{probes.unassisted} of them unassisted "
+        f"({probes.unassisted_percent}%)."
+    ]
+    if probes.bands:
+        parts.append(
+            "By coverage band: "
+            + "; ".join(band.label for band in probes.bands)
+            + "."
+        )
+    if len(probes.bands) < 2:
+        parts.append(
+            "All of it inside one coverage band — a pass-rate needs at least "
+            "two before it means anything about difficulty."
+        )
+    if probes.task_types:
+        parts.append(f"Tasks: {', '.join(probes.task_types)}.")
+    if probes.rubric_versions:
+        versions = ", ".join(probes.rubric_versions)
+        parts.append(f"Scored against rubric {versions}.")
+    parts.append(
+        "A probe battery is on the log for this week."
+        if probes.battery_logged
+        else "No probe battery this week — these were ordinary observations."
+    )
+    return " ".join(parts)
+
+
 def _closing(stats: WeekStats) -> str:
     if stats.is_quiet:
         return "Until next week — また来週."
@@ -553,10 +1060,18 @@ def _closing(stats: WeekStats) -> str:
 
 
 #: Paragraph builders, in order. Each returns a paragraph or ``None`` to skip.
-#: Extension seam for D5: append a builder, do not edit :func:`render_letter`.
+#: Extension seam: append a builder, do not edit :func:`render_letter`.
+#:
+#: The D5 three sit between what the week held and the sign-off, worst news
+#: first: mistakes, then the questions still open, then the scored evidence.
+#: That is the order a teacher would use — the museum is the most actionable, the
+#: probe record is the most abstract, and neither belongs after "また来週".
 BODY_SECTIONS: Final[tuple[Callable[[WeekStats], str | None], ...]] = (
     _opening,
     _middle,
+    _errors,
+    _unresolved,
+    _probes,
     _closing,
 )
 
@@ -586,7 +1101,7 @@ def render_letter(stats: WeekStats) -> str:
     lines.append("")
     lines.append(
         f"*{stats.start_day.isoformat()} – {stats.end_day.isoformat()}. "
-        "Written from the event log only.*"
+        "Written from the logs only — events, observations, open threads.*"
     )
     lines.append("")
 
@@ -791,10 +1306,18 @@ def main(argv: list[str] | None = None) -> int:
 __all__ = [
     "ARTIFACT_EVENT_TYPES",
     "BODY_SECTIONS",
+    "COVERAGE_BAND_ORDER",
+    "ERROR_EVENT_TYPE",
+    "ERROR_SEVERITIES",
     "LETTER_EVENT_TYPE",
+    "PROBE_BATTERY_TYPE",
     "PROGRESS_DIR_NAME",
     "STUDY_MINUTES_PER_DAY",
+    "BandResult",
+    "ErrorMuseum",
+    "ProbeResults",
     "SenseiLetterError",
+    "ThreadState",
     "WeekStats",
     "compute_week_stats",
     "current_week",
