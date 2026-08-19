@@ -36,7 +36,13 @@
 ## Taskgroup D1: Setup (serial, master)
 
 - [x] T001 Confirm phase entry: C-verify green (specs/002 TG-C4 checked) + ≥4 logged study days prior week; record entry line. Write: docs/dev-plan.md. Read: specs/002 tasks.md, docs/dev-plan.md (tail). [was: kata-ph-d entry]
-- [ ] T002 [in-progress: scout-t002] Bottom-up estimates for every task below; split any >8h task into sub-tasks in this file (D-29); confirm the lane plan against the conflict map. Write: this tasks.md. Read: plan.md, research.md, Phase C actual-vs-estimate note from specs/002 T002. [was: kata-ph-d]
+- [x] T002 Bottom-up estimates for every task below; split any >8h task into sub-tasks in this file (D-29); confirm the lane plan against the conflict map. Write: this tasks.md. Read: plan.md, research.md, Phase C actual-vs-estimate note from specs/002 T002. [was: kata-ph-d]
+
+### Estimates (T002, 2026-08-19; human-hour scale, Phase C anchors; expected agent wall-clock ≈0.1×)
+
+T003 2.5 · T004 4 · T005 3 · T006 4 · T007 4 · T008 5.5 · T009 2.5 · T010 3.5 · T011 3 · T012 2.5 · T013 4 · T014 4 · T015a 4 · T015b 5 · T016 3 · T017 2 · T018 5 · T019 1.5 · T020 1.5 · T021 5 · T022 0.5 (effort-only; calendar-bound 18-day window). **Total ≈70h** (≈7h wall-clock at Phase C ratio ≈0.09), under the 89–170h top-down band (docs/oss-components.md:140). T015 (9h) split → T015a/T015b per D-29; lane plan confirmed against conflict map — T015a/b stay serial inside `wt/d-intel`, disjointness unchanged. Note: specs/002 T002 never recorded actuals; calibration recovered from git timestamps (Phase C 18:28→19:43, 2026-08-19).
+
+**Branch note (2026-08-19)**: Phase D integration branch is `phase-d` (user directive — real-usage testing deferred). All lanes branch from and merge to `phase-d`, not `master`; `phase-d` → `master` merge gated on sufficient real testing. Read `master` in lane instructions below as `phase-d` for this phase.
 
 ## Taskgroup D2: Foundational (seam serial; envelope in parallel worktree)
 
@@ -82,8 +88,9 @@ Merge order (felt-value): US2 → US3 → US4. Registration for all three lands 
 **Independent Test**: unreachable-grammar sentence gated out at 100% vocab coverage.
 
 - [ ] T014 [US4] coverage(text) from real known_set + grammar-DAG import from curriculum.md (prereqs/unlocks → item rows). Write: NEW src/katagiri/intelligence.py. Read: docs/katagiri/katagiri/10-course/curriculum.md, docs/db-schema.md (item DAG rows), src/katagiri/known.py (the known-set access module). [was: kata-d2]
-- [ ] T015 [US4] find_i_plus_one gated on DAG reachability AND coverage; comprehension-debt ranking; difficulty-for-me (jreadability + BCCWJ + JLPT + coverage %; data vendored/checksummed per D-10). Write: src/katagiri/intelligence.py (serial after T014). Read: T014 output, research.md (jreadability/BCCWJ/JLPT sourcing). [was: kata-d2]
-- [ ] T016 [P] [US4] Unit tests incl. the unreachable-grammar gating case. Write: NEW tests/test_intelligence.py. Read: fixture recipe, intelligence.py API. [was: kata-d2]
+- [ ] T015a [US4] find_i_plus_one gated on DAG reachability AND coverage + comprehension-debt ranking (folded from observation/item_stat_cache). No external data. Write: src/katagiri/intelligence.py (serial after T014). Read: T014 output, docs/db-schema.md. [was: kata-d2; split from T015 per D-29]
+- [ ] T015b [US4] difficulty-for-me scoring + vendored difficulty data: vendor jreadability + BCCWJ frequency + JLPT lists under vendor/ with CHECKSUMS.sha256 entries per D-10, loader/parse layer, combined score (readability + frequency + JLPT + coverage %). Write: src/katagiri/intelligence.py (serial after T015a), vendor/ additions. Read: research.md sourcing note, vendor/README.md + CHECKSUMS.sha256 pattern. [was: kata-d2; split from T015 per D-29]
+- [ ] T016 [P] [US4] Unit tests incl. the unreachable-grammar gating case. Written against T015b's API; [P] only after T015a lands. Write: NEW tests/test_intelligence.py. Read: fixture recipe, intelligence.py API. [was: kata-d2]
 
 ### Serial close of TG-D4
 
