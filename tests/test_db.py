@@ -45,9 +45,21 @@ DERIVED_TABLES = (
     "jmdict_reading",
     "jmdict_sense",
     "pitch_accent",
+    "fts_md_words",
+    "fts_md_tri",
+    "md_note",
+    "md_frontmatter",
     "sub_lines",
     "coverage_cache",
     "item_stat_cache",
+)
+
+# FTS5 keeps its own shadow tables (<name>_data, _idx, _content, _docsize,
+# _config) beside every fts_ table listed above. Derived from DERIVED_TABLES
+# rather than hard-coded so a new FTS index cannot be mistaken for an
+# undocumented table by the fresh-migration test.
+FTS_SHADOW_PREFIXES = tuple(
+    f"{name}_" for name in DERIVED_TABLES if name.startswith("fts_")
 )
 
 EXPECTED_TABLES = SOURCE_OF_TRUTH_TABLES | set(DERIVED_TABLES)
@@ -178,7 +190,7 @@ def test_fresh_migrate_stamps_version_and_creates_every_object(conn):
     unexpected = {
         name
         for name in tables - EXPECTED_TABLES
-        if not name.startswith(("fts_sentence_words_", "fts_sentence_tri_"))
+        if not name.startswith(FTS_SHADOW_PREFIXES)
     }
     assert not unexpected, f"undocumented tables: {sorted(unexpected)}"
 
@@ -751,7 +763,7 @@ def test_no_scheduler_state_columns_outside_the_anki_mirror(conn):
 def test_derived_tables_are_all_droppable_under_foreign_keys_on(conn):
     """Rebuild scripts must be able to drop every derived table, FKs enabled."""
     db.migrate(conn)
-    assert len(DERIVED_TABLES) == 18
+    assert len(DERIVED_TABLES) == 22
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
     # One transaction, exactly as a rebuild script must do it.
