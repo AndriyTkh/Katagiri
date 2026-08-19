@@ -78,6 +78,106 @@ def test_unknown_key_rejected(local_app_data):
         config_mod.load_config()
 
 
+def test_template_block_exists_for_every_known_key():
+    assert set(config_mod._KEY_BLOCKS) == set(config_mod._KNOWN_KEYS)
+
+
+def test_missing_template_keys_appended_on_load(local_app_data):
+    cfg_dir = local_app_data / "Katagiri"
+    cfg_dir.mkdir(parents=True)
+    vault = local_app_data / "Vault"
+    original = (
+        "# operator's own comment, must survive verbatim\n"
+        f'vault_path = "{vault.as_posix()}"\n'
+    )
+    (cfg_dir / "config.toml").write_text(original, encoding="utf-8")
+
+    cfg = config_mod.load_config()
+    assert cfg.vault_path == vault
+
+    text = (cfg_dir / "config.toml").read_text(encoding="utf-8")
+    # Existing content is untouched: appended, never rewritten.
+    assert text.startswith(original)
+    for key in ("anki_data_dir", "scratch_root", "db_path", "obsidian_api_token"):
+        assert f"# {key} = " in text, f"missing commented block for {key}"
+    # The active key is not duplicated by a commented copy.
+    assert text.count("vault_path") == 1
+
+    # The migrated file still loads, and the appended blocks are comments only,
+    # so no value changed.
+    config_mod.reset_config_cache()
+    again = config_mod.load_config()
+    assert again.vault_path == vault
+    assert again.obsidian_api_token is None
+
+
+def test_commented_key_counts_as_present(local_app_data):
+    cfg_dir = local_app_data / "Katagiri"
+    cfg_dir.mkdir(parents=True)
+    original = (
+        '# obsidian_api_token = ""\n'
+        '# vault_path = ""\n'
+        '# anki_data_dir = ""\n'
+        '# scratch_root = ""\n'
+        '# db_path = ""\n'
+    )
+    (cfg_dir / "config.toml").write_text(original, encoding="utf-8")
+
+    config_mod.load_config()
+
+    text = (cfg_dir / "config.toml").read_text(encoding="utf-8")
+    assert text == original, "all keys present (commented) -> nothing appended"
+
+
+def test_fresh_default_config_is_stable_across_loads(local_app_data):
+    config_mod.load_config()
+    cfg_path = local_app_data / "Katagiri" / "config.toml"
+    before = cfg_path.read_text(encoding="utf-8")
+
+    config_mod.reset_config_cache()
+    config_mod.load_config()
+
+    assert cfg_path.read_text(encoding="utf-8") == before
+
+
+def test_append_without_trailing_newline_stays_valid_toml(local_app_data):
+    cfg_dir = local_app_data / "Katagiri"
+    cfg_dir.mkdir(parents=True)
+    vault = local_app_data / "Vault"
+    (cfg_dir / "config.toml").write_text(
+        f'vault_path = "{vault.as_posix()}"', encoding="utf-8"  # no trailing \n
+    )
+
+    config_mod.load_config()
+
+    config_mod.reset_config_cache()
+    cfg = config_mod.load_config()  # must not raise TOMLDecodeError
+    assert cfg.vault_path == vault
+
+
+def test_append_failure_does_not_break_load(local_app_data, monkeypatch):
+    cfg_dir = local_app_data / "Katagiri"
+    cfg_dir.mkdir(parents=True)
+    vault = local_app_data / "Vault"
+    original = f'vault_path = "{vault.as_posix()}"\n'
+    cfg_path = cfg_dir / "config.toml"
+    cfg_path.write_text(original, encoding="utf-8")
+
+    real_open = config_mod.Path.open
+
+    def deny_append(self, mode="r", *args, **kwargs):
+        if "a" in mode:
+            raise PermissionError(13, "denied", str(self))
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(config_mod.Path, "open", deny_append)
+
+    cfg = config_mod.load_config()  # must not raise
+
+    assert cfg.vault_path == vault
+    assert cfg_path.read_text(encoding="utf-8") == original
+
+
 def _stdout_bound(handler: logging.Handler) -> bool:
     stream = getattr(handler, "stream", None)
     if stream is None:

@@ -15,7 +15,9 @@ reference the config file path and the offending key *name* only, never a value.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -34,7 +36,9 @@ _SECRET_KEYS: Final = ("obsidian_api_token",)
 
 _KNOWN_KEYS: Final = _PATH_KEYS + _SECRET_KEYS
 
-_DEFAULT_CONFIG_TEMPLATE: Final = """\
+_log = logging.getLogger("katagiri.config")
+
+_TEMPLATE_HEADER: Final = """\
 # Katagiri configuration.
 #
 # This file lives outside the repository on purpose: it holds machine-specific
@@ -44,27 +48,47 @@ _DEFAULT_CONFIG_TEMPLATE: Final = """\
 # Every key below is optional and shown with its built-in default. Uncomment a
 # key to override it. Use forward slashes or escaped backslashes in TOML
 # strings, e.g. "C:/Users/me/Vault" or "C:\\\\Users\\\\me\\\\Vault".
+"""
 
+# One commented template block per known key. A config.toml written before a key
+# existed gets that key's block appended on load (see ``_append_missing_blocks``),
+# so this dict — not one monolithic template string — is the unit of migration.
+# Placeholders ({scratch_root}, {db_path}) are filled from ``_defaults``.
+_KEY_BLOCKS: Final[dict[str, str]] = {
+    "vault_path": """\
 # Obsidian (or plain markdown) vault that Katagiri reads/writes study notes in.
 # Required before any vault-backed tool will work; no default is invented.
 # vault_path = ""
-
+""",
+    "anki_data_dir": """\
 # Anki data directory (the folder containing your Anki profiles).
 # anki_data_dir = ""
-
+""",
+    "scratch_root": """\
 # Scratch space for intermediate artefacts (temp exports, caches).
 # scratch_root = "{scratch_root}"
-
+""",
+    "db_path": """\
 # SQLite database used for Katagiri's own state.
 # db_path = "{db_path}"
-
+""",
+    "obsidian_api_token": """\
 # API key for the Obsidian "Local REST API" plugin (Settings -> Local REST API).
 # This is a credential: Katagiri holds it so the agent never does, and uses it
 # only for GET-shaped vault reads against http://127.0.0.1:27123. It is never
 # logged, never returned by a tool, and never written back to this file.
 # Leave it unset and the Obsidian tools report themselves unconfigured.
 # obsidian_api_token = ""
-"""
+""",
+}
+
+# A key "is present" in config.toml when any line sets it or shows it commented
+# out ("key = ..." or "# key = ..."). Only then is its template block skipped by
+# the append-on-load migration.
+_KEY_LINE_RES: Final[dict[str, re.Pattern[str]]] = {
+    key: re.compile(rf"^[ \t]*(?:#[ \t]*)?{re.escape(key)}[ \t]*=", re.MULTILINE)
+    for key in _KNOWN_KEYS
+}
 
 
 class ConfigError(RuntimeError):
@@ -135,14 +159,20 @@ def _defaults(base: Path) -> dict[str, Path]:
     }
 
 
+def _render_block(key: str, defaults: dict[str, Path]) -> str:
+    return _KEY_BLOCKS[key].format(
+        scratch_root=defaults["scratch_root"].as_posix(),
+        db_path=defaults["db_path"].as_posix(),
+    )
+
+
 def write_default_config(path: Path) -> None:
     """Create ``path`` with commented-out defaults. Never overwrites."""
     if path.exists():
         return
     defaults = _defaults(path.parent)
-    body = _DEFAULT_CONFIG_TEMPLATE.format(
-        scratch_root=defaults["scratch_root"].as_posix(),
-        db_path=defaults["db_path"].as_posix(),
+    body = _TEMPLATE_HEADER + "".join(
+        "\n" + _render_block(key, defaults) for key in _KEY_BLOCKS
     )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,6 +181,44 @@ def write_default_config(path: Path) -> None:
         raise ConfigError(
             f"Could not create the default configuration file at {path}: {exc}"
         ) from exc
+
+
+def _append_missing_blocks(path: Path, text: str) -> None:
+    """Append commented template blocks for keys the file predates.
+
+    ``write_default_config`` never overwrites, so a config.toml created before a
+    key was added to the template silently lacks its commented block and the
+    operator has no visible knob to discover it exists (kata-obi, hit in
+    practice with ``obsidian_api_token``). Existing lines — values and comments
+    alike — are never touched; new blocks are appended at the end. A failed
+    append is logged and ignored: an absent commented key is functionally
+    identical to a present one, so it must never block loading.
+    """
+    missing = [key for key in _KEY_BLOCKS if not _KEY_LINE_RES[key].search(text)]
+    if not missing:
+        return
+    defaults = _defaults(path.parent)
+    chunks = [] if not text or text.endswith("\n") else ["\n"]
+    chunks.extend("\n" + _render_block(key, defaults) for key in missing)
+    try:
+        with path.open("a", encoding="utf-8", newline="") as fh:
+            fh.write("".join(chunks))
+    except OSError as exc:
+        _log.warning(
+            "config.toml at %s lacks template block(s) for new key(s) %s, and "
+            "appending them failed (%s). The keys default to unset; add them by "
+            "hand to make the knobs visible.",
+            path,
+            ", ".join(missing),
+            exc,
+        )
+        return
+    _log.info(
+        "Appended commented template block(s) for new configuration key(s) %s "
+        "to %s. Existing lines were not modified.",
+        ", ".join(missing),
+        path,
+    )
 
 
 def _coerce_path(key: str, value: Any, source: Path) -> Path | None:
@@ -235,10 +303,12 @@ def load_config(*, create_missing: bool = True) -> Config:
         write_default_config(path)
 
     try:
-        with path.open("rb") as fh:
-            raw = tomllib.load(fh)
+        text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise ConfigError(f"Could not read the configuration file {path}: {exc}") from exc
+
+    try:
+        raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(
             f"The configuration file {path} is not valid TOML: {exc}"
@@ -250,6 +320,10 @@ def load_config(*, create_missing: bool = True) -> Config:
             f"Unknown configuration key(s) in {path}: {', '.join(unknown)}. "
             f"Supported keys: {', '.join(_KNOWN_KEYS)}."
         )
+
+    # Only a file that parsed cleanly is migrated: appending to a broken file
+    # would bury the operator's syntax error under fresh template text.
+    _append_missing_blocks(path, text)
 
     defaults = _defaults(path.parent)
     values = {key: _coerce_path(key, raw.get(key), path) for key in _PATH_KEYS}
