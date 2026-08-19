@@ -1070,6 +1070,9 @@ def main(argv: list[str] | None = None) -> int:
     # Imported here so that importing this module does not touch the filesystem
     # or the configured database path.
     from katagiri.db import open_db
+    from katagiri.logging_setup import setup_logging
+
+    setup_logging()
 
     conn = open_db()
     try:
