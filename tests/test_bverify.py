@@ -122,6 +122,10 @@ CONTRACT_TOOLS = frozenset(
         "vault_file",
         "vault_list",
         "obsidian_active_note",
+        # Phase C (additive): markdown search over the local derived index. The
+        # gate mirrors the list, so an addition lands here deliberately or the
+        # handshake fails — which is the point of mirroring it.
+        "search_notes",
     }
 )
 

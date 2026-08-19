@@ -687,6 +687,8 @@ CONTRACT_TOOLS = frozenset(
         "vault_file",
         "vault_list",
         "obsidian_active_note",
+        # Phase C (additive): markdown search over the local derived index.
+        "search_notes",
     }
 )
 
