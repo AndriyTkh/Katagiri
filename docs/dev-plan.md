@@ -280,3 +280,7 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   directive 2026-08-19 — agent-side testing done where possible; real-usage testing deferred.
   Mitigation: all Phase D work lands on integration branch `phase-d`, merged to `master` only
   after sufficient real testing.
+- 2026-08-19 — Phase D TG-D3 checkpoint: US1 loop usable (11 MCP tools registered, suite 1141
+  green, cold-subagent scripted lesson loop lands all six US1 event types in the event log).
+  **D6 calendar clock (T022) starts today**: 14 study days in an 18-day window counted from
+  2026-08-19. Vault half of the loop (Today.md lesson-memory section) is T010/TG-D4.
