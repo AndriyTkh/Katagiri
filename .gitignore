@@ -1,6 +1,17 @@
-
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Python
+__pycache__/
+.venv/
+*.egg-info/
+.pytest_cache/
+dist/
+
+# Vendored dictionaries/data: binaries stay local, docs + checksums are committed.
+vendor/*
+!vendor/README.md
+!vendor/CHECKSUMS.sha256

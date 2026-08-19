@@ -1,0 +1,35 @@
+[project]
+name = "katagiri"
+version = "0.1.0"
+description = "Personal English-Japanese study MCP server (stdio only)."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fugashi>=1.5.2",
+    "mcp>=2,<3",
+    "tzdata>=2026.3",
+]
+
+[project.scripts]
+katagiri-mcp = "katagiri.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/katagiri"]
+artifacts = ["src/katagiri/data/*.tsv"]
+force-include = { "src/katagiri/data/morph_labels_200.tsv" = "katagiri/data/morph_labels_200.tsv" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "detect-secrets>=1.5",
+    "pre-commit>=4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["slow: long-running test, runs by default, skips only if vendor data absent"]

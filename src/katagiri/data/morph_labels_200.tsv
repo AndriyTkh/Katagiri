@@ -1,0 +1,230 @@
+# Katagiri morph -> lexeme accuracy set (task A4c). 200 labelled UniDic morphs.
+#
+# Columns, tab-separated: lemma  reading  pos1  expected_jmdict_seq  note
+#
+#   lemma   UniDic's lemma field, verbatim - including the -disambiguator suffix
+#           it appends to homograph lemmas (私-代名詞, コーヒー-coffee), which
+#           katagiri.normalizer.unidic_lemma_form is expected to strip.
+#   reading UniDic's lemma reading (lForm), katakana. Empty when UniDic gave none
+#           (punctuation).
+#   pos1    UniDic's coarsest part of speech.
+#   expected_jmdict_seq
+#           The JMdict ent_seq a human would point at, or EMPTY when the correct
+#           answer is "no map" - punctuation and compounds JMdict does not list.
+#           Every seq here was looked up in a real import of
+#           vendor/jmdict/jmdict-eng-3.6.2.json.zip (218461 entries) and checked
+#           against that entry's written forms, readings and glosses. None are
+#           invented, and none were taken on trust from the matcher's own output.
+#   note    "<category>: <comment>". The category is machine-read by the accuracy
+#           harness to report a per-category breakdown; the comment says why the
+#           row is interesting, and flags the rows whose lemma spelling was added
+#           by hand rather than observed from the tokenizer.
+#
+# Matching is entry-level: a morph identifies a JMdict entry, not one of its
+# senses, so nothing here labels a sense_idx. See katagiri.normalizer.
+#
+# Rows whose lemma is marked "hand-added" are spellings the vendored UniDic does
+# not itself produce. They are real Japanese orthography and are here to exercise
+# the okurigana rung, which natural UniDic output almost never reaches because
+# JMdict already lists UniDic's preferred spelling as a variant.
+lemma	reading	pos1	expected_jmdict_seq	note
+家族	カゾク	名詞	1192150	noun:
+父	チチ	名詞	1497610	noun:
+母	ハハ	名詞	1514990	noun:
+弟	オトウト	名詞	1581930	noun:
+天気	テンキ	名詞	1438690	noun:
+雨	アメ	名詞	1171900	noun:
+風	カゼ	名詞	1499720	noun:
+学校	ガッコウ	名詞	1206730	noun:
+教室	キョウシツ	名詞	1237150	noun:
+先生	センセイ	名詞	1387990	noun:
+駅	エキ	名詞	1175140	noun:
+近く	チカク	名詞	1242160	noun:
+店	ミセ	名詞	1582120	noun:
+会社	カイシャ	名詞	1198550	noun:
+仕事	シゴト	名詞	1304970	noun:
+友達	トモダチ	名詞	1540170	noun:
+名前	ナマエ	名詞	1531710	noun:
+手帳	テチョウ	名詞	1598330	noun:
+山	ヤマ	名詞	1302680	noun:
+川	カワ	名詞	1390020	noun:
+海	ウミ	名詞	1201190	noun:
+空	ソラ	名詞	1245290	noun:
+犬	イヌ	名詞	1258330	noun:
+猫	ネコ	名詞	1467640	noun:
+庭	ニワ	名詞	1436130	noun:
+朝	アサ	名詞	1428280	noun:
+昼	ヒル	名詞	1426250	noun:
+夜	ヨル	名詞	1536350	noun:
+薬	クスリ	名詞	1538160	noun:
+町	マチ	名詞	1603990	noun:
+病院	ビョウイン	名詞	1490220	noun:
+医者	イシャ	名詞	1159980	noun:
+台所	ダイドコロ	名詞	1412640	noun:
+野菜	ヤサイ	名詞	1537370	noun:
+肉	ニク	名詞	1463520	noun:
+部屋	ヘヤ	名詞	1499320	noun:
+窓	マド	名詞	1401400	noun:
+旅行	リョコウ	名詞	1553170	noun:
+写真	シャシン	名詞	1321900	noun:
+机	ツクエ	名詞	1220210	noun:
+音楽	オンガク	名詞	1183720	noun:
+鞄	カバン	名詞	1208910	noun:
+電話	デンワ	名詞	1443840	noun:
+声	コエ	名詞	1380440	noun:
+時間	ジカン	名詞	1315920	noun:
+言葉	コトバ	名詞	1264540	noun:
+意味	イミ	名詞	1156800	noun:
+辞書	ジショ	名詞	1318970	noun:
+問題	モンダイ	名詞	1536010	noun:
+答え	コタエ	名詞	1449530	noun:
+意見	イケン	名詞	1156530	noun:
+料理	リョウリ	名詞	1554310	noun:
+味	アジ	名詞	1526960	noun:
+塩	シオ	名詞	1576630	noun:
+砂糖	サトウ	名詞	1291600	noun:
+手紙	テガミ	名詞	1327720	noun:
+階段	カイダン	名詞	1203090	noun:
+荷物	ニモツ	名詞	1195430	noun:
+切符	キップ	名詞	1385170	noun:
+牛	ウシ	名詞	1231490	noun:
+話す	ハナス	動詞	1562350	verb:
+出来る	デキル	動詞	1340450	verb: UniDic writes できる in kanji
+書く	カク	動詞	1343950	verb:
+遊ぶ	アソブ	動詞	1542160	verb:
+飲む	ノム	動詞	1169870	verb:
+会う	アウ	動詞	1198180	verb:
+切る	キル	動詞	1384830	verb:
+見える	ミエル	動詞	1259140	verb:
+置く	オク	動詞	1421850	verb:
+入れる	イレル	動詞	1465610	verb:
+聞く	キク	動詞	1591110	verb:
+足りる	タリル	動詞	1404740	verb:
+調べる	シラベル	動詞	1429060	verb:
+分かる	ワカル	動詞	1606560	verb: also written わかる/解る/判る
+起きる	オキル	動詞	1223640	verb:
+洗う	アラウ	動詞	1390930	verb:
+読む	ヨム	動詞	1456360	verb:
+待つ	マツ	動詞	1410590	verb:
+歌う	ウタウ	動詞	1588120	verb:
+歩く	アルク	動詞	1514320	verb:
+持つ	モツ	動詞	1315720	verb:
+上る	ノボル	動詞	1352570	verb: 上る/登る/昇る share one entry
+開ける	アケル	動詞	1202450	verb:
+払う	ハラウ	動詞	1501620	verb:
+買う	カウ	動詞	1473740	verb:
+走る	ハシル	動詞	1402540	verb:
+寝る	ネル	動詞	1360010	verb:
+謝る	アヤマル	動詞	1323010	verb:
+答える	コタエル	動詞	1449540	verb:
+渡る	ワタル	動詞	1444680	verb:
+もう	モウ	副詞	1012480	kana:
+もっと	モット	副詞	1012620	kana:
+そろそろ	ソロソロ	副詞	1345605	kana:
+ゆっくり	ユックリ	副詞	1013050	kana:
+はっきり	ハッキリ	副詞	1010150	kana:
+ちゃんと	チャント	副詞	1007720	kana:
+きちんと	キチント	副詞	1003400	kana:
+すっかり	スッカリ	副詞	1006110	kana:
+ぴったり	ピッタリ	副詞	1010900	kana:
+どうぞ	ドウゾ	副詞	1189130	kana:
+いいえ	イイエ	感動詞	1583250	kana:
+さようなら	サヨウナラ	感動詞	1291050	kana: uk entry, headword 左様なら
+うっかり	ウッカリ	名詞	1001010	kana:
+びっくり	ビックリ	名詞	1226360	kana: uk entry, headword 吃驚
+さっき	サッキ	名詞	1005180	kana: uk entry, headword 先/先刻
+まさか	マサカ	副詞	1363540	kana: uk entry, headword 真逆
+そして	ソシテ	接続詞	1006730	kana: uk entry, headword 而して
+そう-様態	ソウ	形状詞	1006610	kana: lemma disambiguator -様態 must be stripped
+ほど	ホド	助詞	1436510	kana: uk entry, headword 程
+だけ	ダケ	助詞	1007340	kana: uk entry, headword 丈
+書込む	カキコム	動詞	1343730	okurigana: hand-added reduced spelling; JMdict has only 書き込む/書きこむ
+書直す	カキナオス	動詞	1343830	okurigana: hand-added reduced spelling; rung 4a
+話掛ける	ハナシカケル	動詞	1562300	okurigana: hand-added reduced spelling; rung 4a
+見送	ミオクリ	名詞	1259820	okurigana: hand-added reduced spelling; rung 4a
+思付く	オモイツク	動詞	1589330	okurigana: hand-added reduced spelling; rung 4a
+取替え	トリカエ	名詞	1599020	okurigana: hand-added reduced spelling; rung 4a; entry is not common
+食物	タベモノ	名詞	1358340	okurigana: hand-added; 食物 is JMdict's headword for しょくもつ, so rung 1 must lose to rung 4a
+奇麗	キレイ	形状詞	1591900	okurigana: UniDic 奇麗 vs JMdict primary 綺麗
+受け付け	ウケツケ	名詞	1588060	okurigana: UniDic 受け付け vs JMdict primary 受付
+取り敢えず	トリアエズ	副詞	1598980	okurigana: UniDic 取り敢えず vs JMdict primary 取りあえず
+有り難う	アリガトウ	感動詞	1586820	okurigana: UniDic 有り難う vs JMdict primary 有難う
+見付ける	ミツケル	動詞	1604570	okurigana: UniDic 見付ける vs JMdict primary 見つける
+追い掛ける	オイカケル	動詞	1608720	okurigana: UniDic 追い掛ける vs JMdict primary 追いかける
+問い合わせる	トイアワセル	動詞	1535960	okurigana:
+申し込む	モウシコム	動詞	1362890	okurigana:
+組み立てる	クミタテル	動詞	1397580	okurigana:
+取り替える	トリカエル	動詞	1326830	okurigana:
+落ち着く	オチツク	動詞	1589220	okurigana:
+引っ越す	ヒッコス	動詞	1169340	okurigana: also written 引越す/引っこす
+御座る	ゴザル	動詞	1270350	okurigana: entry is not common
+生	ナマ	名詞	1378450	homograph: 生 is せい/なま/き/ふ across unrelated entries
+方	カタ	名詞	1516925	homograph: vs 方/ほう 1516930
+中	チュウ	接尾辞	1620400	homograph: vs 中/じゅう
+中	ジュウ	接尾辞	2083570	homograph: same kanji, reading decides
+私-代名詞	ワタクシ	代名詞	2842390	homograph: わたくし entry, not the common わたし 1311110
+日	ヒ	名詞	1463770	homograph:
+日	ニチ	名詞	2083100	homograph: same kanji, reading decides
+人	ヒト	名詞	1580640	homograph:
+人	ニン	接尾辞	2149890	homograph: counter for people
+御	オ	接頭辞	2826528	homograph: お prefix
+御	ゴ	接頭辞	1270190	homograph: ご prefix, same kanji
+何	ナニ	代名詞	1577100	homograph:
+何	ナン	名詞	2846738	homograph: same kanji, reading decides
+上手	ジョウズ	形状詞	1353320	homograph: vs 上手/うわて and 上手/かみて
+本	ホン	名詞	1522150	homograph:
+月	ツキ	名詞	1255430	homograph: vs 月/げつ
+金	カネ	名詞	1242590	homograph: vs 金/きん
+気	キ	名詞	1221520	homograph:
+目	メ	名詞	1604890	homograph: vs 目/もく
+後	アト	名詞	1269320	homograph: vs 後/のち and 後/ご
+勉強	ベンキョウ	名詞	1512670	suru:
+説明	セツメイ	名詞	1386460	suru:
+会議	カイギ	名詞	1198360	suru:
+参加	サンカ	名詞	1302090	suru:
+準備	ジュンビ	名詞	1341670	suru:
+練習	レンシュウ	名詞	1559160	suru:
+成功	セイコウ	名詞	1375690	suru:
+洗濯	センタク	名詞	1390980	suru:
+紹介	ショウカイ	名詞	1351430	suru:
+運転	ウンテン	名詞	1172830	suru:
+研究	ケンキュウ	名詞	1258520	suru:
+発表	ハッピョウ	名詞	1477840	suru:
+卒業	ソツギョウ	名詞	1405890	suru:
+心配	シンパイ	名詞	1360930	suru:
+為る	スル	動詞	1157170	suru: UniDic's lemma for する
+は	ハ	助詞	2028920	particle:
+が	ガ	助詞	2028930	particle:
+を	ヲ	助詞	2029010	particle:
+に	ニ	助詞	2028990	particle:
+で	デ	助詞	2028980	particle:
+の	ノ	助詞	1469800	particle: headword 乃/之
+も	モ	助詞	2028940	particle:
+か	カ	助詞	2028970	particle:
+から	カラ	助詞	1002980	particle:
+まで	マデ	助詞	1525680	particle: headword 迄
+です	デス	助動詞	1628500	particle:
+だ	ダ	助動詞	2089020	particle:
+た	タ	助動詞	2654250	particle: entry is not common
+ます	マス	助動詞	2210290	particle: headword 〼; the ordinary verb 増す must be filtered out
+て	テ	助詞	2654270	particle: conjunctive て; the quotative って/て 2086960 is common and outranks it
+コーヒー-coffee	コーヒー	名詞	1049180	tricky: loanword; disambiguator -coffee; uk headword 珈琲
+テレビ-television	テレビ	名詞	1080510	tricky: loanword; disambiguator -television
+パソコン-personal computer	パソコン	名詞	1101570	tricky: disambiguator contains a space
+インターネット-internet	インターネット	名詞	1022880	tricky:
+コップ-kop	コップ	名詞	1050390	tricky: uk headword 洋杯; a rare kana-only homophone means 'police officer'
+ズボン-jupon	ズボン	名詞	1074260	tricky: uk headword 洋袴; a rare kana-only homophone is an adverb
+アメリカ-America	アメリカ	名詞	1149830	tricky: uk headword 亜米利加
+円-助数詞	エン	名詞	1175570	tricky: disambiguator -助数詞 is a POS label, not a source word
+枚	マイ	接尾辞	1524610	tricky: counter for flat objects
+冊	サツ	接尾辞	1298520	tricky: counter for books
+匹	ヒキ	接尾辞	1583370	tricky: counter for small animals
+頭	トウ	接尾辞	1450690	tricky: counter for large animals; 頭/あたま is the common reading
+羽	ワ	接尾辞	1607310	tricky: counter for birds
+歳	サイ	接尾辞	1294940	tricky: counter for years of age
+第	ダイ	接頭辞	1415260	tricky:
+再	サイ	接頭辞	1292290	tricky:
+不	フ	接頭辞	1922780	tricky:
+。		補助記号		tricky: punctuation: no map is the correct answer
+、		補助記号		tricky: punctuation: no map is the correct answer
+決め直す	キメナオス	動詞		tricky: real UniDic lemma; the compound is not a JMdict entry

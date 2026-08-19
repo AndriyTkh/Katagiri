@@ -1,0 +1,10 @@
+# SHA-256 digests of vendored data files (paths relative to the repo root).
+# Format: "<lowercase-hex-digest>  <relative/path>" — two spaces, forward slashes.
+# The referenced files are gitignored; this manifest is committed and is the
+# authority on which bytes are expected. Verified at load time; no runtime
+# downloads. See vendor/README.md for acquisition steps.
+#
+# (placeholder — no components vendored yet)
+8bd0dd127dab32ceec94cb03ab1ba6b68858ea73421dfa1731af2f373deb4f20  vendor/kanjium/accents.txt
+8aacc28f6c785ca64519d99fe137acc7a216539cf475092fb33564566009d5bc  vendor/jmdict/jmdict-eng-3.6.2.json.zip
+638718c4c63625ab300de4c92c67925d54c0e9e3830009eaa992f29819d59c43  vendor/unidic/unidic-3.1.0.zip

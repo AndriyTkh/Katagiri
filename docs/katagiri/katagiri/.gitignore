@@ -1,0 +1,28 @@
+# Derived, rebuildable — never commit
+.cache/
+*.db
+*.db-journal
+
+# Copyrighted or large media: audio clips, subs, video, screenshots
+local/
+*.mp3
+*.wav
+*.mp4
+*.mkv
+*.srt
+*.ass
+
+# Obsidian workspace noise (keep the config, drop the state)
+.obsidian/workspace*
+.obsidian/cache
+.trash/
+
+.DS_Store
+__pycache__/
+.venv/
+node_modules/
+
+# keep the explainer
+!local/README.md
+
+.derived/
