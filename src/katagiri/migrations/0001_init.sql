@@ -483,6 +483,81 @@ CREATE VIRTUAL TABLE fts_sentence_tri USING fts5(
 );
 
 -- ---------------------------------------------------------------------------
+-- DERIVED: markdown note search (the vault's prose, indexed by katagiri itself)
+-- ---------------------------------------------------------------------------
+
+-- One row per markdown file under the vault. `path` is vault-relative with
+-- POSIX separators and is the logical key; `rowid` is declared explicitly so the
+-- value the FTS indexes carry is a real, stable column (VACUUM may renumber an
+-- implicit rowid, which would silently point every hit at the wrong note).
+--
+-- The freshness triple (size_bytes, mtime_ns, content_sha256) is what makes
+-- re-indexing incremental: size+mtime decide whether the file must be re-read at
+-- all, and the hash decides whether a re-read file actually changed. The three
+-- version stamps answer the other staleness question — rows built by a previous
+-- index pipeline, dictionary or tokenizer are re-indexed even when the file did
+-- not change.
+CREATE TABLE md_note (
+    rowid             INTEGER PRIMARY KEY,
+    path              TEXT NOT NULL UNIQUE,  -- vault-relative, POSIX separators
+    title             TEXT,
+    generated         INTEGER NOT NULL DEFAULT 0,  -- 1 for .derived/ output
+    frontmatter       TEXT,                  -- JSON object: key -> list of values
+    frontmatter_ok    INTEGER NOT NULL DEFAULT 1,  -- 0 when parsing complained
+    frontmatter_error TEXT,                  -- why, when frontmatter_ok = 0
+    size_bytes        INTEGER,
+    mtime_ns          INTEGER,
+    content_sha256    TEXT,
+    body_chars        INTEGER,
+    index_version     INTEGER NOT NULL,      -- md_search.MD_INDEX_VERSION
+    dict_version      TEXT,
+    tokenizer_version TEXT,
+    indexed_ts        TEXT NOT NULL,
+
+    CHECK (generated IN (0, 1)),
+    CHECK (frontmatter_ok IN (0, 1)),
+    CHECK (frontmatter IS NULL OR json_valid(frontmatter)),
+    CHECK (indexed_ts GLOB
+        '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
+);
+
+CREATE INDEX md_note_generated_idx ON md_note(generated);
+
+-- Frontmatter exploded to rows so fields are queryable *separately* from body
+-- text (FR-002). Keys are lowercased at index time; a scalar is one row with
+-- idx = 0, a list is one row per element in source order. No foreign key: both
+-- tables are derived, and a rebuild must be able to drop them in any order.
+CREATE TABLE md_frontmatter (
+    note_rowid INTEGER NOT NULL,             -- soft reference to md_note.rowid
+    key        TEXT NOT NULL,                -- lowercased at index time
+    idx        INTEGER NOT NULL DEFAULT 0,   -- position within a list value
+    value      TEXT NOT NULL,
+    PRIMARY KEY (note_rowid, key, idx)
+);
+
+CREATE INDEX md_frontmatter_key_value_idx
+    ON md_frontmatter(key, value COLLATE NOCASE);
+
+-- The same two-index split the sentence search uses, and for the same reason:
+-- trigram cannot match a query shorter than 3 characters, and the word index
+-- cannot do substring search. Both index the note's title line followed by its
+-- body, so a note is findable by its heading as well as its prose.
+--
+-- Unlike the sentence indexes these are **self-contained**, not external
+-- content. External content has no correct single-row delete without handing
+-- FTS5 the exact previous value back, and this index is updated one edited file
+-- at a time; a self-contained table deletes by rowid and cannot drift.
+CREATE VIRTUAL TABLE fts_md_words USING fts5(
+    shadow_text,
+    tokenize='unicode61'
+);
+
+CREATE VIRTUAL TABLE fts_md_tri USING fts5(
+    body,
+    tokenize='trigram'
+);
+
+-- ---------------------------------------------------------------------------
 -- DERIVED: subtitle lines (window queries around a timestamp)
 -- ---------------------------------------------------------------------------
 
