@@ -258,6 +258,12 @@ A6_CONTRACT: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "lookup": (frozenset({"surface"}), frozenset()),
     "stop_gate_status": (frozenset(), frozenset()),
     "security_status": (frozenset(), frozenset()),
+    # B2 (additive): the proxied, GET-only Obsidian reads. Behaviour is tested in
+    # tests/test_obsidian_proxy.py; they are listed here so the congruence and
+    # additive-only checks cover them too.
+    "vault_file": (frozenset({"path"}), frozenset()),
+    "vault_list": (frozenset(), frozenset({"path"})),
+    "obsidian_active_note": (frozenset(), frozenset()),
 }
 
 

@@ -30,7 +30,9 @@ interpreter at `.venv\Scripts\python.exe`.
 
 Machine-specific paths (vault, Anki data dir, scratch, database) live in
 `%LOCALAPPDATA%\Katagiri\config.toml`, never in this repo. The file is created
-with commented defaults the first time config is loaded.
+with commented defaults the first time config is loaded. It may also hold local
+credentials (the Obsidian Local REST API key), so treat it as a secret: never
+commit it, never paste its contents into an issue, a log or a chat.
 
 Large vendored dictionaries (full UniDic, kanjium accents) go in `vendor/`,
 gitignored, with digests committed in `vendor/CHECKSUMS.sha256`. Nothing is

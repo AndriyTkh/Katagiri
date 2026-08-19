@@ -1,20 +1,23 @@
 """Configuration loading for Katagiri.
 
-Machine-specific paths and any future secrets live **outside the repository**,
-under ``%LOCALAPPDATA%\\Katagiri``. The config file is ``config.toml``; on first
+Machine-specific paths and local secrets live **outside the repository**, under
+``%LOCALAPPDATA%\\Katagiri`` (D-22). The config file is ``config.toml``; on first
 load it is created with commented-out defaults so the operator can see the
 available knobs without any value being guessed for them.
 
-Config *values* are never logged — they are local filesystem paths (vault,
-Anki profile, scratch) and are treated as private. Errors reference the config
-file path and the offending key name only.
+Two kinds of key exist, and the split is deliberate: ``_PATH_KEYS`` are coerced to
+``Path``, ``_SECRET_KEYS`` stay strings and are kept out of ``Config.__repr__``.
+
+Config *values* are never logged — they are local filesystem paths (vault, Anki
+profile, scratch) and one credential (the Obsidian REST API key). Errors
+reference the config file path and the offending key *name* only, never a value.
 """
 
 from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
@@ -23,6 +26,13 @@ APP_DIR_NAME: Final = "Katagiri"
 CONFIG_FILE_NAME: Final = "config.toml"
 
 _PATH_KEYS: Final = ("vault_path", "anki_data_dir", "scratch_root", "db_path")
+
+# Keys that are plain strings rather than paths. Kept as a separate tuple so the
+# path coercion in :func:`_coerce_path` cannot reach a credential and turn it into
+# a ``Path``, and so that adding one is a visible, deliberate edit.
+_SECRET_KEYS: Final = ("obsidian_api_token",)
+
+_KNOWN_KEYS: Final = _PATH_KEYS + _SECRET_KEYS
 
 _DEFAULT_CONFIG_TEMPLATE: Final = """\
 # Katagiri configuration.
@@ -47,6 +57,13 @@ _DEFAULT_CONFIG_TEMPLATE: Final = """\
 
 # SQLite database used for Katagiri's own state.
 # db_path = "{db_path}"
+
+# API key for the Obsidian "Local REST API" plugin (Settings -> Local REST API).
+# This is a credential: Katagiri holds it so the agent never does, and uses it
+# only for GET-shaped vault reads against http://127.0.0.1:27123. It is never
+# logged, never returned by a tool, and never written back to this file.
+# Leave it unset and the Obsidian tools report themselves unconfigured.
+# obsidian_api_token = ""
 """
 
 
@@ -82,6 +99,10 @@ class Config:
 
     ``vault_path`` and ``anki_data_dir`` are ``None`` until the operator sets
     them; tools that need them must raise a clear error rather than guessing.
+
+    ``obsidian_api_token`` is a credential and is excluded from ``repr``: this
+    object is passed around freely and a dataclass repr is exactly the kind of
+    thing that ends up in a log line or an exception message.
     """
 
     config_file: Path
@@ -89,6 +110,7 @@ class Config:
     db_path: Path
     vault_path: Path | None = None
     anki_data_dir: Path | None = None
+    obsidian_api_token: str | None = field(default=None, repr=False)
 
     def require_vault_path(self) -> Path:
         return self._require("vault_path", self.vault_path)
@@ -145,6 +167,56 @@ def _coerce_path(key: str, value: Any, source: Path) -> Path | None:
     return Path(text).expanduser()
 
 
+def _coerce_secret(key: str, value: Any, source: Path) -> str | None:
+    """A plain string setting, or ``None`` when it is absent or blank.
+
+    The error names the key and the *type* or *shape* problem it found — never the
+    value. These keys hold credentials, and an error message is one of the few
+    things in this process that reliably reaches a log and a model.
+
+    A secret is also checked for being *sendable*, and that check is a security
+    boundary rather than tidiness. These values end up in an HTTP header
+    (``Authorization: Bearer <token>``). ``http.client.putheader`` refuses a
+    header value that holds a control character or a byte outside latin-1, and it
+    raises a ``ValueError`` **whose message quotes the offending value**. A token
+    pasted with an embedded newline or a smart quote would therefore turn into a
+    traceback carrying the credential. Rejecting it here, at load time, with a
+    message that names only the key, keeps that traceback from ever existing.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(
+            f"Configuration key '{key}' in {source} must be a string, got "
+            f"{type(value).__name__}. (Its value is not shown: this key holds a "
+            "credential.)"
+        )
+    text = value.strip()
+    if not text:
+        return None
+    if any(char < " " or char == "\x7f" for char in text):
+        raise ConfigError(
+            f"Configuration key '{key}' in {source} contains a control character "
+            "(an embedded newline or tab, most likely a copy-paste artefact). It "
+            "could not be sent in an HTTP header, so it is refused here. Re-copy "
+            "the value onto a single line. (Its value is not shown: this key "
+            "holds a credential.)"
+        )
+    try:
+        text.encode("latin-1")
+    except UnicodeEncodeError:
+        # `from None`: UnicodeEncodeError's own message quotes the character it
+        # choked on, which is a fragment of the credential.
+        raise ConfigError(
+            f"Configuration key '{key}' in {source} contains a character outside "
+            "latin-1 (a smart quote or a dash substituted by an editor, most "
+            "likely). It could not be sent in an HTTP header, so it is refused "
+            "here. Re-copy the value as plain text. (Its value is not shown: this "
+            "key holds a credential.)"
+        ) from None
+    return text
+
+
 def load_config(*, create_missing: bool = True) -> Config:
     """Load configuration from ``%LOCALAPPDATA%\\Katagiri\\config.toml``.
 
@@ -172,15 +244,16 @@ def load_config(*, create_missing: bool = True) -> Config:
             f"The configuration file {path} is not valid TOML: {exc}"
         ) from exc
 
-    unknown = sorted(set(raw) - set(_PATH_KEYS))
+    unknown = sorted(set(raw) - set(_KNOWN_KEYS))
     if unknown:
         raise ConfigError(
             f"Unknown configuration key(s) in {path}: {', '.join(unknown)}. "
-            f"Supported keys: {', '.join(_PATH_KEYS)}."
+            f"Supported keys: {', '.join(_KNOWN_KEYS)}."
         )
 
     defaults = _defaults(path.parent)
     values = {key: _coerce_path(key, raw.get(key), path) for key in _PATH_KEYS}
+    secrets = {key: _coerce_secret(key, raw.get(key), path) for key in _SECRET_KEYS}
 
     return Config(
         config_file=path,
@@ -188,6 +261,7 @@ def load_config(*, create_missing: bool = True) -> Config:
         db_path=values["db_path"] or defaults["db_path"],
         vault_path=values["vault_path"],
         anki_data_dir=values["anki_data_dir"],
+        obsidian_api_token=secrets["obsidian_api_token"],
     )
 
 

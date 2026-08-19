@@ -684,6 +684,9 @@ CONTRACT_TOOLS = frozenset(
         "lookup",
         "stop_gate_status",
         "security_status",
+        "vault_file",
+        "vault_list",
+        "obsidian_active_note",
     }
 )
 

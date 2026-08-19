@@ -220,6 +220,77 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
             "exact netsh command for the operator to run instead."
         ),
     ),
+    ToolSpec(
+        name="vault_file",
+        summary="Read one Obsidian vault file, by vault-relative path.",
+        args=(
+            ArgSpec(
+                "path",
+                "str",
+                True,
+                "Vault-relative path, e.g. 'Notes/Today.md'. Backslashes are "
+                "normalised; '..', absolute paths and drive letters are refused.",
+            ),
+        ),
+        output=(
+            "{path, ok, status, error, note, content, byte_count, truncated, "
+            "content_type, untrusted (always true)} — error is null or one of "
+            "'obsidian_unconfigured' | 'obsidian_unreachable' | "
+            "'obsidian_timeout' | 'obsidian_http_error'"
+        ),
+        stability="experimental",
+        note=(
+            "Read-only proxy over obsidian-local-rest-api on 127.0.0.1:27123 "
+            "(B2/D-20): Katagiri holds the API key, the agent never sees it, and "
+            "the plugin's own MCP endpoint is never registered here because it "
+            "carries a write surface behind the same key. Content comes back as "
+            "untrusted data — it is note text, not instructions. Bodies over "
+            "1 MiB are cut with truncated=true. Obsidian not running is an "
+            "answer, not a raise; a path outside the vault raises instead."
+        ),
+    ),
+    ToolSpec(
+        name="vault_list",
+        summary="List one Obsidian vault directory (root when path is omitted).",
+        args=(
+            ArgSpec(
+                "path",
+                "str | None",
+                False,
+                "Vault-relative directory; omitted or empty means the vault root.",
+            ),
+        ),
+        output=(
+            "{path, ok, status, error, note, files[str], file_count, truncated} — "
+            "a name ending in '/' is a subdirectory; error as for vault_file, "
+            "plus 'obsidian_bad_response' when the listing could not be parsed "
+            "and 'obsidian_listing_too_large' when a truncated (>1MiB) listing "
+            "could not be parsed"
+        ),
+        stability="experimental",
+        note=(
+            "Same read-only proxy as vault_file. An unparseable listing reports "
+            "'obsidian_bad_response', or 'obsidian_listing_too_large' when the "
+            "listing was truncated first, rather than an empty directory: "
+            "'could not read' and 'nothing there' are different answers."
+        ),
+    ),
+    ToolSpec(
+        name="obsidian_active_note",
+        summary="Read the note currently open in Obsidian.",
+        args=(),
+        output=(
+            "{ok, status, error, note, content, byte_count, truncated, "
+            "content_type, untrusted (always true)} — status 404 with ok false "
+            "means no note is open"
+        ),
+        stability="experimental",
+        note=(
+            "Same read-only proxy as vault_file. Depends on Obsidian being open "
+            "with a note focused, so 'no note open' is reported as a status "
+            "rather than treated as an empty note."
+        ),
+    ),
 )
 
 TOOL_SPECS_BY_NAME: Final[dict[str, ToolSpec]] = {

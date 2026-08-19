@@ -19,7 +19,9 @@ The protocol, in order:
 5. Read ``col.ver``, the Anki schema version, and abort on anything this module
    has not been written against (see :data:`SUPPORTED_SCHEMA_VERSIONS`).
 6. Rebuild ``anki_cards`` and ``anki_notes`` (DELETE + INSERT in one
-   transaction) and stamp ``mirror_meta``.
+   transaction) and stamp ``mirror_meta``. A mirror still carrying an older
+   shape is dropped and recreated in that same transaction — see
+   :func:`ensure_mirror_shape`.
 
 No AnkiConnect, no network, no writes of any kind to anything Anki owns.
 
@@ -100,6 +102,70 @@ _JOURNAL_SUFFIXES: Final = ("-wal", "-journal")
 SUPPORTED_SCHEMA_VERSIONS: Final = frozenset({11, 18})
 
 _MIRROR_TABLES: Final = ("anki_cards", "anki_notes")
+
+# The mirror's *current* shape, which is wider than what 0001_init.sql created:
+# B1 added ``anki_cards.queue`` / ``anki_cards.ctype`` and ``mirror_meta.crt`` so
+# an exact due count can be computed without inventing a scheduler.
+#
+# These are DERIVED tables, so the shape change is made by drop-and-rebuild here
+# rather than by a numbered migration — the rule in ``docs/db-schema.md`` ("They
+# are evolved by drop-and-rebuild scripts, never by migrations"), and the same
+# route ``ankimorphs_ingest`` already takes for ``ankimorphs_morphs``. A rebuild
+# wipes every row anyway, so there is nothing a migration would have carried
+# across; a snapshot is the only thing that can refill the table.
+#
+# ``ctype`` mirrors Anki's ``cards.type``. It is renamed because ``type`` is
+# already the event log's own column name and reading ``anki_cards.type`` next
+# to ``event.type`` invites exactly the wrong assumption: one is Anki's card
+# state, the other is Katagiri's event kind.
+#
+# The DDL is kept as a tuple of statements rather than one script because
+# ``executescript`` implicitly COMMITs whatever transaction is open, and this
+# runs inside the snapshot's transaction.
+_ANKI_CARDS_DDL: Final = (
+    """
+CREATE TABLE anki_cards (
+    card_id INTEGER PRIMARY KEY,
+    note_id INTEGER NOT NULL,
+    deck    TEXT,
+    ivl     INTEGER,                       -- days; ivl >= 21 feeds the known set
+    due     INTEGER,                       -- Anki's own scheduling, mirrored not owned
+    reps    INTEGER,
+    lapses  INTEGER,
+    mod     INTEGER,
+    queue   INTEGER,                       -- Anki queue: 2 review, 1/3 learning,
+                                           -- 0 new, negative suspended/buried
+    ctype   INTEGER                        -- Anki cards.type; see note above
+)
+""",
+    "CREATE INDEX anki_cards_note_idx ON anki_cards(note_id)",
+    "CREATE INDEX anki_cards_ivl_idx  ON anki_cards(ivl)",
+    "CREATE INDEX anki_cards_queue_idx ON anki_cards(queue, due)",
+)
+
+_MIRROR_META_DDL: Final = (
+    """
+CREATE TABLE mirror_meta (
+    id                  INTEGER PRIMARY KEY,
+    snapshot_ts         TEXT NOT NULL,
+    collection_mtime    INTEGER,           -- staleness check without reopening Anki
+    anki_schema_version INTEGER,
+    crt                 INTEGER,           -- col.crt: the collection's day-zero
+                                           -- epoch second, which is what turns a
+                                           -- card's day-indexed due into a date
+
+    CHECK (id = 1),
+    CHECK (snapshot_ts GLOB
+        '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z')
+)
+""",
+)
+
+# table name -> (columns it must have, statements that recreate it)
+_REQUIRED_SHAPE: Final = {
+    "anki_cards": (("queue", "ctype"), _ANKI_CARDS_DDL),
+    "mirror_meta": (("crt",), _MIRROR_META_DDL),
+}
 
 # Anki separates a note's field values with 0x1f (unit separator).
 _FIELD_SEPARATOR: Final = "\x1f"
@@ -510,8 +576,11 @@ def _fields_json(raw: Any) -> str | None:
 
 def _extract(
     conn: sqlite3.Connection, version: int, copy_path: Path
-) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
-    """Pull the mirrored columns out of the copy's ``cards`` and ``notes``."""
+) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]], int | None]:
+    """Pull the mirrored columns out of the copy's ``cards`` and ``notes``.
+
+    Returns the card rows, the note rows, and ``col.crt``.
+    """
     tables = _table_names(conn)
     missing = sorted({"cards", "notes"} - tables)
     if missing:
@@ -540,9 +609,15 @@ def _extract(
                 None if reps is None else int(reps),
                 None if lapses is None else int(lapses),
                 None if mod is None else int(mod),
+                None if queue is None else int(queue),
+                None if ctype is None else int(ctype),
             )
-            for card_id, note_id, did, odid, ivl, due, reps, lapses, mod in conn.execute(
-                "SELECT id, nid, did, odid, ivl, due, reps, lapses, mod FROM cards"
+            for (
+                card_id, note_id, did, odid, ivl, due, reps, lapses, mod, queue,
+                ctype,
+            ) in conn.execute(
+                "SELECT id, nid, did, odid, ivl, due, reps, lapses, mod, queue, "
+                "type FROM cards"
             )
         ]
         note_rows = [
@@ -564,7 +639,7 @@ def _extract(
             f"Reading cards/notes from the copied Anki collection "
             f"({copy_path}) failed: {exc}."
         ) from exc
-    return card_rows, note_rows
+    return card_rows, note_rows, _read_crt(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +652,126 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')}
+
+
+def _stale_tables(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, tuple[str, ...]]]:
+    """The mirror tables missing a column this module now writes, with their DDL.
+
+    An absent table gives an empty column set, so "missing a column" and
+    "missing the table" answer the same way, which is what the caller wants.
+    """
+    return [
+        (table, statements)
+        for table, (required, statements) in _REQUIRED_SHAPE.items()
+        if not _columns(conn, table).issuperset(required)
+    ]
+
+
+def ensure_mirror_shape(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Bring the mirror tables up to their current shape; return what changed.
+
+    A table missing any column this module now writes is dropped and recreated
+    rather than altered: these are derived tables, a snapshot rebuilds every row
+    anyway, and ``docs/db-schema.md`` reserves numbered migrations for
+    source-of-truth shape changes.
+
+    The DROP and the CREATE are only safe as one unit: a failure between them
+    leaves the database with ``anki_cards`` *gone* — the mirror's rows are
+    expendable, but the ``known_set`` view reads that table, so every query
+    through it would fail until another snapshot ran. Callers already inside a
+    transaction (as :func:`_write_mirror` is) supply that atomicity; called on
+    its own, this opens a ``BEGIN IMMEDIATE`` of its own and commits or rolls
+    back, so it can also be used to make the columns exist before a query needs
+    them without ever running DDL in autocommit.
+
+    ``BEGIN IMMEDIATE`` rather than the deferred default: the write lock is
+    taken up front, so a concurrent writer loses at BEGIN (where retrying is
+    free) instead of at the first DROP.
+
+    Staleness is decided **twice** when this owns the transaction: once
+    optimistically, so the common no-op opens no transaction at all, and again
+    once the write lock is held. Only the second answer is acted on. The first
+    read happens with no lock, so a concurrent snapshot can rebuild *and refill*
+    the mirror in the gap before ``BEGIN IMMEDIATE`` returns — acting on the
+    stale answer would then drop a table that is already current and throw away
+    the rows that other snapshot just committed. A caller who brought its own
+    transaction already held the lock for both reads, so for it the second read
+    only confirms the first.
+    """
+    # Optimistic, unlocked, and therefore only a hint: re-read under the lock
+    # below before touching anything.
+    if not _stale_tables(conn):
+        return ()
+
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        # The answer that counts: taken with the write lock held, so no other
+        # writer can have changed the shape since.
+        stale = _stale_tables(conn)
+        if not stale:
+            # Someone else got there first, rows included. Nothing to do, and
+            # nothing was written, so this COMMIT only releases the lock.
+            if owns_transaction:
+                conn.execute("COMMIT")
+            return ()
+        for table, statements in stale:
+            conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+            for statement in statements:
+                conn.execute(statement)
+        if owns_transaction:
+            conn.execute("COMMIT")
+    except BaseException:
+        # BaseException, not Exception: an interrupt between the DROP and the
+        # CREATE is exactly the case this transaction exists to survive.
+        if owns_transaction:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:  # pragma: no cover - rollback of a dead txn
+                pass
+        raise
+
+    rebuilt = tuple(table for table, _ in stale)
+    _logger.info(
+        "Rebuilt Anki mirror table(s) %s to the current shape; they are "
+        "empty until this snapshot fills them.",
+        ", ".join(rebuilt),
+    )
+    return rebuilt
+
+
+def _read_crt(conn: sqlite3.Connection) -> int | None:
+    """``col.crt`` — the collection's day-zero epoch second.
+
+    Anki's own "today" is the number of whole days from the rollover boundary of
+    ``crt``'s *local calendar day* (``col.conf["rollover"]``, 4 a.m. by default)
+    to the same boundary today — *not* ``(now - crt) // 86400``, which measures
+    from whatever clock time the collection happened to be created at and so runs
+    a day behind between the rollover and that creation hour. See
+    :func:`katagiri.today_export.collection_day_index` for the calculation.
+    Without ``crt`` a mirrored ``due`` day index cannot be turned back into a
+    date at all, so a collection that will not give it up degrades to ``None``
+    and the reader says the count is unavailable rather than assuming an epoch.
+    """
+    try:
+        row = conn.execute("SELECT crt FROM col ORDER BY id LIMIT 1").fetchone()
+    except sqlite3.DatabaseError as exc:
+        _logger.warning("Could not read col.crt (%s); due dates will be unavailable.", exc)
+        return None
+    if row is None or row[0] is None:
+        _logger.warning(
+            "The Anki collection reports no col.crt; due dates will be "
+            "unavailable until a snapshot supplies one."
+        )
+        return None
+    return int(row[0])
+
+
 def _write_mirror(
     conn: sqlite3.Connection,
     *,
@@ -584,6 +779,7 @@ def _write_mirror(
     note_rows: list[tuple[Any, ...]],
     version: int,
     collection_mtime: int,
+    crt: int | None,
 ) -> None:
     """Replace the mirror tables and stamp ``mirror_meta``, all or nothing.
 
@@ -592,7 +788,12 @@ def _write_mirror(
     in one step. ``anki_item_map`` is deliberately left alone — it is the
     note-to-item crosswalk owned by the mapping step, not part of this snapshot.
     """
-    previous = conn.execute("SELECT COUNT(*) FROM anki_cards").fetchone()[0]
+    try:
+        previous = conn.execute("SELECT COUNT(*) FROM anki_cards").fetchone()[0]
+    except sqlite3.DatabaseError:
+        # The table is absent (never created, or dropped by a rebuild that did
+        # not finish). There is no previous mirror to be surprised about.
+        previous = 0
     if not card_rows and not note_rows and previous:
         _logger.warning(
             "The Anki collection yielded no cards or notes while the existing "
@@ -603,12 +804,16 @@ def _write_mirror(
 
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # Inside the transaction on purpose: the known_set view reads
+        # anki_cards, so a drop-and-recreate performed in autocommit would leave
+        # a window in which any query touching that view fails.
+        ensure_mirror_shape(conn)
         for table in _MIRROR_TABLES:
             conn.execute(f"DELETE FROM {table}")
         conn.executemany(
             "INSERT INTO anki_cards"
-            "(card_id, note_id, deck, ivl, due, reps, lapses, mod) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(card_id, note_id, deck, ivl, due, reps, lapses, mod, queue, ctype) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             card_rows,
         )
         conn.executemany(
@@ -618,9 +823,9 @@ def _write_mirror(
         )
         conn.execute(
             "INSERT OR REPLACE INTO mirror_meta"
-            "(id, snapshot_ts, collection_mtime, anki_schema_version) "
-            "VALUES (1, ?, ?, ?)",
-            (_utc_now(), collection_mtime, version),
+            "(id, snapshot_ts, collection_mtime, anki_schema_version, crt) "
+            "VALUES (1, ?, ?, ?, ?)",
+            (_utc_now(), collection_mtime, version, crt),
         )
         conn.execute("COMMIT")
     except Exception:
@@ -691,7 +896,7 @@ def snapshot_anki(
         try:
             _check_integrity(read_conn, copy_path)
             version = _read_schema_version(read_conn, copy_path)
-            card_rows, note_rows = _extract(read_conn, version, copy_path)
+            card_rows, note_rows, crt = _extract(read_conn, version, copy_path)
         finally:
             read_conn.close()
     finally:
@@ -705,6 +910,7 @@ def snapshot_anki(
         note_rows=note_rows,
         version=version,
         collection_mtime=collection_mtime,
+        crt=crt,
     )
 
     stale = running or had_journal
@@ -733,6 +939,7 @@ __all__ = [
     "MirrorResult",
     "UnsupportedAnkiSchemaError",
     "anki_is_running",
+    "ensure_mirror_shape",
     "find_collection",
     "snapshot_anki",
 ]

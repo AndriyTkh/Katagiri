@@ -108,10 +108,10 @@ instead. Day keys (`event.day_key`, `lesson.revisit_after`) are local `YYYY-MM-D
 | `metadata` | Version registry: tokenizer version, dictionary versions, protocol version, current rubric version. | The importers that write each artefact |
 | `lexeme` | Dictionary-side identity at sense granularity, anchored on `jmdict_seq` + `sense_idx`. | JMdict import |
 | `morph_lexeme_map` | Crosswalk from studied `item` to `lexeme`, with the surface form and method that produced the link. Filled by A4c. | Morphological analysis |
-| `anki_cards` | Mirror of Anki cards: interval, due, reps, lapses. Read-only; Katagiri never schedules. | Anki collection |
+| `anki_cards` | Mirror of Anki cards: interval, due, reps, lapses, plus `queue` and `ctype` (Anki's `cards.type`). Read-only; Katagiri never schedules. | Anki collection |
 | `anki_notes` | Mirror of Anki notes: model, fields JSON, tags. | Anki collection |
 | `anki_item_map` | Which Katagiri `item` a mirrored note stands for; resolved at mirror time. | Anki collection + item table |
-| `mirror_meta` | Single row: when the mirror was taken, and the collection mtime / Anki schema version it was taken from. | Anki collection |
+| `mirror_meta` | Single row: when the mirror was taken, the collection mtime / Anki schema version it was taken from, and `crt` — the collection's day-zero epoch second. | Anki collection |
 | `jmdict_entry` | One row per JMdict `ent_seq`, with commonness and the import's dict version. | jmdict-simplified |
 | `jmdict_kanji` | Kanji spellings per entry, with upstream priority tags. | jmdict-simplified |
 | `jmdict_reading` | Readings per entry, with upstream priority tags. | jmdict-simplified |
@@ -136,6 +136,42 @@ morph to an `item` yet, because that needs the morph → lexeme → item chain i
 `morph_lexeme_map` (A4c). Until then this table feeds reporting only, not
 `known_set`. Its `lemma_ivl` / `inflection_ivl` are mirrored AnkiMorphs values,
 read-only exactly as `anki_cards.ivl` is — Katagiri still schedules nothing.
+
+`anki_cards.queue` / `anki_cards.ctype` and `mirror_meta.crt` are **wider than
+what `0001_init.sql` creates**, for the same reason and by the same route: B1
+needed an exact due count, and the drop-and-rebuild rule reserves numbered
+migrations for source-of-truth shape changes. `anki_snapshot.ensure_mirror_shape`
+drops and recreates either table when it is missing a column the writer now
+fills, and the DROP and CREATE are always one transaction so the `known_set`
+view never sees the gap: called from the snapshot it joins the snapshot's own
+transaction, and called on its own (to make the columns exist before a query
+needs them) it opens a `BEGIN IMMEDIATE` of its own and commits or rolls back.
+Either way it re-reads which tables are stale *after* the write lock is held, so
+a rebuild that another snapshot already finished in the meantime is not redone
+over that snapshot's fresh rows. A mirror taken before those columns existed therefore has *no* due
+count rather than a guessed one, and says so until the next snapshot runs —
+`katagiri.today_export.anki_due_count` reports `available: false` with a reason.
+`crt` is what makes the rest usable: Anki stores a review card's `due` as a day
+index from the collection's day zero, and `crt` is the epoch second that index
+counts from. Turning it back into a date is **not** `(now - crt) // 86400`. Anki
+does not measure elapsed days from the clock time the collection happened to be
+created at; it re-bases `crt` onto the rollover boundary of `crt`'s own local
+calendar day (`col.conf["rollover"]`, 4 a.m. by default) and counts whole days
+from there, so the day index increments at the local rollover hour rather than at
+some arbitrary minute inherited from creation time. The naive division is a day
+*behind* for the whole stretch between the rollover and the creation hour — a
+collection made at midday hides every card that came due at 04:00 until noon,
+which is the one time of day the learner most needs the count. `rollover` itself
+lives in the `col.conf` JSON blob, which the snapshot does **not** mirror;
+`katagiri.today_export.collection_day_index` therefore assumes Anki's default of
+4 and says so, and mirroring `col.conf` is the honest fix. The per-deck daily
+limits (`perDay` in a deck's configuration group) are unmirrored for the same
+reason, which makes `anki_due_count` **scheduler-raw**: on a backlog it reports
+every card whose scheduled day has arrived where Anki's deck list offers only that
+deck's daily cap, so 300 here can be 100 there. The rendered section says so
+rather than applying a limit the mirror does not carry. All of it is mirrored,
+none of it is owned: Katagiri reads Anki's scheduling and still schedules nothing
+itself.
 
 ### Views
 

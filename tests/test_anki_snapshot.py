@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -108,6 +109,17 @@ CARDS = {
 
 MATURE_NOTE_IDS = {1, 3}  # ivl >= 21 on at least one card
 
+# col.crt in the fixture: the collection's day-zero epoch second.
+COLLECTION_CRT = 1400000000
+
+# card_id -> (queue, type), for the cards that are not plain reviews. Kept apart
+# from CARDS so the tuple shape the rest of this file unpacks stays as it was.
+CARD_QUEUES = {
+    102: (0, 0),    # new
+    104: (-1, 2),   # suspended
+}
+DEFAULT_QUEUE_AND_TYPE = (2, 2)
+
 
 def _unicase(left: str, right: str) -> int:
     """Stand-in for Anki's custom collation; only the builder needs one."""
@@ -175,8 +187,10 @@ def build_collection(
             for nid, (mid, fields, tags) in NOTES.items()
         ]
         card_rows = [
-            (cid, nid, did, 0, mod, -1, 2, 2, due, ivl, 2500, reps, lapses, 0, 0,
-             odid, 0, "")
+            (cid, nid, did, 0, mod, -1,
+             CARD_QUEUES.get(cid, DEFAULT_QUEUE_AND_TYPE)[1],
+             CARD_QUEUES.get(cid, DEFAULT_QUEUE_AND_TYPE)[0],
+             due, ivl, 2500, reps, lapses, 0, 0, odid, 0, "")
             for cid, (nid, did, odid, ivl, due, reps, lapses, mod) in CARDS.items()
         ]
         for index in range(filler):
@@ -324,6 +338,9 @@ def test_snapshot_populates_the_mirror_tables(conn, collection):
     assert (cards[101]["ivl"], cards[101]["due"]) == (30, 500)
     assert (cards[101]["reps"], cards[101]["lapses"]) == (12, 1)
     assert cards[101]["mod"] == 1700000001
+    # Anki's scheduling state, mirrored not owned: without queue there is no way
+    # to tell a review card waiting for you from a suspended one.
+    assert (cards[101]["queue"], cards[101]["ctype"]) == (2, 2)
     assert cards[104]["deck"] == "Default"
 
     notes = {row["note_id"]: row for row in conn.execute("SELECT * FROM anki_notes")}
@@ -379,7 +396,296 @@ def test_mirror_meta_is_stamped(conn, collection):
     # The CHECK constraint would have rejected a malformed timestamp, so simply
     # reaching this point proves the format; assert the shape anyway.
     assert len(row["snapshot_ts"]) == 20 and row["snapshot_ts"].endswith("Z")
+    # col.crt: the collection's day-zero. Without it a card's day-indexed due
+    # cannot be turned back into a date, so it is mirrored with the rest.
+    assert row["crt"] == COLLECTION_CRT
     assert conn.execute("SELECT COUNT(*) FROM mirror_meta").fetchone()[0] == 1
+
+
+def test_card_queues_and_types_round_trip(conn, collection):
+    """Every queue value is mirrored verbatim; none is normalised away."""
+    snapshot_anki(conn, collection_path=collection)
+    mirrored = {
+        row["card_id"]: (row["queue"], row["ctype"])
+        for row in conn.execute("SELECT card_id, queue, ctype FROM anki_cards")
+    }
+    assert mirrored[101] == (2, 2)
+    assert mirrored[102] == (0, 0), "a new card must not read as a review"
+    assert mirrored[104] == (-1, 2), "a suspended card must stay negative"
+
+
+def test_a_mirror_in_the_old_shape_is_rebuilt_by_the_next_snapshot(conn, collection):
+    """Derived tables are evolved by drop-and-rebuild, not by migration.
+
+    A database whose mirror was written before the queue columns existed carries
+    the narrow table; the next snapshot replaces the table wholesale. Nothing is
+    carried across because nothing needs to be — the snapshot is the source.
+    """
+    conn.executescript(
+        "DROP TABLE anki_cards;"
+        "CREATE TABLE anki_cards ("
+        " card_id INTEGER PRIMARY KEY, note_id INTEGER NOT NULL, deck TEXT,"
+        " ivl INTEGER, due INTEGER, reps INTEGER, lapses INTEGER, mod INTEGER);"
+        "DROP TABLE mirror_meta;"
+        "CREATE TABLE mirror_meta ("
+        " id INTEGER PRIMARY KEY, snapshot_ts TEXT NOT NULL,"
+        " collection_mtime INTEGER, anki_schema_version INTEGER, CHECK (id = 1));"
+    )
+    conn.execute("INSERT INTO anki_cards(card_id, note_id, ivl) VALUES (999, 1, 5)")
+
+    snapshot_anki(conn, collection_path=collection)
+
+    columns = {row[1] for row in conn.execute('PRAGMA table_info("anki_cards")')}
+    assert {"queue", "ctype"} <= columns
+    assert "crt" in {row[1] for row in conn.execute('PRAGMA table_info("mirror_meta")')}
+    assert conn.execute(
+        "SELECT COUNT(*) FROM anki_cards WHERE card_id = 999"
+    ).fetchone()[0] == 0
+    assert conn.execute("SELECT crt FROM mirror_meta").fetchone()[0] == COLLECTION_CRT
+
+
+def test_ensure_mirror_shape_is_idempotent(conn):
+    """A mirror already at the current shape is left alone, rows and all."""
+    assert anki_snapshot.ensure_mirror_shape(conn) == ("anki_cards", "mirror_meta")
+    conn.execute(
+        "INSERT INTO anki_cards(card_id, note_id, ivl, queue, ctype) "
+        "VALUES (7, 7, 30, 2, 2)"
+    )
+    assert anki_snapshot.ensure_mirror_shape(conn) == ()
+    assert conn.execute("SELECT COUNT(*) FROM anki_cards").fetchone()[0] == 1
+
+
+def test_a_standalone_rebuild_is_atomic(conn, monkeypatch):
+    """A failure between the DROP and the CREATE must not lose ``anki_cards``.
+
+    Called on its own there is no caller transaction to fall back on, so if the
+    rebuild ran in autocommit the DROP would already be durable when the CREATE
+    failed: the mirror's *rows* are expendable, but ``known_set`` reads that
+    table, so every query through the view would fail until another snapshot
+    happened to run. The rebuild therefore has to carry its own transaction.
+
+    The failure is injected as invalid DDL, which is what a process dying
+    between the two statements looks like from the database's side.
+    """
+    conn.execute("INSERT INTO anki_cards(card_id, note_id, ivl) VALUES (5, 5, 30)")
+    broken = dict(anki_snapshot._REQUIRED_SHAPE)
+    broken["anki_cards"] = (
+        ("queue", "ctype"),
+        ("CREATE TABLE anki_cards (this is not valid DDL",),
+    )
+    monkeypatch.setattr(anki_snapshot, "_REQUIRED_SHAPE", broken)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        anki_snapshot.ensure_mirror_shape(conn)
+
+    assert conn.in_transaction is False, "the failed rebuild left a transaction open"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM anki_cards WHERE card_id = 5"
+    ).fetchone()[0] == 1
+    # The view is only queryable while its base table exists; this is the
+    # failure the transaction is really there to prevent.
+    assert conn.execute("SELECT COUNT(*) FROM known_set").fetchone()[0] == 0
+
+
+def test_a_standalone_rebuild_commits(conn):
+    """Standing alone the rebuild must land, not sit in an open transaction."""
+    assert anki_snapshot.ensure_mirror_shape(conn) == ("anki_cards", "mirror_meta")
+    assert conn.in_transaction is False
+
+    other = db.connect()
+    try:
+        columns = {
+            row[1] for row in other.execute('PRAGMA table_info("anki_cards")')
+        }
+    finally:
+        other.close()
+    assert {"queue", "ctype"} <= columns
+
+
+def test_a_standalone_rebuild_rechecks_staleness_under_the_lock(conn, monkeypatch):
+    """The unlocked staleness read is a hint; only the locked one may be acted on.
+
+    The pre-check runs before ``BEGIN IMMEDIATE``, so a concurrent snapshot can
+    rebuild *and refill* the mirror in that gap. Acting on the stale answer would
+    then drop an already-current table and throw away the rows the other snapshot
+    just committed.
+
+    The race is injected by flipping the staleness answer between the two calls,
+    which is what the losing side of it actually observes — no threads needed.
+    """
+    anki_snapshot.ensure_mirror_shape(conn)
+    conn.execute(
+        "INSERT INTO anki_cards(card_id, note_id, ivl, queue, ctype) "
+        "VALUES (11, 11, 21, 2, 2)"
+    )
+    truth = anki_snapshot._stale_tables
+    calls: list[int] = []
+
+    def flipping(connection):
+        calls.append(1)
+        if len(calls) == 1:
+            # Unlocked pre-check: the mirror still looks like the old shape.
+            return [("anki_cards", anki_snapshot._REQUIRED_SHAPE["anki_cards"][1])]
+        # Under the write lock, where the other snapshot's work is visible.
+        return truth(connection)
+
+    monkeypatch.setattr(anki_snapshot, "_stale_tables", flipping)
+
+    assert anki_snapshot.ensure_mirror_shape(conn) == ()
+    assert len(calls) == 2, "staleness was not re-checked under the write lock"
+    assert conn.in_transaction is False, "the early return left a transaction open"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM anki_cards WHERE card_id = 11"
+    ).fetchone()[0] == 1, "a redundant rebuild dropped the concurrent snapshot's rows"
+
+
+def test_a_callers_transaction_still_owns_the_rebuild(conn):
+    """Inside a caller's transaction the rebuild must not commit on its own.
+
+    ``_write_mirror`` relies on this: the drop-and-recreate and the reinsert are
+    one unit, so a COMMIT in the middle would publish an empty mirror.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    assert anki_snapshot.ensure_mirror_shape(conn) == ("anki_cards", "mirror_meta")
+    assert conn.in_transaction is True, "the rebuild committed the caller's work"
+
+    conn.execute("ROLLBACK")
+    columns = {row[1] for row in conn.execute('PRAGMA table_info("anki_cards")')}
+    assert "queue" not in columns, "the caller's rollback did not undo the rebuild"
+
+
+# ---------------------------------------------------------------------------
+# The rebuild DDL against the migration that first created these tables
+# ---------------------------------------------------------------------------
+
+# What the rebuild DDL is *allowed* to add on top of 0001_init.sql. Everything
+# else must match, in both directions.
+_ADDED_COLUMNS = {"anki_cards": {"queue", "ctype"}, "mirror_meta": {"crt"}}
+_ADDED_INDEXES = {"anki_cards": {"anki_cards_queue_idx"}, "mirror_meta": set()}
+
+
+def _column_spec(connection, table, ignore):
+    """Ordered (name, type, notnull, default, pk) for a table's columns."""
+    return [
+        (row[1], str(row[2]).upper(), int(row[3]), row[4], int(row[5]))
+        for row in connection.execute(f'PRAGMA table_info("{table}")')
+        if row[1] not in ignore
+    ]
+
+
+def _index_spec(connection, table, ignore):
+    """name -> (unique, partial, indexed columns), skipping implicit indexes."""
+    spec = {}
+    for row in connection.execute(f'PRAGMA index_list("{table}")'):
+        name = str(row[1])
+        if name in ignore or name.startswith("sqlite_autoindex"):
+            continue
+        columns = tuple(
+            str(info[2]) for info in connection.execute(f'PRAGMA index_info("{name}")')
+        )
+        spec[name] = (int(row[2]), int(row[4]), columns)
+    return spec
+
+
+def _check_constraints(connection, table):
+    """Every CHECK clause of a table, whitespace-normalised and sorted.
+
+    PRAGMA does not expose CHECKs, so they come out of ``sqlite_master`` by
+    scanning for balanced parentheses after each CHECK keyword — a plain regex
+    would stop at the first ')' inside a nested expression.
+    """
+    sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()[0]
+    sql = re.sub(r"--[^\n]*", " ", sql)
+    found = []
+    for match in re.finditer(r"\bCHECK\b\s*\(", sql, re.IGNORECASE):
+        start = match.end() - 1
+        depth = 0
+        for index in range(start, len(sql)):
+            if sql[index] == "(":
+                depth += 1
+            elif sql[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    found.append(" ".join(sql[start : index + 1].split()))
+                    break
+    return sorted(found)
+
+
+@pytest.fixture
+def migrated_schema(tmp_path):
+    """A database holding only what 0001_init.sql creates."""
+    connection = db.open_db(tmp_path / "migration-shape.db")
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+@pytest.fixture
+def rebuilt_schema(tmp_path):
+    """A database holding only what the rebuild DDL creates."""
+    connection = sqlite3.connect(str(tmp_path / "rebuild-shape.db"))
+    try:
+        for statement in (
+            *anki_snapshot._ANKI_CARDS_DDL,
+            *anki_snapshot._MIRROR_META_DDL,
+        ):
+            connection.execute(statement)
+        yield connection
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("table", sorted(_ADDED_COLUMNS))
+def test_the_rebuild_ddl_matches_the_migration(
+    table, migrated_schema, rebuilt_schema
+):
+    """The rebuild DDL duplicates 0001_init.sql; nothing else pins them together.
+
+    ``_ANKI_CARDS_DDL`` / ``_MIRROR_META_DDL`` restate tables the migration also
+    creates, so a column type, a NOT NULL, an index or a CHECK edited in one
+    place and not the other would produce two different ``anki_cards`` depending
+    on whether a rebuild had ever run — and no existing test would notice. The
+    columns B1 deliberately added are the only permitted difference; anything
+    else, in either direction, fails here and has to be reconciled (or, if the
+    divergence is intended, moved into the allow-lists above with a reason).
+    """
+    added_columns = _ADDED_COLUMNS[table]
+    assert _column_spec(rebuilt_schema, table, frozenset()) != _column_spec(
+        migrated_schema, table, frozenset()
+    ), "the added columns are missing from the rebuild DDL"
+
+    assert _column_spec(rebuilt_schema, table, added_columns) == _column_spec(
+        migrated_schema, table, frozenset()
+    )
+    assert set(added_columns) <= {
+        name for name, *_ in _column_spec(rebuilt_schema, table, frozenset())
+    }
+    assert _index_spec(rebuilt_schema, table, _ADDED_INDEXES[table]) == _index_spec(
+        migrated_schema, table, frozenset()
+    )
+    assert _check_constraints(rebuilt_schema, table) == _check_constraints(
+        migrated_schema, table
+    )
+
+
+def test_the_known_set_view_still_reads_a_rebuilt_mirror(conn, collection):
+    """The rebuild must not leave the view pointing at a table that is gone."""
+    snapshot_anki(conn, collection_path=collection)
+    conn.execute(
+        "INSERT INTO anki_item_map (note_id, item_id, method) VALUES (1, 'w-1', 't')"
+    )
+    conn.execute(
+        "INSERT INTO item (id, kind, kanji, created_ts) "
+        "VALUES ('w-1', 'word', '日本語', '2026-08-01T00:00:00Z')"
+    )
+    row = conn.execute(
+        "SELECT is_known FROM known_set WHERE item_id = 'w-1'"
+    ).fetchone()
+    assert row is not None and row["is_known"] == 1
 
 
 def test_schema_18_collections_read_decks_and_notetypes_from_tables(conn, anki_dir):
