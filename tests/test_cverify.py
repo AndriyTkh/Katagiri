@@ -62,6 +62,7 @@ the premise of section 4.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -194,42 +195,36 @@ EDIT_BEACON = "cverifybeacon"
 
 
 # ---------------------------------------------------------------------------
-# PHASE2: confirm against final adapter
+# The adapter seam
 # ---------------------------------------------------------------------------
 #
-# TG-C3 (tasks.md T008) registers the prose tool while this file is being
-# drafted, and tasks.md says its name is "finalized here" (``e.g. search_notes``).
-# Everything this file assumes about that adapter is therefore funnelled through
-# the five seams below, so phase 2 is a review of one block rather than a diff
-# across twenty assertions. Each seam names what has to be re-checked once the
-# adapter has landed:
+# Everything this file assumes about Phase C's MCP adapter is funnelled through
+# the helpers below rather than spread across twenty assertions, so the shape of
+# the tool is stated once and can be re-checked in one place when it changes.
+# All five were drafted against an unlanded adapter and confirmed against the
+# merged one (tasks.md T008):
 #
-#   1. PROSE_TOOL / PHASE_C_TOOLS — the tool's final name, and whether Phase C
-#      registered one tool or several (a ``*_reindex`` companion would belong in
-#      PHASE_C_TOOLS too, and would change CONTRACT_TOOLS).
-#   2. _prose_arguments — the adapter's argument *names* and shapes. The
-#      underlying function is
-#      ``md_search.search_notes(conn, query, *, tags, fields, path_prefix,
-#      include_generated, limit)``; a thin adapter is expected to mirror it, but
-#      ``fields`` is a mapping and an MCP input schema may well flatten or rename
-#      it. Only this function may know.
-#   3. _prose_hits / _prose_names / _prose_route — the envelope's key names. The
-#      expected envelope is the function's own return value passed through:
-#      ``{query, limit, route, route_reason, filters, hits, hit_count,
-#      indexed_notes, index_empty, note}`` with each hit
+#   1. Phase C registered exactly one tool, ``search_notes``. No re-index tool,
+#      so CONTRACT_TOOLS is the Phase B eleven plus one.
+#   2. The adapter mirrors ``md_search.search_notes(conn, query, *, tags, fields,
+#      path_prefix, include_generated, limit)`` argument for argument, with every
+#      argument optional; ``fields`` passes through as a nested object rather
+#      than being flattened. Omitting a key is therefore a test of the adapter's
+#      own default, which is what the ``include_generated`` assertions rely on.
+#   3. The envelope is the function's return value passed through:
+#      ``{query, limit, route ('words'|'trigram'|null), route_reason, filters,
+#      hits, hit_count, indexed_notes, index_empty, note}`` with each hit
 #      ``{path, title, generated, frontmatter, frontmatter_ok, excerpt,
-#      source_index}``.
-#   4. _reindex — section 7 drives ``python -m katagiri.md_search rebuild``
-#      rather than a tool, because no re-index tool is known to be registered. If
-#      T008 added one, this is where it would move, and the "cold subagent"
-#      property would be preserved either way.
-#   5. The re-index *log* assertion. ``md_search.main`` prints the report to
-#      stderr but never calls ``logging_setup.setup_logging``, so the INFO line
-#      ``md index incremental: ... indexed=1 ...`` that ``MdIndexResult``'s
-#      docstring calls the other half of the SC-003 evidence is dropped by the
-#      logging machinery in a CLI run. The rendered report *is* on stderr and is
-#      asserted strictly below; :func:`_assert_log_line` holds the stricter
-#      assertion for the day the CLI configures logging.
+#      source_index}``. A frontmatter-only query routes to ``null``.
+#   4. Section 7 drives ``python -m katagiri.md_search rebuild`` as a cold
+#      process, because there is no re-index tool to drive instead. If one is
+#      ever registered, :func:`_reindex` is where the scenario moves onto the
+#      wire; the "cold" property is preserved either way.
+#   5. ``md_search.main`` now calls ``logging_setup.setup_logging`` before it
+#      runs, so the INFO line ``md index incremental: ... indexed=1 ...`` that
+#      ``MdIndexResult``'s docstring calls the other half of the SC-003 evidence
+#      really is on stderr in a CLI run. :func:`_assert_log_line` asserts it
+#      unconditionally, alongside the rendered report.
 
 #: The Phase C addition(s), by name.
 PROSE_TOOL = "search_notes"
@@ -250,7 +245,7 @@ def _prose_arguments(
 ) -> dict[str, Any]:
     """The ``arguments`` object for one call to the prose tool.
 
-    PHASE2 seam 2. Keys are omitted when unset rather than sent as ``null``, so
+    Adapter seam 2. Keys are omitted when unset rather than sent as ``null``, so
     the adapter's own defaults are what the wire exercises — ``include_generated``
     defaulting to false is a Phase C behaviour this file asserts, and it can only
     be asserted if the call does not set it.
@@ -272,7 +267,7 @@ def _prose_arguments(
 
 
 def _prose_hits(payload: Any) -> list[dict[str, Any]]:
-    """The hit list out of a prose envelope. PHASE2 seam 3."""
+    """The hit list out of a prose envelope. Adapter seam 3."""
     assert isinstance(payload, dict), payload
     hits = payload["hits"]
     assert isinstance(hits, list), payload
@@ -290,7 +285,7 @@ def _prose_names(payload: Any) -> set[str]:
 
 
 def _prose_route(payload: Any) -> str | None:
-    """Which index answered. PHASE2 seam 3."""
+    """Which index answered. Adapter seam 3."""
     assert isinstance(payload, dict), payload
     return payload["route"]
 
@@ -522,7 +517,7 @@ def mcp_client(cold):
 def _prose_search(mcp_client: _StdioClient, query: str | None = None, **filters: Any):
     """One prose call over the wire, returning its envelope.
 
-    Every prose assertion in this file goes through here, so PHASE2 seams 2 and 3
+    Every prose assertion in this file goes through here, so adapter seams 2 and 3
     are the only places the adapter's shape is known.
     """
     response = mcp_client.call(
@@ -623,6 +618,39 @@ def package_sources() -> list[Path]:
     )
     assert found, f"no python sources found under {PACKAGE_ROOT}"
     return found
+
+
+def _code_only(source: str) -> str:
+    """``source`` with its docstrings and comments blanked out, lines preserved.
+
+    A module that *documents* a hazard is not taking it. ``md_search``'s docstring
+    says, in as many words, that it reads the vault from disk rather than through
+    the ``:27123`` bridge — and a flat substring scan for that port would read the
+    sentence asserting the property as a breach of it. So the port and URL scans
+    below run over code: string *literals* are kept, because a URL in a literal is
+    a connection waiting to happen, while docstrings and comments are dropped,
+    because they are addressed to a reader.
+
+    Docstrings are found as bare string expression statements via ``ast`` rather
+    than by pattern, so a triple-quoted block that merely looks like one is not
+    mistaken for it. Lines are blanked rather than removed so that any offset this
+    file reports still matches the real file.
+    """
+    tree = ast.parse(source)
+    doc_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            and node.end_lineno is not None
+        ):
+            doc_lines.update(range(node.lineno, node.end_lineno + 1))
+    kept = [
+        "" if number in doc_lines else re.sub(r"#.*$", "", line)
+        for number, line in enumerate(source.splitlines(), start=1)
+    ]
+    return "\n".join(kept)
 
 
 def _assert_clean(payload: Any, raw: str, *, where: str) -> None:
@@ -904,19 +932,34 @@ def test_the_prose_index_reads_the_vault_from_disk_and_not_over_http():
     unnecessary" and "Obsidian cannot be necessary".
     """
     source = (PACKAGE_ROOT / "md_search.py").read_text(encoding="utf-8")
+    code = _code_only(source)
 
     for label, pattern in HTTP_CLIENT_PATTERNS:
         assert pattern.search(source) is None, (
             f"the prose index imports or calls an HTTP client ({label}); it must "
             "read the vault from disk"
         )
-    assert str(obsidian_proxy.OBSIDIAN_PORT) not in source
-    assert obsidian_proxy.BASE_URL not in source
-    assert not re.search(r"^[ \t]*(?:import|from)[ \t]+.*obsidian_proxy", source, re.M)
+    # Scanned over the *code*, not the prose. ``md_search``'s own module docstring
+    # says it reads the vault from disk "rather than through the ``:27123`` REST
+    # bridge" — a sentence stating this very property, which a flat substring scan
+    # would read as a violation of it. The same trap ``HTTP_CLIENT_PATTERNS`` is
+    # anchored against one level up.
+    assert str(obsidian_proxy.OBSIDIAN_PORT) not in code
+    assert obsidian_proxy.BASE_URL not in code
+    assert obsidian_proxy.OBSIDIAN_HOST not in code
+    assert not re.search(r"^[ \t]*(?:import|from)[ \t]+.*obsidian_proxy", code, re.M)
+
+    # The stripper is not why the assertions above passed: the module that *does*
+    # hold the port holds it as a literal, and it survives the same treatment.
+    proxy_code = _code_only((PACKAGE_ROOT / "obsidian_proxy.py").read_text(encoding="utf-8"))
+    assert str(obsidian_proxy.OBSIDIAN_PORT) in proxy_code, (
+        "stripping docstrings hid a port literal that is genuinely in the code, "
+        "so the scan above proved nothing"
+    )
 
     # The positive half: it opens files, and it walks the vault root.
-    assert "def iter_markdown_files" in source
-    assert "def vault_root" in source
+    assert "def iter_markdown_files" in code
+    assert "def vault_root" in code
 
 
 def test_the_markdown_path_answers_while_obsidian_is_closed(mcp_client):
@@ -1001,13 +1044,22 @@ def test_frontmatter_is_queryable_apart_from_body_text_over_the_wire(mcp_client)
 
 
 def test_a_scalar_frontmatter_field_filters_on_its_own_over_the_wire(mcp_client):
-    """``type`` is a field, not a substring of one blob of frontmatter text."""
+    """``type`` is a field, not a substring of one blob of frontmatter text.
+
+    Values come back as *lists* even for a scalar field — ``type: daily`` is
+    ``["daily"]`` — because a frontmatter key may hold one value or many and the
+    index does not guess which. Asserted in that shape deliberately: an adapter
+    that "helpfully" unwrapped single-element lists would make the two cases
+    indistinguishable to a caller, and this is the gate that would notice.
+    """
     dailies = _prose_search(mcp_client, fields={"type": "daily"})
 
     assert _prose_names(dailies) == {MIXED_NOTE}, dailies
     (hit,) = _prose_hits(dailies)
-    assert hit["frontmatter"]["type"] == "daily", hit
+    assert hit["frontmatter"]["type"] == ["daily"], hit
+    assert hit["frontmatter"]["tags"] == ["japanese", "grammar"], hit
     assert hit["frontmatter_ok"] is True, hit
+    assert dailies["filters"]["fields"] == {"type": ["daily"]}, dailies["filters"]
 
 
 def test_malformed_frontmatter_is_flagged_over_the_wire_but_still_searchable(mcp_client):
@@ -1073,7 +1125,7 @@ def _reindex(
     test session, opens the database through the product's own config path, and
     prints the report a human running the quickstart would read.
 
-    PHASE2 seam 4: if T008 registered a re-index tool, this is where the scenario
+    Adapter seam 4: were a re-index tool ever registered, this is where the scenario
     would move onto the wire.
     """
     env = dict(os.environ)
@@ -1126,20 +1178,27 @@ def _count(report: dict[str, str], key: str) -> int:
 
 
 def _assert_log_line(stderr: str, expected: str) -> None:
-    """The INFO line ``rebuild_md_index`` logs, when the CLI configures logging.
+    """The INFO line ``rebuild_md_index`` logs, asserted as SC-003 evidence.
 
-    PHASE2 seam 5. ``MdIndexResult``'s docstring names two pieces of SC-003
-    evidence — the returned report *and* the stderr line logged from it — but
-    ``md_search.main`` never calls ``logging_setup.setup_logging``, so in a CLI run
-    the INFO record is dropped before it reaches a handler. The rendered report is
-    asserted strictly by the caller; this stays advisory until the CLI configures
-    logging, at which point the ``if`` comes out and the assertion stands alone.
+    Adapter seam 5. ``MdIndexResult``'s docstring names two pieces of evidence —
+    the returned report *and* the stderr line logged from it — and since
+    ``md_search.main`` calls ``logging_setup.setup_logging`` the second one really
+    is emitted in a CLI run. Both are asserted: the report says what the run
+    decided, and the log line says the run *said so where an operator would read
+    it*, which is what makes SC-003 checkable by hand from the quickstart.
+
+    The line is also required to be on **stderr**, which is where every Katagiri
+    diagnostic goes; the caller passes the stderr stream alone, so a line that
+    drifted onto stdout would fail here rather than pass unnoticed.
     """
-    if "md index" in stderr:
-        assert expected in stderr, (
-            f"the rebuild logged a line that does not say {expected!r}:\n"
-            f"{stderr[-2000:]}"
-        )
+    assert "md index" in stderr, (
+        "the rebuild logged no 'md index' line at all, so half the SC-003 "
+        f"evidence is missing; stderr was:\n{stderr[-2000:]}"
+    )
+    assert expected in stderr, (
+        f"the rebuild logged a line that does not say {expected!r}:\n"
+        f"{stderr[-2000:]}"
+    )
 
 
 def _touch_later(path: Path, seconds: int = 10) -> None:
@@ -1232,6 +1291,7 @@ def test_a_deleted_note_leaves_no_ghost_hits_anywhere(cold, mcp_client):
     assert _count(report, "removed") == 1, completed.stderr
     assert _count(report, "scanned") == MARKDOWN_FILES - 1
     assert _count(report, "indexed") == 0, "a deletion is not a re-index"
+    _assert_log_line(completed.stderr, "removed=1")
 
     assert _prose_hits(_prose_search(mcp_client, GHOST_EN)) == [], "ghost hit (en)"
     assert _prose_hits(_prose_search(mcp_client, GHOST_JP)) == [], "ghost hit (ja)"
