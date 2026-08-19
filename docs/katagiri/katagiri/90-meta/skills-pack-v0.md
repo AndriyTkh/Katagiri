@@ -7,6 +7,12 @@ created: 2026-08-19
 
 # Skills pack v0
 
+> **Superseded (2026-08-19) by [skills-pack-v1](./skills-pack-v1.md).** This page is kept as
+> history: it is the hypothesis v1 was tested against, and the "why v0 is deliberately thin"
+> section below is the reason there was anything to revise. The executable pack at
+> `.claude/skills/katagiri-study/SKILL.md` is now **v1** — nothing on this page describes the
+> live protocol any more. Read v1 for what runs; read this for what was assumed.
+
 The zero-code start. Before the Katagiri MCP server exists, study happens manually with
 Claude, and the *method* lives on the prompt side as a skills pack. This page is the
 vault-side record of what v0 says; the executable copy is

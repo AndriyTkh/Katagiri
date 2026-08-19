@@ -39,7 +39,7 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Final
 
-from katagiri import events, known, sensei_letter
+from katagiri import events, known, lesson_memory, sensei_letter
 from katagiri.config import get_config
 from katagiri.logging_setup import get_logger
 
@@ -819,6 +819,28 @@ def _resume_section(ctx: TodayContext) -> Section:
 
 
 # ---------------------------------------------------------------------------
+# Lesson memory
+# ---------------------------------------------------------------------------
+
+
+@section(lesson_memory.SECTION_KEY)
+def _lesson_memory_section(ctx: TodayContext) -> Section:
+    """What the last lesson left behind: open threads, next step, due revisits.
+
+    Phase D's half of the loop, appended at the seam rather than folded into an
+    existing section: everything about *which* rows matter and *how* they read
+    lives in :mod:`katagiri.lesson_memory`, so this builder is the plug and
+    nothing more. It never returns ``None`` — a database with no lessons in it
+    still says so, because a vanished section reads as "nothing owed".
+    """
+    return Section(
+        key=lesson_memory.SECTION_KEY,
+        heading=lesson_memory.SECTION_HEADING,
+        lines=lesson_memory.section_lines(ctx.conn, today=ctx.day),
+    )
+
+
+# ---------------------------------------------------------------------------
 # The registry itself
 # ---------------------------------------------------------------------------
 
@@ -833,6 +855,7 @@ SECTIONS: Final[tuple[SectionBuilder, ...]] = (
     _known_trend_section,
     _weakest_morphs_section,
     _resume_section,
+    _lesson_memory_section,
 )
 
 
