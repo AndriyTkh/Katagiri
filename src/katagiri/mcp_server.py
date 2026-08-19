@@ -53,13 +53,12 @@ from typing import Any, Final
 
 from mcp.server import MCPServer
 
+# The logic layer below needs these; the modules that only back an adapter are
+# imported in the adapter block that uses them, next to their delimiter comment.
 from katagiri import (
     __version__,
     events,
     jmdict_import,
-    known,
-    md_search,
-    obsidian_proxy,
 )
 from katagiri.db import open_db, resolve_alias
 from katagiri.logging_setup import get_logger, setup_logging
@@ -709,6 +708,15 @@ def security_scan(ports: tuple[int, ...] = HARDENED_PORTS) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # MCP adapter — thin wrappers only, one logic call each
 # ---------------------------------------------------------------------------
+#
+# Grouped by the module behind each tool, one delimited block per module, with
+# that module's import line at the head of its block. Adapter order inside the
+# region is unchanged, and so is every signature, name, docstring and body: the
+# blocks are a reading aid for where a tool's real work happens, not a change to
+# what any tool does.
+
+
+# --- server core: no logic module, the answer is computed here ---------------
 
 
 @server.tool(
@@ -724,6 +732,11 @@ def ping() -> dict[str, str]:
         "katagiri_version": __version__,
         "python": platform.python_version(),
     }
+
+
+# --- the known set: katagiri.known ------------------------------------------
+
+from katagiri import known  # noqa: E402
 
 
 @server.tool(
@@ -755,6 +768,10 @@ def known_set_stats() -> dict[str, Any]:
         return redact(known.known_set_stats(conn))
 
 
+# --- the event log: katagiri.events (imported at the top; the logic layer above
+# --- reads it too) -----------------------------------------------------------
+
+
 @server.tool(
     name="recent_events",
     title="Recent events",
@@ -770,6 +787,10 @@ def recent_events(
     with _db() as conn:
         rows = events.recent_events(conn, limit, type, since_day)
     return [redact(_redact_event_payload(row)) for row in rows]
+
+
+# --- this module's own logic layer: search_db_query, dictionary_lookup (over
+# --- katagiri.jmdict_import), stop_gate, security_scan — all defined above ----
 
 
 @server.tool(
@@ -836,6 +857,11 @@ def security_status() -> dict[str, Any]:
     return redact(security_scan())
 
 
+# --- the vault, live and GET-only: katagiri.obsidian_proxy -------------------
+
+from katagiri import obsidian_proxy  # noqa: E402
+
+
 @server.tool(
     name="vault_file",
     title="Read a vault file",
@@ -878,6 +904,11 @@ def vault_list(path: str | None = None) -> dict[str, Any]:
 def obsidian_active_note() -> dict[str, Any]:
     logger.debug("obsidian_active_note called")
     return redact(obsidian_proxy.read_active_note())
+
+
+# --- the vault's derived markdown index: katagiri.md_search ------------------
+
+from katagiri import md_search  # noqa: E402
 
 
 @server.tool(

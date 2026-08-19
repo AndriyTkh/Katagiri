@@ -84,7 +84,26 @@ class ToolSpec:
         return self.stability != "unimplemented"
 
 
-TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
+# ---------------------------------------------------------------------------
+# The specs, in per-phase fragments
+# ---------------------------------------------------------------------------
+#
+# ``TOOL_SPECS`` is the concatenation of the fragments below, in phase order, and
+# it is the only name anything outside this module reads. The split is a seam for
+# additive batches: a new phase appends to its own fragment instead of editing a
+# 270-line literal, so a review diff shows one fragment and the phase it belongs
+# to. Order inside a fragment, and the order of the fragments, is declaration
+# order — ``tool_names()`` and the congruence test both see the same sequence they
+# saw before the split.
+#
+# Provenance is by the commit that first declared the spec, cross-checked against
+# the module each tool's logic lives in.
+
+# Phase A — foundation and read-access MCP: liveness, the known set, the event
+# log, local search, the dictionary, and the two mechanical status readouts.
+# Backed by katagiri.known, katagiri.events, katagiri.jmdict_import and
+# mcp_server's own logic layer.
+_PHASE_A_SPECS: Final[tuple[ToolSpec, ...]] = (
     ToolSpec(
         name="ping",
         summary="Liveness check: server status and versions.",
@@ -220,6 +239,11 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
             "exact netsh command for the operator to run instead."
         ),
     ),
+)
+
+# Phase B — the GET-only Obsidian proxy. Grouped by the module the tools live in:
+# every spec here is served by katagiri.obsidian_proxy.
+_PHASE_B_SPECS: Final[tuple[ToolSpec, ...]] = (
     ToolSpec(
         name="vault_file",
         summary="Read one Obsidian vault file, by vault-relative path.",
@@ -291,6 +315,11 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
             "rather than treated as an empty note."
         ),
     ),
+)
+
+# Phase C — the derived markdown index, read without Obsidian. Backed by
+# katagiri.md_search.
+_PHASE_C_SPECS: Final[tuple[ToolSpec, ...]] = (
     ToolSpec(
         name="search_notes",
         summary=(
@@ -353,6 +382,15 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
             "other vault read."
         ),
     ),
+)
+
+# Phase D — empty on purpose: the placeholder an additive batch appends to. A
+# fragment that exists before it has contents is what keeps the first Phase D
+# tool a one-spec diff rather than a restructure.
+_PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = ()
+
+TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
+    _PHASE_A_SPECS + _PHASE_B_SPECS + _PHASE_C_SPECS + _PHASE_D_SPECS
 )
 
 TOOL_SPECS_BY_NAME: Final[dict[str, ToolSpec]] = {
