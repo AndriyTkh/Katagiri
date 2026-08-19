@@ -485,6 +485,152 @@ def test_search_honours_the_limit(db):
 
 
 # ---------------------------------------------------------------------------
+# search_notes (C/TG-C3): the markdown index, exposed
+# ---------------------------------------------------------------------------
+#
+# Behaviour of the engine itself lives in tests/test_md_search.py, which needs
+# the vendored UniDic to index a vault. These tests are about the *adapter and
+# its contract*, so they seed the derived tables directly — the md FTS tables are
+# self-contained, not external-content, so a row can be written without invoking
+# the tokenizer, and the whole section runs on a machine with no dictionary.
+
+
+def seed_note(
+    conn: sqlite3.Connection,
+    rowid: int,
+    path: str,
+    *,
+    title: str | None = None,
+    body: str = "",
+    shadow_text: str | None = None,
+    generated: int = 0,
+    fields: dict[str, list[str]] | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO md_note (rowid, path, title, generated, frontmatter,
+                             index_version, indexed_ts)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            rowid,
+            path,
+            title,
+            generated,
+            json.dumps(fields, ensure_ascii=False) if fields else None,
+            1,
+            f"{TODAY}{TS}",
+        ),
+    )
+    for key, values in (fields or {}).items():
+        for idx, value in enumerate(values):
+            conn.execute(
+                "INSERT INTO md_frontmatter (note_rowid, key, idx, value) "
+                "VALUES (?, ?, ?, ?)",
+                (rowid, key, idx, value),
+            )
+    conn.execute(
+        "INSERT INTO fts_md_tri (rowid, body) VALUES (?, ?)", (rowid, body)
+    )
+    conn.execute(
+        "INSERT INTO fts_md_words (rowid, shadow_text) VALUES (?, ?)",
+        (rowid, shadow_text if shadow_text is not None else body),
+    )
+    conn.commit()
+
+
+def test_search_notes_is_registered_with_a_spec(db):
+    assert "search_notes" in registered_tools()
+    spec = get_spec("search_notes")
+    assert spec.stability == "experimental"
+    assert spec.required_args == frozenset(), (
+        "every search_notes argument is optional: a frontmatter-only query is a "
+        "first-class use, so requiring 'query' would forbid it"
+    )
+    assert set(spec.arg_names) == {
+        "query",
+        "tags",
+        "fields",
+        "path_prefix",
+        "include_generated",
+        "limit",
+    }
+
+
+def test_search_notes_finds_a_note_by_body_text(db):
+    seed_note(db, 1, "Notes/particles.md", title="Particles", body="the particle wa")
+
+    result = mcp_server.search_notes("particle")
+
+    assert result["route"] == "trigram"
+    assert result["hit_count"] == 1
+    hit = result["hits"][0]
+    assert hit["path"] == "Notes/particles.md"
+    assert hit["source_index"] == "fts_md_tri"
+    assert "particle" in hit["excerpt"]
+    assert result["index_empty"] is False
+
+
+def test_search_notes_filters_on_frontmatter_without_a_query(db):
+    seed_note(db, 1, "Notes/a.md", body="alpha", fields={"tags": ["grammar"]})
+    seed_note(db, 2, "Notes/b.md", body="beta", fields={"tags": ["vocab"]})
+
+    result = mcp_server.search_notes(tags=["Grammar"])
+
+    assert result["route"] is None
+    assert [hit["path"] for hit in result["hits"]] == ["Notes/a.md"]
+    assert result["filters"]["tags"] == ["Grammar"]
+
+
+def test_search_notes_passes_every_argument_through(db):
+    seed_note(db, 1, "Notes/a.md", body="alpha note", fields={"type": ["grammar"]})
+    seed_note(db, 2, "Notes/b.md", body="alpha note", fields={"type": ["vocab"]})
+    seed_note(db, 3, ".derived/c.md", body="alpha note", generated=1)
+
+    plain = mcp_server.search_notes("alpha", limit=5)
+    assert {hit["path"] for hit in plain["hits"]} == {"Notes/a.md", "Notes/b.md"}
+    assert plain["limit"] == 5
+
+    generated = mcp_server.search_notes("alpha", include_generated=True)
+    assert ".derived/c.md" in {hit["path"] for hit in generated["hits"]}
+
+    filtered = mcp_server.search_notes(
+        "alpha", fields={"type": "grammar"}, path_prefix="Notes/"
+    )
+    assert [hit["path"] for hit in filtered["hits"]] == ["Notes/a.md"]
+
+
+def test_search_notes_says_the_index_is_empty_rather_than_finding_nothing(db):
+    """An unindexed vault and an absent note are different answers."""
+    result = mcp_server.search_notes("anything")
+
+    assert result["index_empty"] is True
+    assert result["hit_count"] == 0
+    assert result["note"] and "rebuild" in result["note"]
+
+
+def test_search_notes_rejects_an_empty_request(db):
+    with pytest.raises(ValueError, match="frontmatter filter"):
+        mcp_server.search_notes("   ")
+    with pytest.raises(ValueError, match="limit"):
+        mcp_server.search_notes("alpha", limit=0)
+
+
+def test_search_notes_never_touches_obsidian(db, monkeypatch):
+    """SC-001: the markdown path must answer with Obsidian closed."""
+
+    def explode(*args, **kwargs):  # pragma: no cover - the point is it is not called
+        raise AssertionError("search_notes reached the Obsidian proxy")
+
+    for name in ("read_vault_file", "list_vault_dir", "read_active_note", "_get"):
+        if hasattr(mcp_server.obsidian_proxy, name):
+            monkeypatch.setattr(mcp_server.obsidian_proxy, name, explode)
+
+    seed_note(db, 1, "Notes/a.md", body="alpha")
+    assert mcp_server.search_notes("alpha")["hit_count"] == 1
+
+
+# ---------------------------------------------------------------------------
 # lookup
 # ---------------------------------------------------------------------------
 
