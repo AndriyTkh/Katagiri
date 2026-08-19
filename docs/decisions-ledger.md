@@ -53,6 +53,7 @@ is waste unless new external facts invalidate it (note the invalidation here fir
 | D-27 | 2026-08-19 | All DDL in the A1 migration; derived vs source-of-truth classification; migration runner + backup-before-migrate from day one; event-log append-only via triggers | round 5, clusters 4/8 |
 | D-28 | 2026-08-19 | i+1 gated on curriculum grammar-DAG reachability, not vocabulary coverage alone | round 5, cluster 10 |
 | D-29 | 2026-08-19 | Estimates bottom-up per bead before creation; actuals logged; re-baseline after Phase A; task-level DAG; weekly status line; 1.5× slip rule | round 5, cluster 13 |
+| D-30 | 2026-08-19 | Phase C entry gate waived by user — specs/002 T001 entry criteria (Phase B complete + B-verify green + ≥4 study days prior week) NOT satisfied: kata-bvf still open pending user-side Today.md adoption metric, event log shows 0 study days. User explicitly chose to override and start Phase C on 2026-08-19. Consequence: Phase C proceeds; kata-bvf stays open and must close before Phase D entry (specs/003 T001) unless separately waived | user override, 2026-08-19 |
 
 ## Deferred options (not cut — revisit condition attached)
 

@@ -27,8 +27,8 @@ Phase C is single-lane: worktree isolation buys context isolation, not paralleli
 
 ## Taskgroup C1: Setup (serial, master)
 
-- [ ] T001 Confirm phase entry: Phase B complete (specs/001 tasks all checked, B-verify green) + ≥4 logged study days prior week; record entry line in docs/dev-plan.md. Write: docs/dev-plan.md. Read: specs/001-phase-b-obsidian-render/tasks.md, docs/dev-plan.md (tail). [was: kata-ph-c entry]
-- [ ] T002 Re-baseline the 8–15h estimate bottom-up onto T003–T008; if any single task still lands >8h, split it further *in this file* (D-29) before starting TG-C2; note the estimate in plan.md Technical Context. Write: this tasks.md, plan.md. Read: plan.md, research.md. [was: kata-c2]
+- [x] T001 Confirm phase entry (recorded as user-waived, see D-30): Phase B complete (specs/001 tasks all checked, B-verify green) + ≥4 logged study days prior week; record entry line in docs/dev-plan.md. Write: docs/dev-plan.md. Read: specs/001-phase-b-obsidian-render/tasks.md, docs/dev-plan.md (tail). [was: kata-ph-c entry]
+- [x] T002 Re-baseline the 8–15h estimate bottom-up onto T003–T008; if any single task still lands >8h, split it further *in this file* (D-29) before starting TG-C2; note the estimate in plan.md Technical Context. Write: this tasks.md, plan.md. Read: plan.md, research.md. [was: kata-c2]
 
 ## Taskgroup C2: User Story 1 — Indexer core (P1) 🎯 MVP — worktree `wt/c-indexer`
 

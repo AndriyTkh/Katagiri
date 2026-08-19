@@ -262,3 +262,10 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
 ## Weekly status log
 
 (appended by the weekly review)
+
+- 2026-08-19 — Phase C entry (specs/002 T001): entry criteria NOT met — kata-bvf open
+  (technical checks green, 795 tests; Today.md adoption metric pending a week of real usage)
+  and 0 logged study days in prior week (event log empty). User explicitly overrode the gate
+  and ordered Phase C start; waiver recorded in decisions-ledger. kata-bvf close + adoption
+  metric remain a parallel user-side item blocking nothing in C but required before D entry
+  review.

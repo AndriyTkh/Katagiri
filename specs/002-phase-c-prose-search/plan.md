@@ -30,6 +30,8 @@ Katagiri's own markdown search over the vault export + hand-written notes: front
 
 **Scale/Scope**: one vault, 1 build task + 1 gate
 
+**Estimate re-baseline** (2026-08-19, T002, bottom-up per D-29): T003 schema+rebuild 2.5h, T004 walk+frontmatter+tokenize 2.5h, T005 incremental+cleanup 2.5h, T006 query API 2h, T007 fixture vault+tests 3h, T008 MCP registration 1h — total ≈13.5h, inside the original 8–15h envelope. No single task exceeds 8h, so no further split of tasks.md required.
+
 ## Constitution Check
 
 | Principle | Status | Note |
