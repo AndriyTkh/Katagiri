@@ -35,8 +35,8 @@
 
 ## Taskgroup D1: Setup (serial, master)
 
-- [ ] T001 Confirm phase entry: C-verify green (specs/002 TG-C4 checked) + ≥4 logged study days prior week; record entry line. Write: docs/dev-plan.md. Read: specs/002 tasks.md, docs/dev-plan.md (tail). [was: kata-ph-d entry]
-- [ ] T002 Bottom-up estimates for every task below; split any >8h task into sub-tasks in this file (D-29); confirm the lane plan against the conflict map. Write: this tasks.md. Read: plan.md, research.md, Phase C actual-vs-estimate note from specs/002 T002. [was: kata-ph-d]
+- [x] T001 Confirm phase entry: C-verify green (specs/002 TG-C4 checked) + ≥4 logged study days prior week; record entry line. Write: docs/dev-plan.md. Read: specs/002 tasks.md, docs/dev-plan.md (tail). [was: kata-ph-d entry]
+- [ ] T002 [in-progress: scout-t002] Bottom-up estimates for every task below; split any >8h task into sub-tasks in this file (D-29); confirm the lane plan against the conflict map. Write: this tasks.md. Read: plan.md, research.md, Phase C actual-vs-estimate note from specs/002 T002. [was: kata-ph-d]
 
 ## Taskgroup D2: Foundational (seam serial; envelope in parallel worktree)
 

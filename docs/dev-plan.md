@@ -275,3 +275,8 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   user-side item with kata-bvf metric; both gate Phase D entry. Incident: vendor/unidic
   destroyed by junction-following worktree removal, restored same day from pinned-checksum
   re-download (638718c4…, bit-identical).
+- 2026-08-19 — Phase D entry (specs/003): C-verify green — specs/002 TG-C4 complete (T009,
+  T010 checked). Study-day prerequisite (≥4 logged study days prior week) WAIVED by user
+  directive 2026-08-19 — agent-side testing done where possible; real-usage testing deferred.
+  Mitigation: all Phase D work lands on integration branch `phase-d`, merged to `master` only
+  after sufficient real testing.
