@@ -631,6 +631,417 @@ def test_search_notes_never_touches_obsidian(db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Phase D US1 (D/TG-D3): the teacher loop, registered
+# ---------------------------------------------------------------------------
+#
+# Behaviour of the logic behind these lives in tests/test_session_tools.py and
+# tests/test_exercises.py. What is defended here is the *registration*: the
+# specs and the adapters agree, the untrusted-only fields have no string
+# spelling on the wire, and the three-call echo-back ceremony is actually
+# drivable through the tools as registered — a seam that works only when driven
+# from Python is not a seam an MCP client can use.
+
+# Required and optional arguments, as declared. Same table shape as A6_CONTRACT
+# and the same rule from here on: later work may add optional arguments, never
+# remove one or promote it to required.
+D_US1_CONTRACT: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "stage_untrusted": (
+        frozenset({"text", "source"}),
+        frozenset({"locator", "retrieved_ts", "detail"}),
+    ),
+    "confirm_untrusted": (frozenset({"challenge_id", "echo"}), frozenset()),
+    "start_session": (frozenset(), frozenset({"tired", "session_id"})),
+    "log_lesson": (
+        frozenset({"topic", "objective"}),
+        frozenset(
+            {
+                "lesson_id",
+                "session_id",
+                "closed",
+                "next_step",
+                "revisit_after",
+                "free_notes",
+                "unresolved",
+            }
+        ),
+    ),
+    "lessons": (frozenset(), frozenset({"topic", "unresolved_only", "limit"})),
+    "log_observations": (frozenset({"observations", "session_id"}), frozenset()),
+    "log_error": (
+        frozenset({"said", "correct", "pattern", "severity"}),
+        frozenset({"item_id", "session_id", "context_envelope_id"}),
+    ),
+    "add_vocab": (
+        frozenset({"word"}),
+        frozenset(
+            {
+                "reading",
+                "meaning",
+                "pos",
+                "topic",
+                "pitch",
+                "note",
+                "example_envelope_id",
+                "session_id",
+            }
+        ),
+    ),
+    "triage_inbox": (
+        frozenset({"note_envelope_id"}),
+        frozenset({"dry_run", "session_id"}),
+    ),
+    "gen_exercise": (
+        frozenset(),
+        frozenset({"item_ids", "topic", "direction", "count"}),
+    ),
+    "build_sentences": (
+        frozenset(),
+        frozenset(
+            {
+                "item_ids",
+                "topic",
+                "source_envelope_id",
+                "challenge_id",
+                "echo",
+                "max_sentences",
+            }
+        ),
+    ),
+}
+
+
+@pytest.fixture(autouse=True)
+def clean_envelope_state():
+    """No staged envelope, confirmation or cached canary set survives a test.
+
+    All three are process-wide singletons by design (one ledger per process is
+    what makes a replay detectable), which means a leftover confirmation could
+    make a later test's write succeed for the wrong reason.
+    """
+    from katagiri import exercises as exercises_mod
+    from katagiri import session_tools as session_tools_mod
+    from katagiri.envelope import reset_default_gate
+
+    session_tools_mod.reset_staged()
+    reset_default_gate()
+    exercises_mod.reset_canary_cache()
+    yield
+    session_tools_mod.reset_staged()
+    reset_default_gate()
+    exercises_mod.reset_canary_cache()
+
+
+def test_phase_d_us1_tools_are_registered_with_specs():
+    registered = registered_tools()
+    for name in D_US1_CONTRACT:
+        assert name in registered, f"{name} is declared in the spec but not registered"
+        spec = get_spec(name)
+        assert spec.stability == "experimental"
+        assert spec.note, "a Phase D tool must say why its shape may still change"
+
+
+def test_the_phase_d_fragment_holds_exactly_the_us1_batch():
+    """The fragment is the additive batch's diff; an accidental extra shows here."""
+    assert {spec.name for spec in tool_registry._PHASE_D_SPECS} == set(D_US1_CONTRACT)
+    assert len(tool_registry._PHASE_D_SPECS) == 11
+    # Fragment concatenation, not replacement: the earlier phases are all still
+    # declared and still registered.
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 11 == len(registered_tools())
+
+
+@pytest.mark.parametrize("name", sorted(D_US1_CONTRACT))
+def test_d_us1_contract_is_additive_only(name):
+    required, optional = D_US1_CONTRACT[name]
+    spec = get_spec(name)  # raises if the tool was removed or renamed
+    assert spec.required_args == required, (
+        f"{name}: required arguments changed — that is a breaking change"
+    )
+    present = set(spec.arg_names)
+    assert optional <= present, (
+        f"{name}: optional arguments {sorted(optional - present)} were dropped"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool", "field"),
+    [
+        ("log_error", "context"),
+        ("add_vocab", "example"),
+        ("triage_inbox", "note"),
+        ("build_sentences", "source"),
+    ],
+)
+def test_untrusted_only_fields_have_no_string_spelling(tool, field):
+    """The whole point of the id: there must be no way to pass the text instead.
+
+    A caller that could hand media text to a write path as a plain string has
+    routed around the envelope protocol, so the wire surface must not offer the
+    option — not even as an ignored argument.
+    """
+    names = set(get_spec(tool).arg_names)
+    assert f"{field}_envelope_id" in names
+    assert field not in names, (
+        f"{tool}.{field} is untrusted-only; only its envelope id may cross MCP"
+    )
+
+
+def test_the_observation_stimulus_is_documented_as_an_envelope_id():
+    """It rides inside 'observations', so the spec is the only place to say so."""
+    summary = next(
+        arg.summary
+        for arg in get_spec("log_observations").args
+        if arg.name == "observations"
+    )
+    assert "stimulus_envelope_id" in summary
+    assert "rubric_version" in summary, "the mandatory fields must be named"
+
+
+def test_start_session_prescribes_exactly_one_action_and_logs_it(db):
+    result = mcp_server.start_session()
+
+    assert result["ok"] is True
+    assert isinstance(result["action"], dict), "one action, never a list of options"
+    assert result["action"]["kind"] == "open_first_lesson"
+    assert result["action"]["rationale"]
+    logged = mcp_server.recent_events(limit=1, type="session_open")
+    assert json.loads(logged[0]["payload"])["action"]["kind"] == "open_first_lesson"
+
+
+def test_log_lesson_and_lessons_round_trip_through_the_tools(db):
+    session = mcp_server.start_session()["session_id"]
+
+    written = mcp_server.log_lesson(
+        topic="particles",
+        objective="use は and が in one sentence",
+        session_id=session,
+        next_step="drill が with existence verbs",
+        revisit_after=10,
+        unresolved=["why not どこが?"],
+    )
+    assert written["ok"] is True
+    assert written["created"] is True and written["closed"] is True
+    assert len(written["unresolved_ids"]) == 1
+
+    rows = mcp_server.lessons(topic="particles")
+    assert [row["id"] for row in rows] == [written["lesson_id"]]
+    assert rows[0]["unresolved"][0]["resolved"] is False
+    assert mcp_server.lessons(topic="nothing-like-this") == []
+    assert mcp_server.lessons(unresolved_only=True)[0]["id"] == written["lesson_id"]
+
+
+def test_log_observations_refuses_a_batch_missing_a_rubric_version(db):
+    session = mcp_server.start_session()["session_id"]
+    good = {
+        "task_type": "cloze",
+        "unassisted": True,
+        "coverage_band": ">=95",
+        "rubric_version": "r1",
+    }
+
+    refused = mcp_server.log_observations(
+        [good, {**good, "rubric_version": None}], session_id=session
+    )
+
+    assert refused["ok"] is False
+    assert refused["error"] == "observations_rejected"
+    assert refused["written"] == 0, "all-or-nothing: the good record must not land"
+    assert [bad["field"] for bad in refused["rejected"]] == ["rubric_version"]
+
+    accepted = mcp_server.log_observations([good], session_id=session)
+    assert accepted["ok"] is True and accepted["written"] == 1
+    assert accepted["unassisted"] == 1
+
+
+def test_log_error_writes_the_pattern_and_refuses_a_guessed_severity(db):
+    session = mcp_server.start_session()["session_id"]
+
+    logged = mcp_server.log_error(
+        said="猫がいます",
+        correct="猫があります",
+        pattern="いる vs ある for inanimate subjects",
+        severity="medium",
+        session_id=session,
+    )
+    assert logged["ok"] is True
+    assert logged["severity"] == "medium"
+
+    refused = mcp_server.log_error(
+        said="x", correct="y", pattern="z", severity="quite bad", session_id=session
+    )
+    assert refused["ok"] is False
+    assert refused["error"] == "invalid_severity"
+    assert refused["field"] == "severity"
+
+
+def test_add_vocab_writes_an_item_and_a_mining_event(db):
+    result = mcp_server.add_vocab(word="走る", reading="はしる", meaning="to run")
+
+    assert result["ok"] is True
+    assert result["created"] is True
+    assert mcp_server.known_word("走る")["item_id"] == result["item_id"]
+    mined = mcp_server.recent_events(limit=1, type="mining")
+    assert json.loads(mined[0]["payload"])["source"] == "add_vocab"
+
+
+def test_the_echo_back_ceremony_runs_as_three_tool_calls(db):
+    """Stage, confirm, write — with only ids crossing between the calls."""
+    external = "犬が公園を走っていました。"
+
+    staged = mcp_server.stage_untrusted(external, source="media", locator="ep3 12:04")
+    assert staged["ok"] is True
+    assert staged["excerpt"] and external not in json.dumps(staged), (
+        "an excerpt is for display; the tool must not hand back the content"
+    )
+
+    confirmed = mcp_server.confirm_untrusted(staged["challenge_id"], external)
+    assert confirmed["ok"] is True
+    assert confirmed["envelope_id"] == staged["envelope_id"]
+
+    written = mcp_server.add_vocab(
+        word="走る", example_envelope_id=staged["envelope_id"]
+    )
+    assert written["ok"] is True
+    assert set(written["untrusted"]) == {"example"}
+    assert written["untrusted"]["example"]["provenance"]["source"] == "media"
+    assert written["untrusted"]["example"]["untrusted"] is True
+    payload = json.loads(mcp_server.recent_events(limit=1, type="mining")[0]["payload"])
+    assert payload["example"] == external
+
+
+def test_a_write_without_the_echo_back_is_refused(db):
+    staged = mcp_server.stage_untrusted("ここで待ってください。", source="media")
+
+    refused = mcp_server.add_vocab(
+        word="待つ", example_envelope_id=staged["envelope_id"]
+    )
+
+    assert refused["ok"] is False
+    assert refused["error"] == "confirmation_required"
+    assert refused["field"] == "example"
+
+
+def test_a_paraphrased_echo_does_not_confirm_anything(db):
+    text = "明日は雨が降るでしょう。"
+    staged = mcp_server.stage_untrusted(text, source="web")
+
+    refused = mcp_server.confirm_untrusted(staged["challenge_id"], text[:-1])
+
+    assert refused["ok"] is False
+    assert refused["error"] == "echo_mismatch"
+    # And echoing the token back instead of the content is not a way through.
+    assert (
+        mcp_server.confirm_untrusted(staged["challenge_id"], staged["challenge_id"])[
+            "error"
+        ]
+        == "echo_mismatch"
+    )
+
+
+def test_an_unknown_envelope_id_is_a_lost_handoff_not_a_refusal(db):
+    from katagiri.session_tools import UnknownStagedContent
+
+    # A refusal would invite a retry that cannot work: the buffer never held
+    # this id (or has evicted it), and the fix is to stage the text again.
+    with pytest.raises(UnknownStagedContent):
+        mcp_server.add_vocab(word="走る", example_envelope_id="env_nope")
+
+
+def test_triage_inbox_proposes_without_writing_on_a_dry_run(db):
+    note = "走る - to run\nこれは何ですか？\n猫が窓から外を見ている。"
+    staged = mcp_server.stage_untrusted(note, source="vault", locator="00-inbox/x.md")
+
+    proposed = mcp_server.triage_inbox(staged["envelope_id"])
+
+    assert proposed["ok"] is True
+    assert proposed["dry_run"] is True
+    assert proposed["applied"] == []
+    kinds = [proposal["kind"] for proposal in proposed["proposals"]]
+    assert kinds == ["vocab", "question", "sentence"]
+    assert mcp_server.recent_events(limit=5, type="mining") == []
+
+    # Applying needs the echo-back the dry run did not.
+    assert (
+        mcp_server.triage_inbox(staged["envelope_id"], dry_run=False)["error"]
+        == "confirmation_required"
+    )
+    mcp_server.confirm_untrusted(staged["challenge_id"], note)
+    applied = mcp_server.triage_inbox(staged["envelope_id"], dry_run=False)
+    assert applied["ok"] is True
+    assert [entry["line"] for entry in applied["applied"]] == [1]
+    assert len(applied["deferred"]) == 2
+
+
+def test_the_generators_fail_closed_without_the_canary_set(db):
+    """Losing drills is a bad afternoon; unscreened drills are a bad year."""
+    seed_item(db, "w-40", kanji="走る", reading="はしる")
+
+    drills = mcp_server.gen_exercise(count=3)
+    sentences = mcp_server.build_sentences(max_sentences=3)
+
+    for result in (drills, sentences):
+        assert result["ok"] is False
+        assert result["error"] in {"canary_set_unavailable", "canary_set_tampered"}
+        assert result["note"]
+    assert drills["exercises"] == []
+    assert sentences["sentences"] == []
+
+
+def test_the_generators_answer_with_a_canary_set_present(db, monkeypatch):
+    """Screened, deterministic, and read-only — the guard is injected here."""
+    from katagiri import exercises as exercises_mod
+
+    guard = exercises_mod.CanaryGuard(())
+    monkeypatch.setattr(exercises_mod, "load_canary_guard", lambda *a, **k: guard)
+    seed_item(db, "w-41", kanji="走る", reading="はしる")
+    db.execute("UPDATE item SET pos = 'verb' WHERE id = 'w-41'")
+
+    drills = mcp_server.gen_exercise(item_ids=["w-41"], count=2)
+    assert drills["ok"] is True
+    assert drills["returned"] >= 1
+    assert drills["canary_sentences_screened_against"] == 0
+
+    sentences = mcp_server.build_sentences(item_ids=["w-41"], max_sentences=2)
+    assert sentences["ok"] is True
+    assert all(item["needs_review"] for item in sentences["sentences"])
+    assert all(item["canary_screened"] for item in sentences["sentences"])
+
+
+def test_build_sentences_hands_back_the_challenge_then_accepts_the_echo(
+    db, monkeypatch
+):
+    """The read path runs the same ceremony; the source has no string spelling."""
+    from katagiri import exercises as exercises_mod
+
+    monkeypatch.setattr(
+        exercises_mod, "load_canary_guard", lambda *a, **k: exercises_mod.CanaryGuard(())
+    )
+    seed_item(db, "w-42", kanji="走る", reading="はしる")
+    db.execute("UPDATE item SET pos = 'verb' WHERE id = 'w-42'")
+    external = "毎朝公園を走るのが好きです。"
+    staged = mcp_server.stage_untrusted(external, source="media")
+
+    demanded = mcp_server.build_sentences(
+        item_ids=["w-42"], source_envelope_id=staged["envelope_id"]
+    )
+    assert demanded["ok"] is False
+    assert demanded["error"] == "echo_back_required"
+    assert demanded["sentences"] == []
+    challenge = demanded["challenge"]
+
+    built = mcp_server.build_sentences(
+        item_ids=["w-42"],
+        source_envelope_id=staged["envelope_id"],
+        challenge_id=challenge["challenge_id"],
+        echo=external,
+    )
+    assert built["ok"] is True
+    mined = [item for item in built["sentences"] if item["origin"] == "external"]
+    assert [item["text"] for item in mined] == [external]
+    assert mined[0]["untrusted_origin"] is True
+    assert mined[0]["provenance"]["provenance"]["source"] == "media"
+
+
+# ---------------------------------------------------------------------------
 # lookup
 # ---------------------------------------------------------------------------
 
@@ -1050,6 +1461,21 @@ def test_tool_calls_write_nothing_to_stdout(db, capsys, monkeypatch):
     mcp_server.stop_gate_status()
     mcp_server.security_status()
     mcp_server.lookup("猫")
+    # Phase D too: these ones write, and a write path logs more than a read one.
+    session = mcp_server.start_session()["session_id"]
+    mcp_server.lessons()
+    mcp_server.add_vocab(word="猫", reading="ねこ", session_id=session)
+    mcp_server.log_error(
+        said="猫がいます",
+        correct="猫があります",
+        pattern="いる vs ある",
+        severity="low",
+        session_id=session,
+    )
+    staged = mcp_server.stage_untrusted("猫が寝ている。", source="media")
+    mcp_server.confirm_untrusted(staged["challenge_id"], "猫が寝ている。")
+    mcp_server.gen_exercise(count=1)
+    mcp_server.build_sentences(max_sentences=1)
 
     captured = capsys.readouterr()
     assert captured.out == "", (

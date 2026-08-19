@@ -689,6 +689,18 @@ CONTRACT_TOOLS = frozenset(
         "obsidian_active_note",
         # Phase C (additive): markdown search over the local derived index.
         "search_notes",
+        # Phase D (additive): the US1 tool batch.
+        "stage_untrusted",
+        "confirm_untrusted",
+        "start_session",
+        "log_lesson",
+        "lessons",
+        "log_observations",
+        "log_error",
+        "add_vocab",
+        "triage_inbox",
+        "gen_exercise",
+        "build_sentences",
     }
 )
 

@@ -384,10 +384,537 @@ _PHASE_C_SPECS: Final[tuple[ToolSpec, ...]] = (
     ),
 )
 
-# Phase D — empty on purpose: the placeholder an additive batch appends to. A
-# fragment that exists before it has contents is what keeps the first Phase D
-# tool a one-spec diff rather than a restructure.
-_PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = ()
+# Phase D — the teacher loop, and the first tools here that *write*. Grouped by
+# the module behind each one: the echo-back staging seam and the session tools
+# are katagiri.session_tools, the two generators are katagiri.exercises.
+#
+# Two conventions are new in this fragment, both forced by the transport rather
+# than chosen.
+#
+# **Untrusted text arrives as an envelope id, never as text.** A field whose
+# content plausibly comes from outside Katagiri (a subtitle line, an inbox note
+# copied off a web page) is untrusted-only in session_tools: it takes an
+# Envelope and refuses a bare string. An MCP call cannot hand a Python object to
+# the next one, so the wire spelling of such a field is ``<field>_envelope_id``
+# — an id from ``stage_untrusted``, resolved against the staging buffer by the
+# adapter. There is deliberately no way to pass that text as a string: a caller
+# that could would have routed around the whole protocol.
+#
+# **Learner-authored text stays a plain string.** A topic, an objective, the
+# thing the learner said: those are trusted, and wrapping them would make the
+# ceremony a tax on honest use rather than a check on external text.
+_PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
+    ToolSpec(
+        name="stage_untrusted",
+        summary=(
+            "Wrap externally-sourced text in an envelope and get its echo-back "
+            "challenge. Step 1 of 3 before any write that carries outside text."
+        ),
+        args=(
+            ArgSpec("text", "str", True, "The external text, verbatim."),
+            ArgSpec(
+                "source",
+                "str",
+                True,
+                "Provenance kind, one of katagiri.envelope.SOURCES: 'vault', "
+                "'media', 'web', 'dictionary', 'unknown'. Anything else is "
+                "refused — a provenance nobody chose is the record that cannot "
+                "be trusted later.",
+            ),
+            ArgSpec(
+                "locator",
+                "str",
+                False,
+                "Where inside the source it came from — a path, a timestamp, a "
+                "URL. Recorded, never fetched.",
+            ),
+            ArgSpec(
+                "retrieved_ts",
+                "str",
+                False,
+                "When it was captured, as YYYY-MM-DDTHH:MM:SSZ.",
+            ),
+            ArgSpec(
+                "detail",
+                "dict[str, str] | None",
+                False,
+                "Extra provenance pairs; they are digested with the text, so "
+                "changing one later invalidates the envelope.",
+            ),
+        ),
+        output=(
+            "{ok, error, field, note, envelope_id, challenge_id, source, "
+            "locator, chars, excerpt, digest_prefix, prompt, expires_ms} — the "
+            "content itself is never returned, only an excerpt for display"
+        ),
+        stability="experimental",
+        note=(
+            "The staging buffer is a hand-off for one conversation (at most "
+            "session_tools.MAX_STAGED envelopes, oldest evicted first), not a "
+            "content store. An evicted id is not a lost write: staging the text "
+            "again is one call. Nothing is written here."
+        ),
+    ),
+    ToolSpec(
+        name="confirm_untrusted",
+        summary=(
+            "Answer an echo-back challenge by restating the content. Step 2 of "
+            "3: without this, enveloped text is never written."
+        ),
+        args=(
+            ArgSpec(
+                "challenge_id",
+                "str",
+                True,
+                "The challenge_id stage_untrusted (or build_sentences) returned.",
+            ),
+            ArgSpec(
+                "echo",
+                "str",
+                True,
+                "The content itself, restated verbatim. The digest is "
+                "recomputed from it, so echoing the challenge id back fails.",
+            ),
+        ),
+        output="{ok, error, field, note, envelope_id, challenge_id, confirmed_ms}",
+        stability="experimental",
+        note=(
+            "A confirmation is spendable exactly once, by the gate that issued "
+            "it, and expires. Refusal codes come from katagiri.envelope "
+            "unchanged: 'unknown_challenge', 'challenge_expired', "
+            "'challenge_replayed', 'missing_echo', 'echo_mismatch'."
+        ),
+    ),
+    ToolSpec(
+        name="start_session",
+        summary=(
+            "Open a study session and return exactly one prescribed action — "
+            "never a menu."
+        ),
+        args=(
+            ArgSpec(
+                "tired",
+                "bool",
+                False,
+                "Declare a tired session: the prescription becomes reviews plus "
+                "one mined word, which still counts as a study day.",
+            ),
+            ArgSpec(
+                "session_id",
+                "str | None",
+                False,
+                "Reuse an existing session id; omitted, a fresh one is minted.",
+            ),
+        ),
+        output=(
+            "{ok, error, field, note, session_id, opened_ts, event_id, "
+            "tired_mode, action{kind, instruction, rationale, topic, lesson_id, "
+            "unresolved_id, revisit_after, source}} — action is one dict, never "
+            "a list"
+        ),
+        stability="experimental",
+        note=(
+            "Writes one 'session_open' event, which is also how the next "
+            "session knows a lesson's next_step was already prescribed once. "
+            "The action is chosen by a fixed ladder (tired mode, then an "
+            "unconsumed next_step, then an overdue topic revisit, then the "
+            "oldest open thread, then 'open a lesson') and its rationale says "
+            "why that one, so the reasoning can be argued with."
+        ),
+    ),
+    ToolSpec(
+        name="log_lesson",
+        summary="Record one lesson: open it, close it, or both in one call.",
+        args=(
+            ArgSpec("topic", "str", True, "The topic this lesson was about."),
+            ArgSpec(
+                "objective",
+                "str",
+                True,
+                "The observable can-do objective it taught to.",
+            ),
+            ArgSpec(
+                "lesson_id",
+                "str | None",
+                False,
+                "Update this lesson (the usual close-at-end call); omitted, a "
+                "new lesson row is inserted.",
+            ),
+            ArgSpec("session_id", "str | None", False, "The session it happened in."),
+            ArgSpec(
+                "closed",
+                "bool",
+                False,
+                "True (the default) stamps closed_ts now and logs "
+                "'lesson_close'; False leaves it open and logs 'lesson_open'.",
+            ),
+            ArgSpec(
+                "next_step",
+                "str | None",
+                False,
+                "What the next session should do. Refused unless the lesson is "
+                "being closed: it is a conclusion, not a plan.",
+            ),
+            ArgSpec(
+                "revisit_after",
+                "str | int | None",
+                False,
+                "Schedule the topic: a YYYY-MM-DD day key, or a number of days "
+                "from today.",
+            ),
+            ArgSpec(
+                "free_notes",
+                "str | None",
+                False,
+                "Free text, at most 500 characters (the schema's CHECK).",
+            ),
+            ArgSpec(
+                "unresolved",
+                "list[str] | None",
+                False,
+                "Questions served in the lesson and left open, at most 20.",
+            ),
+        ),
+        output=(
+            "{ok, error, field, note, lesson_id, created, closed, session_id, "
+            "opened_ts, closed_ts, topic, next_step, revisit_after, "
+            "unresolved_ids, event_id, untrusted}"
+        ),
+        stability="experimental",
+        note=(
+            "The lesson row, its unresolved threads and the event land in one "
+            "transaction. An update COALESCEs each omitted field, so closing a "
+            "lesson does not blank what opening it recorded. Katagiri schedules "
+            "topics (revisit_after); Anki schedules items."
+        ),
+    ),
+    ToolSpec(
+        name="lessons",
+        summary="Past lessons, newest first, with their computed outcome and threads.",
+        args=(
+            ArgSpec(
+                "topic",
+                "str | None",
+                False,
+                "Exact topic match — topics are names the learner chose, and a "
+                "fuzzy match here would quietly merge two of them.",
+            ),
+            ArgSpec(
+                "unresolved_only",
+                "bool",
+                False,
+                "Keep only lessons that still have an open thread.",
+            ),
+            ArgSpec("limit", "int", False, "1 or more; defaults to 20."),
+        ),
+        output=(
+            "list of lesson rows: {id, topic, objective, opened_ts, closed_ts, "
+            "closed, session_id, next_step, revisit_after, free_notes, "
+            "observation_count, item_count, unassisted_count, "
+            "unresolved_served, unresolved_open, unresolved[{id, text, "
+            "created_ts, resolved_ts, resolved}]}"
+        ),
+        stability="experimental",
+        note=(
+            "Reads only. The counts come from the lesson_outcome view rather "
+            "than being recomputed here: a lesson's outcome is the shape of the "
+            "observations recorded while it was open, and that join lives in "
+            "the schema."
+        ),
+    ),
+    ToolSpec(
+        name="log_observations",
+        summary=(
+            "Record rubric-scored performances. This is the unassisted "
+            "pass-rate series, and its mandatory fields are enforced."
+        ),
+        args=(
+            ArgSpec(
+                "observations",
+                "list[dict[str, Any]]",
+                True,
+                "One or more records. Required per record: task_type, "
+                "unassisted (bool or 0/1), coverage_band ('>=95' | '80-95' | "
+                "'<80'), rubric_version. Optional: item_id, expected, "
+                "produced, media_ref, ts, and stimulus_envelope_id — the media "
+                "text performed against, which is untrusted-only and so "
+                "arrives as a staged envelope id, never as text.",
+            ),
+            ArgSpec(
+                "session_id",
+                "str",
+                True,
+                "The session these happened in; an observation with no session "
+                "cannot be joined to its lesson.",
+            ),
+        ),
+        output=(
+            "{ok, error, field, note, written, session_id, observation_ids, "
+            "event_ids, unassisted, coverage_bands{band:count}, "
+            "rubric_versions, rejected[{index, field, error, note}], untrusted}"
+        ),
+        stability="experimental",
+        note=(
+            "All-or-nothing, and nothing is defaulted: one record missing "
+            "task_type, unassisted, coverage_band or rubric_version refuses the "
+            "whole call with every rejection listed under 'rejected'. That is "
+            "the deliberate trade — the observation log is append-only, so a "
+            "batch half-written with one guessed rubric_version corrupts every "
+            "trend line drawn afterwards, while a refusal costs one retry."
+        ),
+    ),
+    ToolSpec(
+        name="log_error",
+        summary="Record one mistake: what was said, what was correct, and the pattern.",
+        args=(
+            ArgSpec("said", "str", True, "What the learner actually produced."),
+            ArgSpec("correct", "str", True, "What it should have been."),
+            ArgSpec(
+                "pattern",
+                "str",
+                True,
+                "The reusable part ('て-form of する', 'counter for flat "
+                "objects'). A mistake logged without one is an anecdote.",
+            ),
+            ArgSpec(
+                "severity",
+                "str",
+                True,
+                "'low' | 'medium' | 'high'. No default: how much this cost is "
+                "not a judgement the tool may make for the learner.",
+            ),
+            ArgSpec(
+                "item_id",
+                "str | None",
+                False,
+                "The item it was about; resolved through the alias table.",
+            ),
+            ArgSpec("session_id", "str | None", False, "The session it happened in."),
+            ArgSpec(
+                "context_envelope_id",
+                "str | None",
+                False,
+                "Staged envelope id for the surrounding line. Untrusted-only — "
+                "it typically comes off a subtitle — so it arrives enveloped "
+                "and confirmed, or not at all.",
+            ),
+        ),
+        output=(
+            "{ok, error, field, note, event_id, session_id, item_id, pattern, "
+            "severity, untrusted}"
+        ),
+        stability="experimental",
+        note=(
+            "Writes one 'error_logged' event; 'said' and 'correct' land in the "
+            "log's answer_given / expected columns, which is the split those "
+            "columns exist for. severity is checked before any envelope is "
+            "unwrapped, so a refusal does not spend the caller's confirmation."
+        ),
+    ),
+    ToolSpec(
+        name="add_vocab",
+        summary="Mine one word: an item row plus a 'mining' event.",
+        args=(
+            ArgSpec(
+                "word",
+                "str",
+                True,
+                "The headword the learner vouches for, so it is trusted text.",
+            ),
+            ArgSpec("reading", "str | None", False, "Kana reading."),
+            ArgSpec(
+                "meaning",
+                "str | None",
+                False,
+                "The learner's working gloss. Recorded in the event payload, "
+                "not on the item: glosses live on the dictionary side, and a "
+                "working translation is a fact about the mining moment.",
+            ),
+            ArgSpec("pos", "str | None", False, "Part of speech."),
+            ArgSpec("topic", "str | None", False, "Home topic for the item."),
+            ArgSpec(
+                "pitch",
+                "int | None",
+                False,
+                "Drop position as an integer (0 = heiban); leave it out when "
+                "unknown rather than guessing.",
+            ),
+            ArgSpec("note", "str | None", False, "A learner-authored note."),
+            ArgSpec(
+                "example_envelope_id",
+                "str | None",
+                False,
+                "Staged envelope id for the anchor sentence. Untrusted-only: it "
+                "is lifted from whatever the learner was watching.",
+            ),
+            ArgSpec("session_id", "str | None", False, "The session it happened in."),
+        ),
+        output=(
+            "{ok, error, field, note, item_id, created, redirected, event_id, "
+            "session_id, word, reading, untrusted}"
+        ),
+        stability="experimental",
+        note=(
+            "The item id is deterministic (w- + sha1(kanji|reading)[:6]), so "
+            "mining the same word twice fills in blanks rather than duplicating "
+            "it, and never overwrites a curated value. Nothing is written to "
+            "the vault — the Obsidian bridge is GET-only, so the topic file "
+            "gets this word when the derived exporters next run."
+        ),
+    ),
+    ToolSpec(
+        name="triage_inbox",
+        summary=(
+            "Propose filings for one inbox note, and apply the vocab ones on "
+            "request."
+        ),
+        args=(
+            ArgSpec(
+                "note_envelope_id",
+                "str",
+                True,
+                "Staged envelope id for the note's text. Untrusted-only: inbox "
+                "captures are copied off web pages, subtitles and screenshots. "
+                "Read the note with the vault tools and stage it — this tool "
+                "reads nothing from the vault itself.",
+            ),
+            ArgSpec(
+                "dry_run",
+                "bool",
+                False,
+                "True (the default) classifies and proposes without writing "
+                "anything, and needs no echo-back. False requires the "
+                "confirmation and files the vocab proposals.",
+            ),
+            ArgSpec("session_id", "str | None", False, "The session it happened in."),
+        ),
+        output=(
+            "{ok, error, field, note, dry_run, proposals[{line, kind, surface, "
+            "hint, why, excerpt, item_id}], applied[{line, item_id, created, "
+            "event_id}], deferred, line_count, truncated, event_id, "
+            "session_id, untrusted}"
+        ),
+        stability="experimental",
+        note=(
+            "Classification is mechanical and reads shape, not meaning: nothing "
+            "in the note is ever treated as an instruction. Only 'vocab' "
+            "proposals are filed; sentence and question proposals come back "
+            "under 'deferred' because a question needs the lesson it belongs to "
+            "and a sentence belongs to the exercise path. Nothing in the vault "
+            "is read, moved or deleted."
+        ),
+    ),
+    ToolSpec(
+        name="gen_exercise",
+        summary=(
+            "Generate drills for studied items, every string screened against "
+            "the sealed canary set."
+        ),
+        args=(
+            ArgSpec(
+                "item_ids",
+                "list[str] | None",
+                False,
+                "Name the material explicitly; ids are resolved through the "
+                "alias table and each redirect is reported.",
+            ),
+            ArgSpec(
+                "topic",
+                "str | None",
+                False,
+                "Narrow the pool to one home topic. Ignored when item_ids is "
+                "given.",
+            ),
+            ArgSpec(
+                "direction",
+                "str | None",
+                False,
+                "One of listen_to_meaning, meaning_to_speech, read_to_meaning, "
+                "cloze_production, shadow — spelled as event.direction spells "
+                "them, so the result can be logged.",
+            ),
+            ArgSpec("count", "int", False, "1 to 20 drills; defaults to 5."),
+        ),
+        output=(
+            "{ok, error, note, exercises[...], requested, returned, direction, "
+            "topic, screened_out[{item_id, code, findings}], skipped[{item_id, "
+            "reason}], redirects[{from, to}], "
+            "canary_sentences_screened_against, canary_bands}"
+        ),
+        stability="experimental",
+        note=(
+            "Reads only. Selection is deterministic (never-drilled first, then "
+            "longest-ago, then by id) so a session's drills can be "
+            "reconstructed from a log. Fails closed: with the canary set "
+            "missing or tampered it refuses "
+            "('canary_set_unavailable' / 'canary_set_tampered') rather than "
+            "generating unscreened drills. An explicitly requested item the "
+            "guard refuses fails the whole call; a pool candidate is dropped "
+            "into screened_out and the next item is tried. A finding names the "
+            "canary id and band, never the sealed sentence."
+        ),
+    ),
+    ToolSpec(
+        name="build_sentences",
+        summary=(
+            "Build practice sentences for target items, from templates or from "
+            "enveloped external material, all canary-screened."
+        ),
+        args=(
+            ArgSpec(
+                "item_ids",
+                "list[str] | None",
+                False,
+                "Target items; ids are resolved through the alias table.",
+            ),
+            ArgSpec("topic", "str | None", False, "Narrow the pool to one home topic."),
+            ArgSpec(
+                "source_envelope_id",
+                "str | None",
+                False,
+                "Staged envelope id for external material to mine lines from. "
+                "There is no string form: unenveloped source is refused.",
+            ),
+            ArgSpec(
+                "challenge_id",
+                "str | None",
+                False,
+                "The challenge this call answers. Omit both this and echo on "
+                "the first call: the result comes back "
+                "'echo_back_required' carrying the challenge to answer.",
+            ),
+            ArgSpec(
+                "echo",
+                "str | None",
+                False,
+                "The external material restated verbatim, answering "
+                "challenge_id. The digest is recomputed from it.",
+            ),
+            ArgSpec(
+                "max_sentences", "int", False, "1 to 20 sentences; defaults to 5."
+            ),
+        ),
+        output=(
+            "{ok, error, note, sentences[{text, target_item_id, origin, "
+            "template, needs_review, untrusted_origin, provenance, "
+            "canary_screened}], requested, returned, topic, screened_out, "
+            "skipped, redirects, source_provenance, "
+            "external_lines_considered, canary_sentences_screened_against, "
+            "canary_bands} — plus 'challenge' when error is 'echo_back_required'"
+        ),
+        stability="experimental",
+        note=(
+            "Reads only; recording what was built is the caller's job, through "
+            "log_observations. Template sentences come from a fixed table keyed "
+            "by coarse part of speech — a part of speech with no template "
+            "yields nothing rather than invented Japanese — and every sentence "
+            "is marked needs_review because it is machine-scaffolded. "
+            "Receptive-only items are skipped: a practice sentence is "
+            "production material. Fails closed on the canary set like "
+            "gen_exercise."
+        ),
+    ),
+)
 
 TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
     _PHASE_A_SPECS + _PHASE_B_SPECS + _PHASE_C_SPECS + _PHASE_D_SPECS

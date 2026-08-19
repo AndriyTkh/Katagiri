@@ -230,8 +230,23 @@ EDIT_BEACON = "cverifybeacon"
 PROSE_TOOL = "search_notes"
 PHASE_C_TOOLS: tuple[str, ...] = (PROSE_TOOL,)
 
+# Phase D (additive): the US1 tool batch, registered on top of Phase C.
+PHASE_D_TOOLS: tuple[str, ...] = (
+    "stage_untrusted",
+    "confirm_untrusted",
+    "start_session",
+    "log_lesson",
+    "lessons",
+    "log_observations",
+    "log_error",
+    "add_vocab",
+    "triage_inbox",
+    "gen_exercise",
+    "build_sentences",
+)
+
 #: The whole contract as of Phase C: additive-only, and asserted as equality.
-CONTRACT_TOOLS = CONTRACT_TOOLS_THROUGH_B | frozenset(PHASE_C_TOOLS)
+CONTRACT_TOOLS = CONTRACT_TOOLS_THROUGH_B | frozenset(PHASE_C_TOOLS) | frozenset(PHASE_D_TOOLS)
 
 
 def _prose_arguments(
