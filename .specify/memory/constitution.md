@@ -1,5 +1,31 @@
 <!--
 Sync Impact Report
+- Version change: 1.1.0 → 1.2.0
+- Amendment: Principle VI (Security Hardening by Default) gains a scoping clause on the
+  Obsidian-proxy sentence. "The plugin's own MCP endpoint is never registered with the
+  agent" scopes to katagiri's own agent surface; it does not reach a separate, disposable
+  agent's direct connection to the plugin's MCP endpoint on a dedicated demo vault (own
+  port, own token, synthetic content) — the specs/005-mcp-assignment homework agent's
+  carve-out. Katagiri's personal-vault GET-only proxy is untouched; no katagiri contract
+  change; no personal REST token reachable from that agent's environment.
+- Rationale for MINOR (not PATCH): the scoping names an explicit carve-out surface
+  (a separate agent, a separate vault) that the prior wording did not address at all —
+  materially expanded guidance on an existing principle, not a restatement of the same
+  scope. No principle was removed or redefined, so not MAJOR.
+- Ledger row filed first per Governance's amendment procedure: D-34 (005 scoping of
+  D-20 — homework agent + dedicated demo vault carve-out; plugin MCP endpoint observed
+  in the T005 spike as Streamable HTTP, plugin v5.1.0, https://127.0.0.1:27124).
+  Reasoning: docs/audit-log.md "005 T006 — Principle VI scoping for the homework agent
+  (2026-08-20)".
+- Added sections: none (existing Principle VI amended in place).
+- Removed sections: none.
+- Templates status: spec/plan/tasks templates are stock speckit 0.16.4; plan-template's
+  Constitution Check gate now resolves against this document. ✅
+- Follow-up TODOs: none.
+
+---
+
+Sync Impact Report (superseded by the entry above — kept for history)
 - Version change: 1.0.0 → 1.1.0
 - Amendment: Principle IV (Study-First, Gated Progression) gains the 006 entry gate —
   contract-touching 006-teaching-method taskgroups (US2–US8) additionally require ≥10
@@ -105,6 +131,15 @@ require echo-back confirmation on such content. Secrets live in `%LOCALAPPDATA%`
 in repo, vault, tool outputs, errors, or the event log. Writes are confined to declared
 roots with server-generated filenames. (D-20, D-21, D-22.)
 
+**005 scoping (additive)**: the sentence above — "the plugin's own MCP endpoint is never
+registered with the agent" — scopes to **katagiri's** agent surface; that prohibition is
+unchanged and remains fully binding there. It does not reach a separate, disposable
+agent's direct connection to the plugin's MCP endpoint on a **dedicated demo vault**: own
+port, own token, synthetic content, no personal data ever in scope. This carve-out is the
+entire concession — katagiri's personal-vault GET-only proxy stays untouched, no katagiri
+contract change results, and no personal REST token is ever reachable from that agent's
+environment. (D-20, D-34.)
+
 ### VII. Tool-Contract Stability
 
 The tool registry (name, args, output shape, stability tier) is checked in. After the
@@ -154,4 +189,4 @@ materially expanded guidance, PATCH for clarifications. Every plan's Constitutio
 gates against the current version; violations require a Complexity Tracking entry or a
 scope cut.
 
-**Version**: 1.1.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-20
+**Version**: 1.2.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-20
