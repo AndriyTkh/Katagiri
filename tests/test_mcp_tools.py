@@ -144,6 +144,26 @@ def study_days(conn: sqlite3.Connection, days: list[str], minutes: int = 30) -> 
         )
 
 
+def seed_probe_battery(conn: sqlite3.Connection, *, day: str = TODAY) -> None:
+    """A probe battery event plus an unassisted pass-rate over two coverage bands.
+
+    Since T021 the probe battery is one of the two criteria that gate ``pass``,
+    not a flag reported beside it, so a test whose subject is the *day count* has
+    to satisfy the probe criterion to reach a PASS at all. The probe criterion
+    itself is exercised in ``tests/test_stop_gate_d6.py``.
+    """
+    seed_event(conn, day=day, type=mcp_server.PROBE_EVENT_TYPE)
+    for band in (">=95", "80-95"):
+        conn.execute(
+            """
+            INSERT INTO observation (id, ts, session_id, item_id, task_type,
+                                     unassisted, coverage_band, rubric_version)
+            VALUES (?, ?, 'probe-session', 'w-1', 'produce', 1, ?, 'r1')
+            """,
+            (events.new_ulid(), f"{day}{TS}", band),
+        )
+
+
 def days_back(count: int, *, end: str = TODAY, skip: set[str] | None = None) -> list[str]:
     """``count`` consecutive calendar days ending at ``end``, newest last."""
     from datetime import date, timedelta
@@ -1334,6 +1354,7 @@ def test_lookup_reports_found_false_when_jmdict_is_not_imported(db):
 
 def test_stop_gate_passes_with_fourteen_study_days_in_eighteen(db):
     study_days(db, days_back(14))
+    seed_probe_battery(db)
 
     gate = mcp_server.stop_gate(db, today=TODAY)
 
@@ -1361,6 +1382,7 @@ def test_stop_gate_fails_with_thirteen_and_names_the_count(db):
 def test_stop_gate_counts_days_outside_the_window_not_at_all(db):
     study_days(db, days_back(14))  # 2026-08-06 .. 2026-08-19, all inside
     study_days(db, days_back(4, end="2026-08-01"))  # 2026-07-29 .. 08-01, outside
+    seed_probe_battery(db)
 
     gate = mcp_server.stop_gate(db, today=TODAY)
     assert gate["window_start"] == "2026-08-02"
@@ -1376,6 +1398,7 @@ def test_stop_gate_counts_days_outside_the_window_not_at_all(db):
 
 def test_short_sessions_only_count_when_the_day_reaches_ten_minutes(db):
     study_days(db, days_back(13))
+    seed_probe_battery(db)
     thin_day = "2026-08-05"
     seed_event(db, day=thin_day, type=events.STUDY_LOG_TYPE, payload={"minutes": 5})
     assert mcp_server.stop_gate(db, today=TODAY)["study_days_in_window"] == 13
@@ -1393,6 +1416,7 @@ def test_short_sessions_only_count_when_the_day_reaches_ten_minutes(db):
 )
 def test_a_single_artifact_event_makes_a_study_day(db, artifact_type):
     study_days(db, days_back(13))
+    seed_probe_battery(db)
     seed_event(db, day="2026-08-04", type=artifact_type, item_id="w-1")
 
     gate = mcp_server.stop_gate(db, today=TODAY)
@@ -1419,6 +1443,7 @@ def test_declared_pause_leaves_the_window_out_of_paused_days(db):
         payload={"start_day": "2026-08-10", "end_day": "2026-08-14"},
     )
     study_days(db, days_back(14, skip=paused))
+    seed_probe_battery(db)
 
     gate = mcp_server.stop_gate(db, today=TODAY)
 
@@ -1474,6 +1499,7 @@ def test_stop_gate_tool_reads_the_configured_database(db):
     # The tool takes no arguments and uses the real clock, so the seed is built
     # relative to today rather than to this module's fixed date.
     study_days(db, days_back(14, end=date.today().isoformat()))
+    seed_probe_battery(db, day=date.today().isoformat())
 
     gate = mcp_server.stop_gate_status()
 

@@ -234,9 +234,9 @@ Everything not listed here means what its name says.
   historical zone on every query is both slow and fragile.
 - **`type` has no CHECK constraint.** The vocabulary is open (`review`,
   `review_batch`, `study_session`, `mark_known`, `regen_yomitan`,
-  `lesson_close`, `seek`, `mining`, `tombstone_session`, …) and a new tool must
-  not require a migration to log its own events. `direction` and `grade` *are*
-  constrained, because those are scoring inputs.
+  `lesson_close`, `seek`, `mining`, `tombstone_session`, `gate_evaluation`, …)
+  and a new tool must not require a migration to log its own events. `direction`
+  and `grade` *are* constrained, because those are scoring inputs.
 - **`item_id` has no foreign key.** An event may reference an id that was later
   renamed (resolve via `alias`) or an item that no longer exists. History must
   not be rewritten to satisfy a constraint.
@@ -253,6 +253,51 @@ Everything not listed here means what its name says.
   fire BEFORE DELETE triggers — so a replace on `event.id` or `event.dedupe_key`
   would quietly overwrite logged history instead of aborting. Verified for both
   `event` and `observation` in `tests/test_db.py`.
+
+#### Event types the D6 stop gate counts
+
+`type` is unconstrained, which makes these particular strings a contract rather
+than a convention: `src/katagiri/stop_gate.py` selects on them by name, so a typo
+stops the gate counting instead of failing. The set is closed in code
+(`ARTIFACT_EVENT_REASONS`) and pinned by `tests/test_stop_gate_d6.py`; "at least
+one logged artifact" means exactly this list and nothing adjacent to it.
+
+| `type` | What the gate does with it | Why |
+| --- | --- | --- |
+| `study_session` | Sums `payload.minutes` per `day_key`; ≥ 10 minutes makes a study day. | The only type that carries time. |
+| `mark_known` | One event makes the `day_key` a study day. | A known/unknown/suspect verdict on an item is dated and durable. |
+| `mark_unknown` | One event makes the `day_key` a study day. | Same verdict, other direction — still a decision that was made. |
+| `mark_suspect` | One event makes the `day_key` a study day. | Flagging an item as shaky is a judgement about it, logged. |
+| `review` | One event makes the `day_key` a study day. | One answered review is a scored attempt that happened. |
+| `review_batch` | One event makes the `day_key` a study day. | A batch of reviews, collapsed by the writer into one event. |
+| `lesson_close` | One event makes the `day_key` a study day. | A lesson with an objective and a next step, closed. |
+| `mining` | One event makes the `day_key` a study day. | Material extracted from real input and added to the study set. |
+| `pause_declared` | Removes its days from the window's *denominator*. | A declared illness or travel pause costs the learner nothing. |
+| `probe_battery` | Its existence is one half of the probe criterion. | A battery is a run, not a row: the event says it happened. |
+| `gate_evaluation` | The gate's own verdict history; two consecutive failures trigger a re-plan. | A trigger needs a record, not an opinion. |
+
+Deliberately **not** artifacts (`NON_ARTIFACT_EVENT_TYPES`): `session_open`,
+`lesson_open` — opening something is an intention, not an artifact — plus `seek`,
+`regen_yomitan`, `sensei_letter`, `tombstone_session`, and the three gate types
+above. None of them may buy a study day.
+
+Three of these are *parsed*, not just counted, so their `payload` shape is part
+of the schema rather than of one module:
+
+| `type` | Written by | Payload keys | Unreadable payload |
+| --- | --- | --- | --- |
+| `study_session` | `events.import_study_log` | `minutes` (number or numeric string), `activities`, `items_mined`, `notes`, `source`. | The day contributes no minutes; other types on that day still count. |
+| `pause_declared` | The learner, out of band | Either `days` (list of `YYYY-MM-DD`) **or** a start/end pair (`start_day`/`from_day`/`start`/`from` + optional `end_day`/`to_day`/`end`/`to`, span ≤ 365 days). | Reported by id in `ignored_pause_events`; excuses nothing. A typo must not silently fail the gate. |
+| `gate_evaluation` | `stop_gate.stop_gate`, on every evaluation | `pass` (bool — the only key read back), `failing_criterion` (string or null), `failing_criteria` (list), `consecutive_failures`, `re_plan_triggered`, `study_days_in_window`, `required_study_days`, `window_start`, `window_end`, `probe_battery_recorded`, `probe_coverage_bands`, `probe_unassisted_rate`. | Reported by id in `ignored_gate_events` and ends the failure run: "cannot tell" is not "failed". |
+
+- **`gate_evaluation` is appended by a status read.** `stop_gate_status` looks
+  like a pure query and is one, except for this: the two-miss re-plan trigger
+  cannot exist without a persisted verdict history, and a history that only some
+  callers write is worse than none. The event is appended *after* the verdict is
+  computed, so `consecutive_failures` is the prior run plus one and never reads
+  its own row. `session_id` is the constant `stop-gate`; `day_key` is when the
+  evaluation ran, while `window_end` in the payload is the day it was evaluated
+  *for* (they differ only when a caller overrides the clock, as tests do).
 
 ### `observation`
 
