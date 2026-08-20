@@ -211,7 +211,7 @@ def _payload(raw: object) -> dict[str, Any]:
 def _number(value: object) -> float | None:
     """A non-negative number from a free-form payload field, else ``None``.
 
-    Matches ``mcp_server._minutes``: ``True`` is not 1, ``"45"`` is 45, "about an
+    Matches ``stop_gate._minutes``: ``True`` is not 1, ``"45"`` is 45, "about an
     hour" is unusable, and a negative figure is refused rather than subtracted.
     """
     if isinstance(value, bool):
