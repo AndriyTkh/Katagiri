@@ -152,3 +152,50 @@ pipe/socket bridge to the running process, or (b) katagiri's own launch
 being driven directly by the graph's own subprocess call outside
 `MultiServerMCPClient`'s pool management. Record whichever is chosen in
 TG-C's transport plan if this is ever exercised for real.
+
+## Existing-server spike (T005)
+
+`scripts/spike_existing.py` reaches the **Obsidian** side of `config.py` in
+isolation (no katagiri process, no LangGraph): it builds only the
+`obsidian` connection from `obsidian_connection()`, lists tools
+(discovery), then calls exactly one read-only tool chain — `vault_list`
+(enumerate the vault) followed by `vault_read` on the first `.md` entry.
+It refuses to call anything write-shaped (`vault_append`/`vault_copy`/
+`vault_delete`/`vault_move`/`vault_patch`/`vault_write`/`command_execute`)
+via a name-based allowlist/denylist, and never prints token values or note
+content — only presence, counts, and a one-line path+byte-count receipt.
+
+Run it with:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+cd agent
+uv run python scripts/spike_existing.py
+```
+
+**Result: GREEN.** Run 2026-08-20, against the real personal vault
+(`docs/katagiri/katagiri`), independent of the graph:
+
+- **Variant reached**: the plugin's built-in Streamable HTTP `/mcp/`
+  endpoint (`obsidian-local-rest-api` v5.1.0), **not** a stdio wrapper —
+  `https://127.0.0.1:27124/mcp/`. The insecure HTTP port (27123) is
+  disabled on this install, so HTTPS is the only reachable path here.
+- **Cert handling**: self-signed-cert path exercised for real via
+  `OBSIDIAN_VERIFY_TLS=false` (the escape hatch in `config.py`'s
+  `_httpx_client_factory`) — TLS handshake and request both succeeded.
+- **Discovery**: 16 tools listed (`vault_list`, `vault_read`,
+  `vault_write`, `vault_append`, `vault_patch`, `vault_move`,
+  `vault_delete`, `vault_copy`, `vault_get_document_map`, `tag_list`,
+  `search_query`, `search_simple`, `active_file_get_path`, `open_file`,
+  `command_list`, `command_execute`).
+- **One successful call**: `vault_list` then `vault_read` — receipt
+  `ARCHITECTURE.md` (23172 bytes), no content printed.
+
+Full detail, including the open T001 question this doesn't close and the
+OpenWeather contingency terms, is in
+`docs/assignment/part-a-server-decision.md`.
+
+**How to switch variants**: set `OBSIDIAN_TRANSPORT=stdio` in `agent/.env`
+and point `OBSIDIAN_STDIO_COMMAND`/`OBSIDIAN_STDIO_ARGS` at a stdio
+wrapper — `config.py`'s `obsidian_connection()` is the only branch point,
+so no graph code changes either way.
