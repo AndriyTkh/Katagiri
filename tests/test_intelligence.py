@@ -708,10 +708,14 @@ def test_unclosed_fence_is_parsed_and_reported():
 
 
 def test_the_real_curriculum_parses_into_the_phase_one_diagram():
-    """Read the learner's own file: the arrow diagram is the only real edge source."""
+    """Read the learner's own file: Phase-1 arrow diagram plus Phase-0 kana node blocks."""
     parsed = parse_curriculum(REAL_CURRICULUM.read_text(encoding="utf-8"))
-    pairs = {(edge.from_id, edge.to_id) for edge in parsed.edges}
-    assert pairs == {
+    diagram_pairs = {
+        (edge.from_id, edge.to_id)
+        for edge in parsed.edges
+        if edge.source == SOURCE_DIAGRAM
+    }
+    assert diagram_pairs == {
         ("g-desu-copula", "g-wa-topic"),
         ("g-wa-topic", "g-o-object"),
         ("g-o-object", "g-masu-form"),
@@ -720,9 +724,14 @@ def test_the_real_curriculum_parses_into_the_phase_one_diagram():
         ("g-wa-topic", "g-question-ka"),
     }
     assert all(edge.edge_type == EDGE_PREREQ for edge in parsed.edges)
-    assert all(edge.source == SOURCE_DIAGRAM for edge in parsed.edges)
+    # The Phase-0 kana rows (006 T004) declare node blocks with prereq edges.
+    node_block_edges = [e for e in parsed.edges if e.source == SOURCE_NODE_BLOCK]
+    assert len(node_block_edges) == 24
+    assert len(parsed.nodes) == 13
+    assert all(
+        node.id.startswith(("g-hiragana-", "g-katakana-")) for node in parsed.nodes
+    )
     # The documented g-0003 example is under "Node format" and must not import.
-    assert parsed.nodes == ()
     assert any("Node format" in note for note in parsed.skipped)
 
 

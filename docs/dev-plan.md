@@ -275,6 +275,20 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   unchanged code; only the trigger path differed from the schtasks-run path this once. Query
   and delete for reference: `schtasks /Query /TN "Katagiri Daily Backup"`,
   `schtasks /Delete /TN "Katagiri Daily Backup" /F`.
+  **Follow-up (same day)**: the task action was re-pointed at the direct interpreter
+  (`"C:\ProjectsC\RandomPr\Katagiri\.venv\Scripts\python.exe" -m katagiri.backup create`) to
+  drop the fragile `uv run` sync step. Two schtasks-triggered test runs then returned Last
+  Result 0 but wrote **466,944-byte snapshots of the wrong database** (52 tables, 1 event, no
+  JMdict — not `%LOCALAPPDATA%\Katagiri\katagiri.db`, which is 83 MB); a plain diagnostic
+  script under the same trigger exited 2 without running. Interactive runs of the identical
+  command produce correct 78 MB snapshots every time. Root cause not yet isolated (the task
+  was created without a stored password — "Interactive only" logon with the empty-password
+  policy warning — so the scheduled security context/environment is degraded). The two bogus
+  snapshots were quarantined to `%LOCALAPPDATA%\Katagiri\scratch\quarantine\` because they
+  competed with real snapshots for the retention window (`prune_backups` keeps newest N by
+  stem). **Until the scheduled context is fixed, treat the 21:00 task as unverified and take
+  manual snapshots around risky operations; `backup.py` also needs a sanity guard that refuses
+  to snapshot a source DB that looks empty when a real one is expected.**
 
 - **Single-writer discipline (specs/006 TG0 T007)** — one authoritative frontend process (MCP
   server or CLI) touches the learner DB per day; SQLite WAL plus `db.connect()`'s
