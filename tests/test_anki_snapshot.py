@@ -953,6 +953,69 @@ def test_a_corrupt_collection_fails_loudly_and_writes_nothing(conn, anki_dir, da
     assert conn.execute("SELECT COUNT(*) FROM mirror_meta").fetchone()[0] == 0
 
 
+def add_unicase_name_index(path: Path) -> Path:
+    """Add a real index collated with Anki's own 'unicase' sequence.
+
+    ``_DECKS_DDL``/``_NOTETYPES_DDL`` already declare ``name`` as
+    ``collate unicase`` (see the comment above them), but a column-level
+    collation alone does not make ``PRAGMA integrity_check`` resolve it — only
+    an *index* ordered by that collation does, because integrity_check walks
+    index b-trees and must compare keys to verify they are sorted. Real Anki
+    creates exactly such a unique index over ``decks.name`` (to enforce
+    case-insensitive uniqueness); this reproduces that with the smallest
+    possible addition to the existing fixture.
+    """
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    conn.create_collation("unicase", _unicase)
+    try:
+        conn.execute("CREATE UNIQUE INDEX idx_decks_name ON decks (name)")
+    finally:
+        conn.close()
+    return path
+
+
+def test_a_unicase_collated_index_is_not_misdiagnosed_as_corrupt(conn, anki_dir):
+    """Modern (Rust-backend) Anki indexes with its own 'unicase' collation.
+
+    Python's sqlite3 has no native definition for it, so without a registered
+    fallback even ``PRAGMA integrity_check`` on a perfectly healthy schema-18
+    collection fails with "no such collation sequence: unicase" — which is not
+    evidence of a corrupt collection, and the snapshot must not misreport it
+    as one.
+    """
+    path = add_unicase_name_index(
+        build_collection(anki_dir / "User 1" / "collection.anki2", ver=18)
+    )
+
+    result = snapshot_anki(conn, collection_path=path)
+
+    assert result.schema_version == 18
+    assert (result.cards, result.notes) == (len(CARDS), len(NOTES))
+
+
+def test_a_genuinely_unresolvable_collation_still_says_collation_not_corruption(
+    conn, anki_dir, monkeypatch
+):
+    """If some other, unregistered collation still slips through, the error
+    must name the real cause rather than repeating the generic corruption
+    verdict this same PRAGMA gives for actual damage."""
+    path = add_unicase_name_index(
+        build_collection(anki_dir / "User 1" / "collection.anki2", ver=18)
+    )
+    monkeypatch.setattr(
+        anki_snapshot, "_register_fallback_collations", lambda conn: None
+    )
+
+    with pytest.raises(AnkiIntegrityError, match="collation") as excinfo:
+        snapshot_anki(conn, collection_path=path)
+
+    # The misdiagnosis this fix removes: real damage says "appears corrupt"
+    # and sends the learner to Anki's Check Database, which would find
+    # nothing wrong here.
+    assert "appears corrupt" not in str(excinfo.value)
+    assert conn.execute("SELECT COUNT(*) FROM anki_cards").fetchone()[0] == 0
+
+
 @pytest.mark.parametrize("ver", [0, 3, 12, 17, 19, 99])
 def test_an_unsupported_schema_version_is_refused(conn, anki_dir, ver):
     path = build_collection(anki_dir / "User 1" / "collection.anki2", ver=ver)

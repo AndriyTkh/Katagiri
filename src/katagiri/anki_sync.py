@@ -100,6 +100,7 @@ from katagiri.anki_snapshot import (
     AnkiCollectionNotFoundError,
     AnkiSnapshotError,
     MirrorResult,
+    _register_fallback_collations,
     find_collection,
     snapshot_anki,
 )
@@ -355,6 +356,14 @@ def _copy_collection(source: Path, scratch_dir: Path) -> tuple[Path, bool]:
     return destination, had_journal
 
 
+# _register_fallback_collations lives in katagiri.anki_snapshot (imported
+# above) rather than here: this module already depends on that one for
+# snapshot_anki et al., so it is the upstream side of that dependency, and a
+# collation fallback the mirror's own connections need is exactly the kind of
+# thing that module should own once instead of each foreign-database reader
+# growing its own copy. See its docstring for why the fallback exists at all.
+
+
 def _recover_journal(copy_path: Path, origin: Path) -> None:
     """Fold the copied WAL into the copy, so ``immutable=1`` sees it.
 
@@ -376,6 +385,7 @@ def _recover_journal(copy_path: Path, origin: Path) -> None:
             f"recover its journal: {exc}. The file may be damaged."
         ) from exc
     try:
+        _register_fallback_collations(conn)
         conn.execute("PRAGMA journal_mode = DELETE")
     except sqlite3.Error as exc:
         raise AnkiSyncError(
@@ -391,6 +401,20 @@ def _check_integrity(conn: sqlite3.Connection, origin: Path) -> None:
     try:
         rows = conn.execute("PRAGMA integrity_check").fetchall()
     except sqlite3.DatabaseError as exc:
+        if "no such collation sequence" in str(exc).lower():
+            # Not corruption: a collation the writer (Anki's Rust backend)
+            # defined and this reader has not registered a fallback for.
+            # _register_fallback_collations should already cover this by the
+            # time integrity_check runs; reaching here means the schema named
+            # one it could not enumerate.
+            raise AnkiSyncError(
+                f"PRAGMA integrity_check could not run on the copy of the "
+                f"Anki collection {origin}: {exc}. The collection is not "
+                "corrupt; this reader is missing a fallback for a SQLite "
+                "collating sequence the copy's schema references. Add that "
+                "collation's name to "
+                "anki_snapshot._register_fallback_collations."
+            ) from exc
         # A badly damaged file fails here rather than reporting problems: SQLite
         # cannot even walk the b-tree. Same verdict either way.
         raise AnkiSyncError(
@@ -433,6 +457,7 @@ def read_revlog(source: Path | str, after_id: int = 0) -> list[tuple[int, int, i
 
         read_conn = sqlite3.connect(_immutable_uri(copy_path), uri=True)
         try:
+            _register_fallback_collations(read_conn)
             _check_integrity(read_conn, origin)
             names = {
                 str(row[0])

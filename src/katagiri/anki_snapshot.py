@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -347,6 +348,68 @@ def _immutable_uri(path: Path) -> str:
     return f"file:{quote(path.as_posix(), safe='/:')}?mode=ro&immutable=1"
 
 
+#: SQLite's own built-in collations; anything else named in the schema is
+#: something the *writer* registered, and the reader must match it or fail.
+#: Shared with :mod:`katagiri.anki_sync`, which imports this and
+#: :func:`_register_fallback_collations` rather than keeping its own copy —
+#: this module already owns every other read of a collection copy, and
+#: ``anki_sync`` already depends on it for :func:`snapshot_anki` et al.
+_BUILTIN_COLLATIONS: Final = {"binary", "nocase", "rtrim"}
+
+_COLLATE_RE = re.compile(r"COLLATE\s+[\"'\[]?(\w+)", re.IGNORECASE)
+
+
+def _unicase_fallback(a: Any, b: Any) -> int:
+    """Case-insensitive ordering, standing in for a collation this reader has
+    no native definition for.
+
+    Modern Anki (the Rust backend) creates at least one index — and, on some
+    schema versions, more — collated with its own ``unicase`` sequence, which
+    Python's ``sqlite3`` does not ship. Without *some* definition registered,
+    even opening a read-only connection to such a collection fails, since
+    SQLite must resolve every named collation an index references before it
+    can validate that index. ``casefold`` is not byte-identical to Anki's own
+    Unicode case-folding, but this reader never writes through it — it only
+    needs an ordering good enough for ``PRAGMA integrity_check`` and any
+    ``ORDER BY``/comparison that touches a unicase-collated column, and a
+    close approximation there cannot corrupt anything.
+    """
+    key_a = a.casefold() if isinstance(a, str) else a
+    key_b = b.casefold() if isinstance(b, str) else b
+    return (key_a > key_b) - (key_a < key_b)
+
+
+def _register_fallback_collations(conn: sqlite3.Connection) -> None:
+    """Register a fallback for every named collation the copy's schema uses
+    that Python's ``sqlite3`` doesn't already know, plus ``unicase`` itself
+    unconditionally.
+
+    Enumerating ``sqlite_master`` rather than hardcoding just ``unicase``
+    means a collation Anki adds in some future schema version is covered the
+    same way, without another round of a misdiagnosed "corrupt collection".
+    The enumeration is best-effort: if it cannot run, ``unicase`` — the one
+    named collation every real Anki collection actually uses — is still
+    registered.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE sql LIKE '%COLLATE%'"
+        ).fetchall()
+    except sqlite3.DatabaseError:
+        rows = ()
+    names = {
+        match.group(1)
+        for row in rows
+        if row[0]
+        for match in _COLLATE_RE.finditer(row[0])
+    }
+    names.add("unicase")
+    for name in names:
+        if name.lower() in _BUILTIN_COLLATIONS:
+            continue
+        conn.create_collation(name, _unicase_fallback)
+
+
 def _copy_collection(source: Path, scratch_dir: Path) -> tuple[Path, bool]:
     """Copy ``source`` (then its journal siblings) into ``scratch_dir``.
 
@@ -402,6 +465,7 @@ def _recover_journal(copy_path: Path) -> None:
             f"recover its journal: {exc}. The collection file may be damaged."
         ) from exc
     try:
+        _register_fallback_collations(conn)
         conn.execute("PRAGMA journal_mode = DELETE")
     except sqlite3.Error as exc:
         raise AnkiIntegrityError(
@@ -422,6 +486,19 @@ def _check_integrity(conn: sqlite3.Connection, copy_path: Path) -> None:
     try:
         rows = conn.execute("PRAGMA integrity_check").fetchall()
     except sqlite3.DatabaseError as exc:
+        if "no such collation sequence" in str(exc).lower():
+            # Not corruption: a collation the writer (Anki's Rust backend)
+            # defined and this reader has not registered a fallback for.
+            # _register_fallback_collations should already cover this by the
+            # time integrity_check runs; reaching here means the schema named
+            # one it could not enumerate.
+            raise AnkiIntegrityError(
+                f"PRAGMA integrity_check could not run on the copy of the "
+                f"Anki collection ({copy_path}): {exc}. The collection is not "
+                "corrupt; this reader is missing a fallback for a SQLite "
+                "collating sequence the copy's schema references. Add that "
+                "collation's name to anki_snapshot._register_fallback_collations."
+            ) from exc
         # Badly damaged files fail here rather than reporting problems: SQLite
         # cannot even walk the b-tree. Same verdict either way.
         raise AnkiIntegrityError(
@@ -894,6 +971,7 @@ def snapshot_anki(
 
         read_conn = sqlite3.connect(_immutable_uri(copy_path), uri=True)
         try:
+            _register_fallback_collations(read_conn)
             _check_integrity(read_conn, copy_path)
             version = _read_schema_version(read_conn, copy_path)
             card_rows, note_rows, crt = _extract(read_conn, version, copy_path)

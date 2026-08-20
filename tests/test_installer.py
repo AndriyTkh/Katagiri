@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from katagiri import db as katagiri_db
+
 _INSTALLER_PATH = Path(__file__).resolve().parent.parent / "src" / "katagiri" / "installer.py"
 
 
@@ -249,15 +251,17 @@ def test_validate_secret_value_accepts_plain_token():
 
 
 def test_check_obsidian_connection_with_invalid_token_raises_nothing(monkeypatch, capsys):
-    """RED #1: a token with a control char must never reach urlopen (which
-    would raise ValueError quoting the raw value), and the value must not
-    appear anywhere in the returned message or on stdout/stderr."""
+    """RED #1: a token with a control char must never reach obsidian_proxy
+    (which would attempt an actual request), and the value must not appear
+    anywhere in the returned message or on stdout/stderr."""
     bad_token = "bad\ntoken\x01with-control-chars"
+
+    import katagiri.obsidian_proxy as obsidian_proxy
 
     def boom(*a, **k):
         raise AssertionError("must not attempt a network call for an invalid token")
 
-    monkeypatch.setattr(installer.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(obsidian_proxy, "list_vault_dir", boom)
 
     ok, detail = installer.check_obsidian_connection(bad_token)
 
@@ -268,21 +272,72 @@ def test_check_obsidian_connection_with_invalid_token_raises_nothing(monkeypatch
     assert bad_token not in captured.err
 
 
-def test_check_obsidian_connection_catches_valueerror_from_urlopen(monkeypatch):
-    """Belt-and-braces path: even if validation somehow let something through,
-    a ValueError raised deep inside urlopen must be caught and replaced with a
-    generic, value-free message."""
-    token = "looks-fine-but-urlopen-blows-up"
+def test_check_obsidian_connection_uses_the_obsidian_proxy_seam(monkeypatch):
+    """The bridge check must go through ``katagiri.obsidian_proxy`` -- the
+    package's one allowed HTTP client -- rather than opening a socket itself.
+    Mocking the proxy's ``list_vault_dir`` and asserting on its return value
+    is what replaces the old direct ``urlopen`` mock now that installer.py
+    has no HTTP client of its own (see test_bverify.py /
+    test_only_the_obsidian_proxy_is_an_http_client, which this file must not
+    break)."""
+    token = "looks-fine-token"
 
-    def raise_value_error(*a, **k):
-        raise ValueError(f"header value contains secret {token} and a newline")
+    import katagiri.obsidian_proxy as obsidian_proxy
 
-    monkeypatch.setattr(installer.urllib.request, "urlopen", raise_value_error)
+    calls = []
+
+    def fake_list_vault_dir():
+        calls.append(True)
+        return {
+            "ok": True,
+            "status": 200,
+            "error": None,
+            "note": "",
+            "files": [],
+            "file_count": 0,
+            "truncated": False,
+            "path": "",
+        }
+
+    monkeypatch.setattr(obsidian_proxy, "list_vault_dir", fake_list_vault_dir)
+
+    ok, detail = installer.check_obsidian_connection(token)
+
+    assert ok is True
+    assert "200" in detail
+    assert calls == [True]
+
+
+def test_check_obsidian_connection_passes_through_a_proxy_failure_note(monkeypatch):
+    """Belt-and-braces path: ``obsidian_proxy`` itself absorbs a header-safety
+    failure (or any other request failure) into a fixed, value-free note --
+    that is asserted against ``obsidian_proxy`` directly in
+    tests/test_obsidian_proxy.py. All this checks is that the installer
+    surfaces that note unchanged rather than losing it or re-deriving its own,
+    and that the token never appears in it even if the mock were sloppy."""
+    token = "looks-fine-but-proxy-fails"
+
+    import katagiri.obsidian_proxy as obsidian_proxy
+
+    def fake_list_vault_dir():
+        return {
+            "ok": False,
+            "status": None,
+            "error": obsidian_proxy.UNCONFIGURED,
+            "note": obsidian_proxy.TOKEN_UNUSABLE_NOTE,
+            "files": [],
+            "file_count": 0,
+            "truncated": False,
+            "path": "",
+        }
+
+    monkeypatch.setattr(obsidian_proxy, "list_vault_dir", fake_list_vault_dir)
 
     ok, detail = installer.check_obsidian_connection(token)
 
     assert ok is False
     assert token not in detail
+    assert detail == obsidian_proxy.TOKEN_UNUSABLE_NOTE
 
 
 def test_step_obsidian_reports_action_needed_for_invalid_token(tmp_path):
@@ -335,6 +390,49 @@ def test_step_md_search_skips_when_vault_path_unset(tmp_path, monkeypatch):
     monkeypatch.setattr(installer.subprocess, "run", boom)
     result = installer.step_md_search(cfg)
     assert result.status == "SKIP"
+
+
+def test_step_search_indexes_runs_stamp_before_fts_before_md(tmp_path, monkeypatch):
+    """On a fresh DB, fts_index/md_search rebuild raise VersionsNotStampedError
+    until ``katagiri.tokenizer stamp`` has run once; the combined search-index
+    step must therefore call stamp first, and only then the two rebuilds, in
+    that order."""
+    cfg = _raw_config(tmp_path, vault_path=tmp_path / "vault")
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    result = installer.step_search_indexes(cfg)
+
+    assert result.status == "OK"
+    assert len(calls) == 3
+    assert calls[0] == installer.tokenizer_stamp_argv()
+    assert calls[1] == installer.fts_index_argv()
+    assert calls[2] == installer.md_search_argv(cfg.vault_path)
+
+
+def test_step_search_indexes_skips_both_rebuilds_when_stamp_fails(tmp_path, monkeypatch):
+    """If stamping fails (e.g. the vendored dictionary is missing), neither
+    rebuild is attempted -- both would fail the same way, less usefully."""
+    cfg = _raw_config(tmp_path, vault_path=tmp_path / "vault")
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[-1] == "stamp":
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="vendor missing")
+        raise AssertionError("must not rebuild an index when stamping failed")
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    result = installer.step_search_indexes(cfg)
+
+    assert result.status == "ACTION NEEDED"
+    assert "vendor missing" in result.detail
+    assert len(calls) == 1
+    assert calls[0] == installer.tokenizer_stamp_argv()
 
 
 def test_step_obsidian_skips_when_token_unset(tmp_path):
@@ -409,6 +507,12 @@ def test_jmdict_import_argv_uses_current_interpreter():
 
 def test_anki_sync_argv():
     assert installer.anki_sync_argv() == [sys.executable, "-m", "katagiri.anki_sync", "run"]
+
+
+def test_tokenizer_stamp_argv():
+    assert installer.tokenizer_stamp_argv() == [
+        sys.executable, "-m", "katagiri.tokenizer", "stamp"
+    ]
 
 
 def test_fts_index_argv():
@@ -552,6 +656,127 @@ def test_probe_anki_missing_when_set_but_not_synced(tmp_path):
     cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "anki")
     status = installer.probe_anki(cfg)
     assert status.status == "MISSING"
+    assert "not synced yet" in status.detail
+
+
+def test_probe_anki_missing_on_a_migrated_but_never_synced_db(tmp_path):
+    """A real (migrated) database with no ``mirror_meta`` row must still read
+    as MISSING -- the tri-state fix must not accidentally treat "the table
+    exists" as "a sync happened"."""
+    db_path = tmp_path / "katagiri.db"
+    katagiri_db.open_db(db_path).close()
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "anki", db_path=db_path)
+    status = installer.probe_anki(cfg)
+    assert status.status == "MISSING"
+    assert "not synced yet" in status.detail
+
+
+def test_probe_anki_ready_after_sync_on_an_empty_collection(tmp_path):
+    """RED: a successful ``anki_sync run`` against a genuinely empty Anki
+    collection stamps ``mirror_meta`` (via ``snapshot_anki``, unconditionally)
+    but never writes the revlog cursor (``anki_sync.sync_anki`` only persists
+    that once there is at least one day of reviews to append). The probe must
+    read this as READY with an empty-collection message, not MISSING."""
+    db_path = tmp_path / "katagiri.db"
+    conn = katagiri_db.open_db(db_path)
+    conn.execute(
+        "INSERT INTO mirror_meta(id, snapshot_ts, collection_mtime, "
+        "anki_schema_version) VALUES (1, '2026-01-01T00:00:00Z', NULL, NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "anki", db_path=db_path)
+    status = installer.probe_anki(cfg)
+    assert status.status == "READY"
+    assert status.detail == "synced (empty collection, 0 cards)"
+
+
+def test_probe_anki_ready_with_cards_after_sync(tmp_path):
+    db_path = tmp_path / "katagiri.db"
+    conn = katagiri_db.open_db(db_path)
+    conn.execute(
+        "INSERT INTO mirror_meta(id, snapshot_ts, collection_mtime, "
+        "anki_schema_version) VALUES (1, '2026-01-01T00:00:00Z', NULL, NULL)"
+    )
+    conn.execute(
+        "INSERT INTO anki_cards(card_id, note_id, deck, ivl, due, reps, "
+        "lapses, mod) VALUES (1, 1, 'Default', 30, 100, 5, 0, 0)"
+    )
+    conn.execute(
+        "INSERT INTO anki_cards(card_id, note_id, deck, ivl, due, reps, "
+        "lapses, mod) VALUES (2, 1, 'Default', 10, 50, 2, 1, 0)"
+    )
+    conn.commit()
+    conn.close()
+
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "anki", db_path=db_path)
+    status = installer.probe_anki(cfg)
+    assert status.status == "READY"
+    assert status.detail == "2 cards"
+
+
+# ---------------------------------------------------------------------------
+# probe_fts: built-but-empty vs. never-built (both are 0 rows)
+# ---------------------------------------------------------------------------
+
+
+def test_probe_fts_missing_when_db_absent(tmp_path):
+    status = installer.probe_fts(tmp_path / "katagiri.db")
+    assert status.status == "MISSING"
+    assert "not built yet" in status.detail
+
+
+def test_probe_fts_missing_when_not_yet_stamped(tmp_path):
+    """A real, migrated database that has never run ``katagiri.tokenizer
+    stamp`` (and therefore never successfully rebuilt the index, since
+    ``fts_index.current_versions`` refuses without it) must read as MISSING,
+    even though ``sentence_text`` and the metadata table both already exist
+    from migration."""
+    db_path = tmp_path / "katagiri.db"
+    katagiri_db.open_db(db_path).close()
+    status = installer.probe_fts(db_path)
+    assert status.status == "MISSING"
+    assert "not built yet" in status.detail
+
+
+def _stamp_versions(conn) -> None:
+    for key in ("dict_version", "tokenizer_version"):
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata(key, value, updated_ts) "
+            "VALUES (?, ?, ?)",
+            (key, "3.1.0", "2026-01-01T00:00:00Z"),
+        )
+
+
+def test_probe_fts_ready_when_stamped_but_empty(tmp_path):
+    """RED: a rebuild on a fresh DB stamps versions and legitimately produces
+    zero rows until something is mined. That must read as READY, not
+    MISSING -- a row count alone cannot tell "built empty" from "never
+    built"."""
+    db_path = tmp_path / "katagiri.db"
+    conn = katagiri_db.open_db(db_path)
+    _stamp_versions(conn)
+    conn.commit()
+    conn.close()
+
+    status = installer.probe_fts(db_path)
+    assert status.status == "READY"
+    assert status.detail == "built (0 sentences yet — populated by mining)"
+
+
+def test_probe_fts_ready_with_sentences(tmp_path):
+    db_path = tmp_path / "katagiri.db"
+    conn = katagiri_db.open_db(db_path)
+    _stamp_versions(conn)
+    conn.execute("INSERT INTO sentence_text(item_id, jp) VALUES ('s1', '日本語')")
+    conn.execute("INSERT INTO sentence_text(item_id, jp) VALUES ('s2', '勉強')")
+    conn.commit()
+    conn.close()
+
+    status = installer.probe_fts(db_path)
+    assert status.status == "READY"
+    assert status.detail == "2 sentences"
 
 
 def test_probe_md_manual_step_when_vault_unset(tmp_path):

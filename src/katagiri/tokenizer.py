@@ -615,17 +615,20 @@ def _use_utf8_stderr() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``python -m katagiri.tokenizer [verify|selftest]``. Output goes to stderr."""
+    """``python -m katagiri.tokenizer [verify|selftest|stamp]``. Output goes to stderr."""
     parser = argparse.ArgumentParser(
         prog="python -m katagiri.tokenizer",
         description=(
             "Inspect the vendored UniDic tokenizer. 'verify' re-hashes the "
             "archive against vendor/CHECKSUMS.sha256; 'selftest' tokenizes a "
-            "sample sentence. Both write to stderr, like every other Katagiri "
-            "diagnostic."
+            "sample sentence; 'stamp' records tokenizer/dictionary provenance "
+            "into the configured database's metadata table (idempotent -- "
+            "fts_index and md_search both require this before they can rebuild "
+            "on a fresh database). All write to stderr, like every other "
+            "Katagiri diagnostic."
         ),
     )
-    parser.add_argument("command", choices=("verify", "selftest"))
+    parser.add_argument("command", choices=("verify", "selftest", "stamp"))
     args = parser.parse_args(argv)
 
     _use_utf8_stderr()
@@ -634,6 +637,24 @@ def main(argv: list[str] | None = None) -> int:
         report = verify_dict()
         print(report.render(), file=sys.stderr)
         return 0 if report.ok else 1
+
+    if args.command == "stamp":
+        # Imported here so that importing this module does not touch the
+        # filesystem or the configured database path.
+        from katagiri.db import open_db
+
+        conn = open_db()
+        try:
+            values = stamp_versions(conn)
+        except TokenizerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        finally:
+            conn.close()
+        print("stamped provenance:", file=sys.stderr)
+        for key in METADATA_KEYS:
+            print(f"  {key:<16}: {values[key]}", file=sys.stderr)
+        return 0
 
     try:
         morphs = tokenize(_SELFTEST_TEXT)

@@ -101,6 +101,35 @@ def add_revlog(path: Path, rows: list[tuple[int, int, int]]) -> Path:
     return path
 
 
+def build_unicase_revlog(path: Path, rows: list[tuple[int, int, int]]) -> Path:
+    """A ``revlog`` table indexed with Anki's own ``unicase`` collation.
+
+    Modern Anki (the Rust backend) registers this collation itself before
+    creating such an index, so even building this fixture needs it registered
+    on the *writing* connection, the same way Anki's own writer does — Python's
+    ``sqlite3`` has no native definition for it either way.
+    """
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    conn.create_collation("unicase", lambda a, b: (a > b) - (a < b))
+    try:
+        conn.executescript(
+            "CREATE TABLE revlog (\n"
+            "    id integer primary key, cid integer not null, usn integer not null,\n"
+            "    ease integer not null, ivl integer not null, lastIvl integer not null,\n"
+            "    factor integer not null, time integer not null, type integer not null\n"
+            ");\n"
+            "CREATE INDEX ix_revlog_cid ON revlog (cid);\n"
+            "CREATE INDEX ix_revlog_type_unicase ON revlog (type COLLATE unicase);\n"
+        )
+        conn.executemany(
+            "INSERT INTO revlog VALUES (?, ?, -1, ?, 10, 5, 2500, 4200, 1)",
+            rows,
+        )
+    finally:
+        conn.close()
+    return path
+
+
 @pytest.fixture
 def local_app_data(tmp_path, monkeypatch):
     """Point %LOCALAPPDATA% at a tmp dir so config, db and scratch are isolated."""
@@ -454,6 +483,72 @@ def test_a_failure_writing_the_cursor_takes_the_events_with_it(
 
     assert batch_events(conn) == []
     assert read_cursor(conn) == 0
+
+
+# ---------------------------------------------------------------------------
+# Collations modern Anki's schema uses that Python's sqlite3 does not know
+# ---------------------------------------------------------------------------
+
+
+def test_read_revlog_is_not_misdiagnosed_as_corrupt_by_a_unicase_index(anki_dir):
+    """Modern (Rust-backend) Anki indexes with its own 'unicase' collation.
+
+    Python's sqlite3 has no native definition for it, so without a registered
+    fallback even ``PRAGMA integrity_check`` on a perfectly healthy copy fails
+    with "no such collation sequence: unicase" — which is not evidence of a
+    corrupt collection. Unit-level: exercises ``read_revlog`` directly, the
+    function this fix actually touches; :func:`test_sync_anki_succeeds_past_a_unicase_collated_revlog`
+    below covers the same collation through the full public entry point.
+    """
+    path = build_unicase_revlog(
+        build_collection(anki_dir / "User 1" / "collection.anki2"),
+        [(at(D1, "09:00"), 101, 3), (at(D1, "09:05"), 102, 4)],
+    )
+
+    rows = anki_sync.read_revlog(path)
+
+    assert rows == [(at(D1, "09:00"), 101, 3), (at(D1, "09:05"), 102, 4)]
+
+
+def test_a_genuinely_unresolvable_collation_still_says_collation_not_corruption(
+    anki_dir, monkeypatch
+):
+    """If some other, unregistered collation still slips through, the error
+    must name the real cause rather than repeating the generic corruption
+    verdict this same PRAGMA gives for actual damage."""
+    path = build_unicase_revlog(
+        build_collection(anki_dir / "User 1" / "collection.anki2"),
+        [(at(D1, "09:00"), 101, 3)],
+    )
+    monkeypatch.setattr(anki_sync, "_register_fallback_collations", lambda conn: None)
+
+    with pytest.raises(anki_sync.AnkiSyncError, match="collation") as excinfo:
+        anki_sync.read_revlog(path)
+
+    # The misdiagnosis this fix removes: real damage says "appears corrupt"
+    # and sends the learner to Anki's Check Database, which would find nothing
+    # wrong here.
+    assert "appears corrupt" not in str(excinfo.value)
+
+
+def test_sync_anki_succeeds_past_a_unicase_collated_revlog(conn, anki_dir):
+    """End to end: ``sync_anki`` runs both the mirror step
+    (``anki_snapshot.snapshot_anki``) and the revlog read
+    (``anki_sync.read_revlog``) against the same collection copy, and modern
+    Anki's 'unicase'-collated index must not trip either one's
+    ``PRAGMA integrity_check``.
+    """
+    path = build_unicase_revlog(
+        build_collection(anki_dir / "User 1" / "collection.anki2"),
+        [(at(D1, "09:00"), 101, 3), (at(D1, "09:05"), 102, 4)],
+    )
+
+    result = sync_anki(conn, collection_path=path, tz=TZ)
+
+    assert (result.batches, result.reviews) == (1, 2)
+    assert result.days[0].day_key == D1
+    assert result.days[0].ease_hist == {1: 0, 2: 0, 3: 1, 4: 1}
+    assert (result.mirror.cards, result.mirror.notes) == (len(CARDS), len(NOTES))
 
 
 # ---------------------------------------------------------------------------

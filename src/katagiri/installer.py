@@ -39,9 +39,7 @@ import sqlite3
 import subprocess
 import sys
 import tomllib
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -299,6 +297,10 @@ def anki_sync_argv() -> list[str]:
     return _module_argv("katagiri.anki_sync", "run")
 
 
+def tokenizer_stamp_argv() -> list[str]:
+    return _module_argv("katagiri.tokenizer", "stamp")
+
+
 def fts_index_argv() -> list[str]:
     return _module_argv("katagiri.fts_index", "rebuild")
 
@@ -399,10 +401,28 @@ def verify_vendor(repo_root: Path) -> ComponentStatus:
 
 
 def check_obsidian_connection(token: str) -> tuple[bool, str]:
-    # Validated before it ever becomes a header: http.client.putheader raises
-    # ValueError with the raw value quoted in its message for a control
-    # character or a non-latin1 byte, and that must not happen with a
-    # credential in play. No network call is attempted for an invalid token.
+    """Ping obsidian-local-rest-api through ``katagiri.obsidian_proxy``.
+
+    This module must not become a second HTTP client: ``obsidian_proxy`` is
+    the only one the package is allowed to have (enforced by
+    ``tests/test_bverify.py::test_only_the_obsidian_proxy_is_an_http_client``
+    and its Phase C twin, which scan every ``.py`` under ``src/katagiri``), so
+    the bridge check goes through it -- ``list_vault_dir()`` is the lightest
+    read it offers, a ``GET /vault/`` that needs no path argument, which makes
+    it the closest thing to a ping. ``obsidian_proxy`` is imported lazily,
+    matching this module's rule that nothing but ``config`` is imported at top
+    level.
+
+    Validated before anything is sent: an invalid token (a control character,
+    or a byte outside latin-1) is refused right here, the same check
+    ``obsidian_proxy`` itself would fail on, so no request is attempted and no
+    value-quoting exception has a chance to fire.
+
+    ``config``'s cached accessor is reset first: this check exists to find out
+    whether *this run's* token works, and an lru_cache populated before
+    ``step_config`` wrote the file (or before an operator's own edit) would
+    silently ping with a stale one instead.
+    """
     problem = validate_secret_value(token)
     if problem is not None:
         return (
@@ -411,24 +431,18 @@ def check_obsidian_connection(token: str) -> tuple[bool, str]:
             "the token as plain text from Obsidian's Local REST API plugin "
             "settings.",
         )
-    request = urllib.request.Request("http://127.0.0.1:27123/", method="GET")
-    request.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(request, timeout=2) as response:
-            return True, f"reachable (HTTP {response.status})"
-    except urllib.error.URLError as exc:
-        return (
-            False,
-            f"could not reach the Local REST API plugin ({exc.reason}). "
-            "Open Obsidian and enable the 'Local REST API' community plugin.",
-        )
-    except ValueError:
-        # Belt-and-braces: some header-safety edge case our own check missed.
-        # ValueError's message would quote the raw token, so it is never
-        # forwarded -- only this fixed, value-free message is.
-        return False, "obsidian_api_token contains characters that could not be sent as an HTTP header."
-    except OSError as exc:
-        return False, f"connection check failed: {exc}"
+
+    from katagiri import obsidian_proxy
+
+    config_mod.reset_config_cache()
+    result = obsidian_proxy.list_vault_dir()
+    if result["ok"]:
+        return True, f"reachable (HTTP {result['status']})"
+
+    note = result.get("note") or "could not reach the Local REST API plugin."
+    if result.get("error") == obsidian_proxy.UNREACHABLE:
+        note = f"{note} Open Obsidian and enable the 'Local REST API' community plugin."
+    return False, note
 
 
 # ---------------------------------------------------------------------------
@@ -522,25 +536,70 @@ def probe_jmdict(db_path: Path) -> ComponentStatus:
 
 
 def probe_anki(cfg: RawConfig) -> ComponentStatus:
+    """READY once a sync has *run*, not once the mirror holds a card.
+
+    ``sync_anki`` calls ``snapshot_anki`` unconditionally, before it ever looks
+    at the revlog cursor, and ``snapshot_anki`` stamps ``mirror_meta`` (an
+    ``INSERT OR REPLACE`` of the single ``id = 1`` row) on every successful
+    run -- including one against a genuinely empty Anki collection, where
+    ``anki_sync``'s own revlog cursor (the ``anki_sync_last_revlog_id``
+    ``metadata`` key ``anki_sync status`` reads) is never written at all: it
+    only advances/persists once there is at least one day of reviews to
+    append (see ``anki_sync.sync_anki``'s early return when ``not groups and
+    new_cursor == cursor``). Counting ``anki_cards`` rows has the same "0 means
+    two different things" problem as counting the mirror rows themselves, so
+    ``mirror_meta`` presence is the state discriminator and the row count is
+    only used for the message.
+    """
     if cfg.anki_data_dir is None:
         return ComponentStatus(
             "anki mirror",
             "MANUAL STEP",
             f"install Anki + AnkiMorphs ({ANKIMORPHS_URL}), then set anki_data_dir",
         )
-    value = _ro_query_scalar(
-        cfg.db_path, "SELECT value FROM metadata WHERE key = ?", ("anki_sync_last_revlog_id",)
+    synced = _ro_query_scalar(cfg.db_path, "SELECT 1 FROM mirror_meta WHERE id = 1")
+    if synced is None:
+        return ComponentStatus("anki mirror", "MISSING", "not synced yet")
+    count = _ro_query_scalar(cfg.db_path, "SELECT COUNT(*) FROM anki_cards")
+    if count:
+        return ComponentStatus("anki mirror", "READY", f"{count} cards")
+    return ComponentStatus(
+        "anki mirror", "READY", "synced (empty collection, 0 cards)"
     )
-    if value is not None:
-        return ComponentStatus("anki mirror", "READY", f"cursor at revlog id {value}")
-    return ComponentStatus("anki mirror", "MISSING", "not synced yet")
 
 
 def probe_fts(db_path: Path) -> ComponentStatus:
+    """READY once the index's version provenance is stamped, not once it holds
+    a row.
+
+    A freshly rebuilt index legitimately holds zero ``sentence_text`` rows
+    until something is mined -- a *built, empty* index -- which a
+    ``COUNT(*)`` cannot tell apart from an index that was never built: both
+    are 0. ``dict_version``/``tokenizer_version`` in ``metadata`` are what
+    ``katagiri.tokenizer stamp`` writes and what ``fts_index.current_versions``
+    (and therefore ``fts_index.rebuild``) require before touching the index
+    (see ``step_search_indexes``, which now stamps before every rebuild), so
+    their presence is the actual "has this step run" signal.
+    """
+    from katagiri.fts_index import DICT_VERSION_KEY, TOKENIZER_VERSION_KEY
+
+    dict_version = _ro_query_scalar(
+        db_path, "SELECT value FROM metadata WHERE key = ?", (DICT_VERSION_KEY,)
+    )
+    tokenizer_version = _ro_query_scalar(
+        db_path, "SELECT value FROM metadata WHERE key = ?", (TOKENIZER_VERSION_KEY,)
+    )
+    if not dict_version or not tokenizer_version:
+        return ComponentStatus("sentence search (fts)", "MISSING", "not built yet")
+
     count = _ro_query_scalar(db_path, "SELECT COUNT(*) FROM sentence_text")
     if count:
-        return ComponentStatus("sentence search (fts)", "READY", f"{count} sentence(s) indexed")
-    return ComponentStatus("sentence search (fts)", "MISSING", "index empty")
+        return ComponentStatus("sentence search (fts)", "READY", f"{count} sentences")
+    return ComponentStatus(
+        "sentence search (fts)",
+        "READY",
+        "built (0 sentences yet — populated by mining)",
+    )
 
 
 def probe_md(cfg: RawConfig) -> ComponentStatus:
@@ -714,6 +773,45 @@ def step_md_search(cfg: RawConfig) -> StepResult:
     )
 
 
+def step_stamp() -> StepResult:
+    proc = _run(tokenizer_stamp_argv())
+    if proc.returncode == 0:
+        return StepResult("OK", "stamped")
+    return StepResult(
+        "ACTION NEEDED",
+        f"tokenizer stamp exited {proc.returncode}: {_truncated(proc.stderr)}",
+    )
+
+
+def step_search_indexes(cfg: RawConfig) -> StepResult:
+    """Stamp tokenizer/dictionary provenance, then rebuild fts + markdown.
+
+    On a fresh database ``fts_index rebuild`` and ``md_search rebuild`` both
+    raise ``VersionsNotStampedError`` ("Run katagiri.tokenizer.stamp_versions
+    (conn) first") until provenance has been recorded once, so the stamp has
+    to run first. ``stamp_versions`` is idempotent, so this is also safe on a
+    database that was already stamped by an earlier run.
+
+    If stamping itself fails -- most likely the vendored dictionary is
+    missing -- neither rebuild is attempted: both would fail the same way,
+    less informatively.
+    """
+    stamp_result = step_stamp()
+    if stamp_result.status != "OK":
+        return StepResult(
+            "ACTION NEEDED", f"tokenizer stamp: {stamp_result.detail}"
+        )
+
+    fts_result = step_fts(cfg.db_path)
+    md_result = step_md_search(cfg)
+    index_ok = fts_result.status == "OK" and md_result.status in ("OK", "SKIP")
+    return StepResult(
+        "OK" if index_ok else "ACTION NEEDED",
+        f"fts: {fts_result.status} ({fts_result.detail}); "
+        f"markdown: {md_result.status} ({md_result.detail})",
+    )
+
+
 def step_yomitan() -> StepResult:
     try:
         import importlib
@@ -838,14 +936,7 @@ def run_wizard(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> None:
     _print_step(n, TOTAL_STEPS, STEP_LABELS[3], result)
     n += 1
 
-    fts_result = step_fts(cfg.db_path)
-    md_result = step_md_search(cfg)
-    index_ok = fts_result.status == "OK" and md_result.status in ("OK", "SKIP")
-    combined = StepResult(
-        "OK" if index_ok else "ACTION NEEDED",
-        f"fts: {fts_result.status} ({fts_result.detail}); "
-        f"markdown: {md_result.status} ({md_result.detail})",
-    )
+    combined = step_search_indexes(cfg)
     _print_step(n, TOTAL_STEPS, STEP_LABELS[4], combined)
     n += 1
 

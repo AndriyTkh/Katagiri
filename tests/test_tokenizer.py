@@ -422,3 +422,54 @@ def test_selftest_cli_prints_morphs_to_stderr(capsys):
 def test_cli_rejects_an_unknown_command():
     with pytest.raises(SystemExit):
         tok.main(["frobnicate"])
+
+
+def test_stamp_cli_writes_metadata_and_reports_to_stderr(tmp_path, monkeypatch, capsys):
+    """``python -m katagiri.tokenizer stamp`` opens the configured DB (not one
+    the test passes in directly -- mirrors ``fts_index``'s ``cli_db`` pattern)
+    and stamps provenance, printing what it wrote to stderr."""
+    path = tmp_path / "cli.db"
+    db.open_db(path).close()
+
+    real_open_db = db.open_db
+    monkeypatch.setattr(db, "open_db", lambda *args, **kwargs: real_open_db(path))
+
+    assert tok.main(["stamp"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "", "diagnostics belong on stderr"
+    assert "stamped provenance" in captured.err
+    for key in tok.METADATA_KEYS:
+        assert key in captured.err
+
+    conn = db.open_db(path)
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = ?", ("dict_version",)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["value"] == tok.DICT_VERSION
+
+
+def test_stamp_cli_is_idempotent(tmp_path, monkeypatch, capsys):
+    """Calling ``stamp`` twice must not raise or duplicate rows."""
+    path = tmp_path / "cli.db"
+    db.open_db(path).close()
+
+    real_open_db = db.open_db
+    monkeypatch.setattr(db, "open_db", lambda *args, **kwargs: real_open_db(path))
+
+    assert tok.main(["stamp"]) == 0
+    capsys.readouterr()
+    assert tok.main(["stamp"]) == 0
+
+    conn = db.open_db(path)
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM metadata WHERE key = ?", ("dict_version",)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1
