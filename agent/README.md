@@ -93,17 +93,62 @@ manifests as an actual failure.
 
 `scripts/spike_stdio_call.py` spawns the katagiri server from the **primary
 checkout's venv** (`C:\ProjectsC\RandomPr\Katagiri\.venv\Scripts\python.exe -m
-katagiri.mcp_server`) via `MultiServerMCPClient`, lists tools, then makes one
-real tool **call** (`ping`, falling back to `lookup`) — not just
-`list_tools()`. This probes the known Windows failure surface
-(`NotImplementedError` / `SelectorEventLoop` on the subprocess transport,
-"Connection closed" on call) before any graph code is written.
+katagiri.mcp_server`) via `MultiServerMCPClient`, lists tools, then makes
+**two** real tool **calls** — `ping` (no args) and `lookup` (a real surface
+form, `"猫"`) — not just `list_tools()`. This probes the known Windows
+failure surface (`NotImplementedError` / `SelectorEventLoop` on the
+subprocess transport, "Connection closed" on call) before any graph code is
+written. Both calls are read-only against the real local DB, which is
+acceptable for this spike; no write tool is ever invoked.
 
 Run it with:
 
 ```powershell
 $env:PYTHONUTF8 = "1"
+cd agent
 uv run python scripts/spike_stdio_call.py
 ```
 
-**Result:** *(filled in below after running)*
+**Result: GREEN.** Run 2026-08-20, Windows 11, Python 3.12.13 (agent venv,
+`mcp==1.29.0` via `langchain-mcp-adapters==0.3.2`) spawning katagiri's
+Python 3.12.13 / `mcp==2.0.0` server process:
+
+- `list_tools()` returned all 26 registered tools, including `ping` and
+  `lookup`.
+- `call_tool("ping", {})` round-tripped `{"status": "ok", "katagiri_version":
+  "0.1.0", "python": "3.12.13"}`.
+- `call_tool("lookup", {"surface": "猫"})` round-tripped a well-shaped
+  dictionary-lookup response (`found` key present, populated senses) —
+  confirming Japanese text survives the stdio JSON-RPC round trip under
+  `PYTHONUTF8=1`.
+- Neither known failure symptom (`NotImplementedError` / `SelectorEventLoop`,
+  "Connection closed") appeared.
+
+**This means the T003 package-level version mismatch (client `mcp==1.29.0`
+via `langchain-mcp-adapters`, server `mcp==2.0.0`) does not manifest as a
+wire-protocol failure in practice** — at least not for `list_tools` +
+these two simple, argument-light calls on Windows stdio. The JSON-RPC/MCP
+protocol layer both versions speak is evidently compatible enough for this
+workload. This is *not* a blanket guarantee for every tool or every payload
+shape in the 26-tool surface; TG-C's integration smoke test (T017) and the
+graph's own tool calls remain the ongoing check. No fallback (attach to a
+manually started katagiri process) is needed at this time; the fallback
+recipe is kept in the script (`_fallback_note()`) and below in case a later
+task's call pattern regresses this.
+
+**Fallback, if a later call regresses this (documented, not currently
+needed):** start katagiri by hand in one terminal —
+
+```powershell
+$env:PYTHONUTF8 = "1"
+C:\ProjectsC\RandomPr\Katagiri\.venv\Scripts\python.exe -m katagiri.mcp_server
+```
+
+— then connect the agent to that already-running process instead of letting
+`MultiServerMCPClient` spawn it. `langchain-mcp-adapters`'s stdio transport
+only supports spawn-and-own, not attach-to-existing, so this fallback would
+need either (a) a raw `mcp.client.stdio` session opened against a
+pipe/socket bridge to the running process, or (b) katagiri's own launch
+being driven directly by the graph's own subprocess call outside
+`MultiServerMCPClient`'s pool management. Record whichever is chosen in
+TG-C's transport plan if this is ever exercised for real.
