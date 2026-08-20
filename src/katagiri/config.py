@@ -113,7 +113,19 @@ def config_dir() -> Path:
 
 
 def config_path() -> Path:
-    """Full path to ``config.toml``."""
+    """Full path to ``config.toml``.
+
+    Honors the ``KATAGIRI_CONFIG`` environment variable as an override: when
+    set, its value is used verbatim (as a ``Path``) instead of the default
+    ``%LOCALAPPDATA%\\Katagiri\\config.toml``. This does not add a second
+    secret source or move anything out of ``%LOCALAPPDATA%`` (D-22) — it only
+    lets tests and advanced setups point the *default* location elsewhere.
+    When the variable is unset, behavior is unchanged: ``local_app_data()``
+    still runs and can still raise if ``LOCALAPPDATA`` is missing.
+    """
+    override = os.environ.get("KATAGIRI_CONFIG")
+    if override:
+        return Path(override)
     return config_dir() / CONFIG_FILE_NAME
 
 
