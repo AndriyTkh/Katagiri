@@ -740,13 +740,15 @@ def test_phase_d_us1_tools_are_registered_with_specs():
         assert spec.note, "a Phase D tool must say why its shape may still change"
 
 
-def test_the_phase_d_fragment_holds_exactly_the_us1_batch():
-    """The fragment is the additive batch's diff; an accidental extra shows here."""
-    assert {spec.name for spec in tool_registry._PHASE_D_SPECS} == set(D_US1_CONTRACT)
-    assert len(tool_registry._PHASE_D_SPECS) == 11
+def test_the_phase_d_fragment_holds_exactly_the_registered_batches():
+    """The fragment is the additive batches' diff; an accidental extra shows here."""
+    assert {spec.name for spec in tool_registry._PHASE_D_SPECS} == (
+        set(D_US1_CONTRACT) | set(D_US2_US4_CONTRACT)
+    )
+    assert len(tool_registry._PHASE_D_SPECS) == 11 + 3
     # Fragment concatenation, not replacement: the earlier phases are all still
     # declared and still registered.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 11 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(D_US1_CONTRACT))
@@ -1039,6 +1041,234 @@ def test_build_sentences_hands_back_the_challenge_then_accepts_the_echo(
     assert [item["text"] for item in mined] == [external]
     assert mined[0]["untrusted_origin"] is True
     assert mined[0]["provenance"]["provenance"]["source"] == "media"
+
+
+# ---------------------------------------------------------------------------
+# Phase D US2 + US4 (D/TG-D4): lesson memory and intelligence, registered
+# ---------------------------------------------------------------------------
+#
+# Same division of labour as the US1 block above: behaviour lives in
+# tests/test_lesson_memory.py and tests/test_intelligence.py, and what is
+# defended here is the registration. US3 (the sensei letter) adds no tool —
+# spec.md scopes it to extending A9's existing letter — so there is nothing to
+# assert for it here beyond its absence from this table.
+
+D_US2_US4_CONTRACT: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "lesson_memory": (
+        frozenset(),
+        frozenset(
+            {
+                "today",
+                "thread_limit",
+                "revisit_limit",
+                "next_step_limit",
+                "open_lesson_limit",
+            }
+        ),
+    ),
+    "coverage": (frozenset({"text"}), frozenset({"top_unknown"})),
+    "find_i_plus_one": (
+        frozenset(),
+        frozenset(
+            {
+                "candidates",
+                "top",
+                "min_coverage_pct",
+                "max_unknown_types",
+                "max_new_grammar",
+                "min_understanding",
+                "require_grammar",
+                "include_gated",
+                "top_unknown",
+                "candidate_limit",
+                "topic",
+                "score_difficulty",
+            }
+        ),
+    ),
+}
+
+
+def test_phase_d_us2_us4_tools_are_registered_with_specs():
+    registered = registered_tools()
+    for name in D_US2_US4_CONTRACT:
+        assert name in registered, f"{name} is declared in the spec but not registered"
+        spec = get_spec(name)
+        assert spec.stability == "experimental"
+        assert spec.note, "a Phase D tool must say why its shape may still change"
+
+
+@pytest.mark.parametrize("name", sorted(D_US2_US4_CONTRACT))
+def test_d_us2_us4_contract_is_additive_only(name):
+    required, optional = D_US2_US4_CONTRACT[name]
+    spec = get_spec(name)  # raises if the tool was removed or renamed
+    assert spec.required_args == required, (
+        f"{name}: required arguments changed — that is a breaking change"
+    )
+    present = set(spec.arg_names)
+    assert optional <= present, (
+        f"{name}: optional arguments {sorted(optional - present)} were dropped"
+    )
+
+
+def test_the_curriculum_import_is_not_a_tool():
+    """It rewrites the grammar DAG from a file; that is an operator's job.
+
+    intelligence.import_curriculum exists and is tested, but registering it
+    would put "rebuild the graph every gate decision depends on" one MCP call
+    away, inside a session, from an argument nobody reviewed.
+    """
+    assert "import_curriculum" not in registered_tools()
+
+
+def test_the_intelligence_tools_take_their_text_as_a_plain_string():
+    """The mirror image of the untrusted-only rule, and not an exception to it.
+
+    The envelope ceremony guards *writes*: staged, echoed, then recorded
+    permanently. coverage and find_i_plus_one write nothing at all — no row, no
+    event, not even a coverage_cache entry — so there is no record for external
+    text to poison and no ceremony to justify.
+    """
+    for tool in ("coverage", "find_i_plus_one"):
+        spec = get_spec(tool)
+        assert not any(name.endswith("_envelope_id") for name in spec.arg_names)
+        assert "reads only" in spec.note.lower()
+    assert "text" in get_spec("coverage").arg_names
+
+
+def test_lesson_memory_reads_the_loop_without_opening_a_session(db):
+    """The whole reason it is a separate tool from start_session."""
+    session = mcp_server.start_session()["session_id"]
+    mcp_server.log_lesson(
+        topic="particles",
+        objective="use は and が in one sentence",
+        session_id=session,
+        next_step="drill が with existence verbs",
+        unresolved=["why not どこが?"],
+    )
+    before = len(mcp_server.recent_events(limit=100))
+
+    memory = mcp_server.lesson_memory()
+
+    assert memory["lessons_total"] == 1
+    assert memory["next_action"]["kind"] == "continue_next_step"
+    assert [entry["next_step"] for entry in memory["pending_next_steps"]] == [
+        "drill が with existence verbs"
+    ]
+    assert memory["open_threads_total"] == 1
+    assert memory["open_threads"][0]["text"] == "why not どこが?"
+    assert len(mcp_server.recent_events(limit=100)) == before, (
+        "lesson_memory is a read; it must not append an event to answer"
+    )
+
+
+def test_lesson_memory_passes_its_limits_and_its_day_through(db):
+    session = mcp_server.start_session()["session_id"]
+    for index in range(3):
+        mcp_server.log_lesson(
+            topic=f"topic-{index}",
+            objective="an objective",
+            session_id=session,
+            unresolved=[f"question {index}"],
+        )
+
+    memory = mcp_server.lesson_memory(today="2026-08-19", thread_limit=1)
+
+    assert memory["day"] == "2026-08-19"
+    assert len(memory["open_threads"]) == 1
+    assert memory["open_threads_total"] == 3, (
+        "a truncated list must still report how much it is not showing"
+    )
+
+
+def test_coverage_measures_a_text_through_the_tool(db):
+    result = mcp_server.coverage("猫が好きです。")
+
+    assert result["ok"] is True
+    assert result["chars"] == len("猫が好きです。")
+    assert result["counts"]["counted_tokens"] > 0
+    # Nothing is seeded, so nothing is known — and that is a real 0.0, not a
+    # null: there were countable content tokens to measure.
+    assert result["known_pct"] == 0.0
+    assert result["unknown"], "the unknown types are the actionable half"
+    assert all("cumulative_pct" in entry for entry in result["unknown"])
+
+
+def test_the_coverage_counts_survive_the_output_hygiene_guard(db):
+    """A morpheme count is not a credential, and 'token' means both here.
+
+    is_secret_key matches whole words, so 'counted_tokens' and its three
+    siblings would otherwise come back as '[redacted]' — the guard blanking the
+    primary output of a measurement tool. NOT_SECRET_KEYS exempts exactly those
+    four literals; this asserts the exemption reaches the wire and that nothing
+    else in the result was blanked on the way.
+    """
+    counts = mcp_server.coverage("猫が好きです。")["counts"]
+
+    for key in (
+        "counted_tokens",
+        "known_tokens",
+        "unknown_tokens",
+        "function_tokens",
+    ):
+        assert isinstance(counts[key], int), f"{key} was blanked by redact()"
+    assert REDACTED not in json.dumps(
+        mcp_server.find_i_plus_one(
+            candidates=[{"text": "猫が好きです。", "id": "s-1"}],
+            include_gated=True,
+            score_difficulty=False,
+        ),
+        ensure_ascii=False,
+    )
+    # The exemption is by whole key and cannot widen: 'token' itself, and any
+    # other compound around it, still redacts.
+    assert is_secret_key("token") and is_secret_key("session_tokens")
+
+
+def test_coverage_refuses_an_empty_text_rather_than_answering_zero(db):
+    result = mcp_server.coverage("   ")
+
+    assert result["ok"] is False
+    assert result["error"] == "empty_text"
+
+
+def test_find_i_plus_one_gates_a_candidate_with_no_reachable_grammar(db):
+    """D-28 through the wire: vocabulary alone never opens the gate."""
+    # score_difficulty=False keeps the smoke test off the vendored dataset
+    # loaders; the flag itself is what is asserted, and the scoring is covered
+    # in tests/test_intelligence.py.
+    result = mcp_server.find_i_plus_one(
+        candidates=[{"text": "猫が好きです。", "id": "s-1"}],
+        score_difficulty=False,
+    )
+
+    assert result["ok"] is True
+    assert result["ranked_by"] == "comprehension_debt"
+    assert result["scored_difficulty"] is False
+    assert result["counts"]["offered"] == 1
+    assert result["counts"]["accepted"] == 0
+    assert "grammar_unknown" in result["counts"]["by_reason"]
+    assert result["gated"] == [], "gated candidates are counted, not returned by default"
+
+
+def test_find_i_plus_one_returns_the_gated_candidates_on_request(db):
+    result = mcp_server.find_i_plus_one(
+        candidates=[{"text": "猫が好きです。", "id": "s-1"}],
+        include_gated=True,
+        score_difficulty=False,
+    )
+
+    assert result["ok"] is True
+    assert [entry["id"] for entry in result["gated"]] == ["s-1"]
+    assert "grammar_unknown" in result["gated"][0]["gated_by"]
+    assert result["gated"][0]["coverage"]["known_pct"] == 0.0
+
+
+def test_find_i_plus_one_says_so_when_there_is_nothing_to_choose_from(db):
+    result = mcp_server.find_i_plus_one(score_difficulty=False)
+
+    assert result["ok"] is False
+    assert result["error"] == "no_candidates"
 
 
 # ---------------------------------------------------------------------------

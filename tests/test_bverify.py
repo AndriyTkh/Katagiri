@@ -126,7 +126,7 @@ CONTRACT_TOOLS = frozenset(
         # gate mirrors the list, so an addition lands here deliberately or the
         # handshake fails — which is the point of mirroring it.
         "search_notes",
-        # Phase D (additive): the US1 tool batch.
+        # Phase D (additive): the US1, US2 and US4 tool batches.
         "stage_untrusted",
         "confirm_untrusted",
         "start_session",
@@ -138,6 +138,9 @@ CONTRACT_TOOLS = frozenset(
         "triage_inbox",
         "gen_exercise",
         "build_sentences",
+        "lesson_memory",
+        "coverage",
+        "find_i_plus_one",
     }
 )
 

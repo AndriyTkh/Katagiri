@@ -914,6 +914,242 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
             "gen_exercise."
         ),
     ),
+    # --- lesson memory: katagiri.lesson_memory -------------------------------
+    #
+    # US2's read side. The write side is already here — log_lesson records
+    # next_step / revisit_after / unresolved, start_session consumes them — so
+    # this batch adds exactly one tool: the aggregate that answers "where did we
+    # leave off?" without appending a session_open event to find out.
+    ToolSpec(
+        name="lesson_memory",
+        summary=(
+            "Where the last session left off: the next action, open threads, "
+            "pending next steps, due topic revisits and open lessons, in one read."
+        ),
+        args=(
+            ArgSpec(
+                "today",
+                "str | None",
+                False,
+                "The day to read as, YYYY-MM-DD; omitted, the local today. "
+                "Overdue-ness and revisit due dates are relative to it.",
+            ),
+            ArgSpec(
+                "thread_limit",
+                "int",
+                False,
+                "How many open threads to show; defaults to 5. The untruncated "
+                "count comes back as open_threads_total either way.",
+            ),
+            ArgSpec(
+                "revisit_limit",
+                "int",
+                False,
+                "How many due topic revisits to show; defaults to 5.",
+            ),
+            ArgSpec(
+                "next_step_limit",
+                "int",
+                False,
+                "How many pending next steps to show; defaults to 3.",
+            ),
+            ArgSpec(
+                "open_lesson_limit",
+                "int",
+                False,
+                "How many still-open lessons to show; defaults to 5.",
+            ),
+        ),
+        output=(
+            "{day, lessons_total, next_action{kind, instruction, rationale, "
+            "topic, lesson_id, unresolved_id, revisit_after, source}, "
+            "open_threads[...], open_threads_total, pending_next_steps[...], "
+            "due_revisits[...], due_revisits_total, next_revisit, "
+            "open_lessons[...], open_lessons_total}"
+        ),
+        stability="experimental",
+        note=(
+            "Reads only — and that is why it is registered separately from "
+            "start_session, which answers the same question but appends a "
+            "'session_open' event to do it. next_action is start_session's "
+            "prescription for a non-tired session, computed without consuming "
+            "it, so looking is not the same as starting. Every truncated list "
+            "comes with its untruncated total rather than quietly ending. This "
+            "is the same snapshot the Today.md lesson-memory section renders."
+        ),
+    ),
+    # --- vocabulary and grammar intelligence: katagiri.intelligence ----------
+    #
+    # US4, and both tools read only. Text arrives as a plain string here, which
+    # is not an exception to the envelope rule above: that rule governs writes,
+    # and nothing in this pair writes a row, an event, or a cache entry. A
+    # measurement of a subtitle line is a number about that line, and it is
+    # discarded with the response.
+    ToolSpec(
+        name="coverage",
+        summary=(
+            "Known-word coverage of a text, measured against the real known "
+            "set, with the unknown types ranked."
+        ),
+        args=(
+            ArgSpec(
+                "text",
+                "str",
+                True,
+                "The Japanese text to measure, up to 100000 characters. "
+                "Measured, never stored.",
+            ),
+            ArgSpec(
+                "top_unknown",
+                "int",
+                False,
+                "How many unknown types to return, 0 to 200; defaults to 15. "
+                "Each carries a cumulative_pct — the coverage this text would "
+                "reach if everything up to and including it were known.",
+            ),
+        ),
+        output=(
+            "{ok, error, note, known_pct, known_ratio, band, chars, "
+            "counts{morphs, counted_tokens, known_tokens, unknown_tokens, "
+            "function_tokens, ignored_morphs, by_state}, types{counted, known, "
+            "unknown}, unknown[{lemma, reading, surface, occurrences, state, "
+            "cumulative_pct, ...}], unknown_types, known_queries}"
+        ),
+        stability="experimental",
+        note=(
+            "Reads only, and writes nothing to coverage_cache: that table is "
+            "keyed by media / episode / sentence / topic scope, and a pasted "
+            "string is none of those, so a row cached under an invented scope "
+            "id could never be invalidated. known_pct and band are null, not "
+            "zero, for a text with no countable content token — 'what "
+            "percentage of nothing' has no honest numeric answer. Refuses with "
+            "'tokenizer_unavailable' rather than guessing at segmentation."
+        ),
+    ),
+    ToolSpec(
+        name="find_i_plus_one",
+        summary=(
+            "Material that is i+1 on both axes: grammar reachable in the "
+            "stored prereq DAG *and* vocabulary coverage clear, ranked by "
+            "comprehension debt."
+        ),
+        args=(
+            ArgSpec(
+                "candidates",
+                "list[dict[str, Any]] | None",
+                False,
+                "Candidates to judge: each needs 'text', and may carry 'id' "
+                "(its item id, which is how the gate reads its stored grammar "
+                "annotation and its sealed flag), 'grammar_ids' (an explicit "
+                "annotation, which wins over the database) and 'source'. "
+                "Omitted, the stored sentence items are used.",
+            ),
+            ArgSpec(
+                "top",
+                "int",
+                False,
+                "How many accepted candidates to return, 1 to 200; defaults to 10.",
+            ),
+            ArgSpec(
+                "min_coverage_pct",
+                "float",
+                False,
+                "The vocabulary half of the gate, 0 to 100; defaults to 80.",
+            ),
+            ArgSpec(
+                "max_unknown_types",
+                "int | None",
+                False,
+                "Cap on distinct unknown types; defaults to 1, null to disable.",
+            ),
+            ArgSpec(
+                "max_new_grammar",
+                "int | None",
+                False,
+                "Cap on grammar points that are reachable but not yet mastered; "
+                "defaults to 1, null to disable.",
+            ),
+            ArgSpec(
+                "min_understanding",
+                "int",
+                False,
+                "The item.understanding score that counts as mastered, 1 to 5; "
+                "defaults to 3.",
+            ),
+            ArgSpec(
+                "require_grammar",
+                "bool",
+                False,
+                "True (the default) gates out a candidate whose grammar could "
+                "not be established at all. False offers material on vocabulary "
+                "alone, which is what D-28 forbids, so the result says so in "
+                "its note.",
+            ),
+            ArgSpec(
+                "include_gated",
+                "bool",
+                False,
+                "Return the rejected candidates with their measurements and "
+                "reasons, instead of only the count of them.",
+            ),
+            ArgSpec(
+                "top_unknown",
+                "int",
+                False,
+                "Unknown types listed per candidate, 0 to 200; defaults to 5.",
+            ),
+            ArgSpec(
+                "candidate_limit",
+                "int",
+                False,
+                "How many stored sentence items to load when candidates is "
+                "omitted; defaults to 200.",
+            ),
+            ArgSpec(
+                "topic",
+                "str | None",
+                False,
+                "Narrow the stored-item pool to one home topic. Ignored when "
+                "candidates is given.",
+            ),
+            ArgSpec(
+                "score_difficulty",
+                "bool",
+                False,
+                "True (the default) adds the difficulty-for-me score — "
+                "jreadability, BCCWJ frequency, JLPT level and coverage — to "
+                "every entry. It costs an extra tokenization pass and is "
+                "reported only; False skips it.",
+            ),
+        ),
+        output=(
+            "{ok, error, note, candidates[{order, id, text, source, accepted, "
+            "gated_by, coverage{known_pct, known_ratio, band, counted_tokens, "
+            "unknown_types, unknown}, grammar{ids, resolved_from, reachable, "
+            "new, unresolved, unreachable[{id, missing_prereqs}], points}, "
+            "debt{total, grammar, vocab, by_item}, difficulty}], gated[...], "
+            "counts{offered, accepted, returned, gated, by_reason, "
+            "unannotated}, gates{min_coverage_pct, max_unknown_types, "
+            "max_new_grammar, min_understanding, require_grammar, "
+            "reachability_edge_type}, ranked_by, scored_difficulty, "
+            "difficulty_datasets, as_of, known_queries, mastery_queries, "
+            "mastered_nodes}"
+        ),
+        stability="experimental",
+        note=(
+            "D-28 as one tool: the two axes are computed from independent "
+            "sources and neither substitutes for the other, so a sentence at "
+            "100% coverage whose grammar has an unmastered prerequisite is "
+            "gated out with 'unreachable_grammar'. Difficulty-for-me is "
+            "reported, never gating — a vendored dataset appearing or "
+            "disappearing changes how material is described, never which "
+            "material is offered, and 'difficulty_datasets' says which were "
+            "readable. Sealed canary items are never offered and there is no "
+            "override flag (D-26). Reads only: nothing records what was "
+            "considered. Refuses with 'grammar_dag_cycle' naming the cycle "
+            "rather than answering from a graph that has no answer."
+        ),
+    ),
 )
 
 TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
@@ -991,6 +1227,23 @@ SECRET_COMPOUNDS: Final[tuple[str, ...]] = (
     "privatekey",
 )
 
+# Exact keys the word rules would flag but that are known measurements, checked
+# before those rules. This is an allow-list of *whole key names*, never of words:
+# it can never widen "token" itself, and every entry is a literal Katagiri writes
+# — morpheme counts out of katagiri.intelligence, where "token" means a unit of
+# segmented text and not a credential. They are exempted rather than renamed
+# because blanking the primary output of a measurement tool is a worse failure
+# than the (impossible) leak it would be guarding against: a count is an int the
+# tokenizer produced, and nothing a caller supplies can reach these keys.
+NOT_SECRET_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "counted_tokens",
+        "known_tokens",
+        "unknown_tokens",
+        "function_tokens",
+    }
+)
+
 _WORD_SPLIT: Final = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
 
 
@@ -1002,6 +1255,8 @@ def is_secret_key(key: object) -> bool:
     redaction path once a value is in it.
     """
     if not isinstance(key, str):
+        return False
+    if key in NOT_SECRET_KEYS:
         return False
     words = [word.lower() for word in _WORD_SPLIT.split(key) if word]
     if any(word in SECRET_WORDS for word in words):
@@ -1040,6 +1295,7 @@ def _redact(value: Any, path: frozenset[int]) -> Any:
 
 __all__ = [
     "CIRCULAR",
+    "NOT_SECRET_KEYS",
     "REDACTED",
     "SECRET_COMPOUNDS",
     "SECRET_WORDS",

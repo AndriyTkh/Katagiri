@@ -1342,6 +1342,117 @@ def build_sentences(
         )
 
 
+# --- where the last session left off: katagiri.lesson_memory -----------------
+
+from katagiri import lesson_memory as lesson_memory_module  # noqa: E402
+
+
+@server.tool(
+    name="lesson_memory",
+    title="Lesson memory",
+    description=(
+        "Read where the last session left off: the one action that would be "
+        "prescribed next, still-open threads, next steps written at close and "
+        "not yet given out, topics whose revisit is due, and lessons never "
+        "closed. Reads only — unlike start_session, which answers the same "
+        "question by opening a session. Each truncated list is returned with "
+        "its untruncated total."
+    ),
+)
+def lesson_memory(
+    today: str | None = None,
+    thread_limit: int = lesson_memory_module.DEFAULT_THREAD_LIMIT,
+    revisit_limit: int = lesson_memory_module.DEFAULT_REVISIT_LIMIT,
+    next_step_limit: int = lesson_memory_module.DEFAULT_NEXT_STEP_LIMIT,
+    open_lesson_limit: int = lesson_memory_module.DEFAULT_OPEN_LESSON_LIMIT,
+) -> dict[str, Any]:
+    logger.debug("lesson_memory called")
+    with _db() as conn:
+        return redact(
+            lesson_memory_module.snapshot(
+                conn,
+                today=today,
+                thread_limit=thread_limit,
+                revisit_limit=revisit_limit,
+                next_step_limit=next_step_limit,
+                open_lesson_limit=open_lesson_limit,
+            )
+        )
+
+
+# --- vocabulary and grammar intelligence: katagiri.intelligence --------------
+
+from katagiri import intelligence  # noqa: E402
+
+
+@server.tool(
+    name="coverage",
+    title="Known-word coverage",
+    description=(
+        "Measure what share of a Japanese text is already in the known set, "
+        "and rank what is not. Returns the percentage, its band, token and "
+        "type counts, and the unknown types with a running cumulative_pct — "
+        "'learn these N to reach X%'. A text with no countable content token "
+        "returns a null percentage rather than zero. Reads only; the text is "
+        "measured, not stored."
+    ),
+)
+def coverage(
+    text: str, top_unknown: int = intelligence.DEFAULT_TOP_UNKNOWN
+) -> dict[str, Any]:
+    logger.debug("coverage called")
+    with _db() as conn:
+        return redact(intelligence.coverage(conn, text, top_unknown=top_unknown))
+
+
+@server.tool(
+    name="find_i_plus_one",
+    title="Find i+1 material",
+    description=(
+        "Choose material that is i+1 on both axes: its grammar must be "
+        "reachable in the stored prereq DAG and its vocabulary coverage must "
+        "clear the gate — a sentence at 100% coverage whose grammar has an "
+        "unmastered prerequisite is still refused. Ranked by comprehension "
+        "debt; the difficulty-for-me score is reported and never gates. Pass "
+        "'candidates' (each with 'text', optionally 'id' and 'grammar_ids') or "
+        "omit it to use the stored sentence items. Reads only."
+    ),
+)
+def find_i_plus_one(
+    candidates: list[dict[str, Any]] | None = None,
+    top: int = intelligence.DEFAULT_TOP_CANDIDATES,
+    min_coverage_pct: float = intelligence.DEFAULT_MIN_COVERAGE_PCT,
+    max_unknown_types: int | None = intelligence.DEFAULT_MAX_UNKNOWN_TYPES,
+    max_new_grammar: int | None = intelligence.DEFAULT_MAX_NEW_GRAMMAR,
+    min_understanding: int = intelligence.DEFAULT_MIN_UNDERSTANDING,
+    require_grammar: bool = True,
+    include_gated: bool = False,
+    top_unknown: int = intelligence.DEFAULT_CANDIDATE_TOP_UNKNOWN,
+    candidate_limit: int = intelligence.DEFAULT_CANDIDATE_LIMIT,
+    topic: str | None = None,
+    score_difficulty: bool = True,
+) -> dict[str, Any]:
+    logger.debug("find_i_plus_one called")
+    with _db() as conn:
+        return redact(
+            intelligence.find_i_plus_one(
+                conn,
+                candidates,
+                top=top,
+                min_coverage_pct=min_coverage_pct,
+                max_unknown_types=max_unknown_types,
+                max_new_grammar=max_new_grammar,
+                min_understanding=min_understanding,
+                require_grammar=require_grammar,
+                include_gated=include_gated,
+                top_unknown=top_unknown,
+                candidate_limit=candidate_limit,
+                topic=topic,
+                score_difficulty=score_difficulty,
+            )
+        )
+
+
 def main() -> None:
     """Entry point: stderr logging, then serve MCP over stdio."""
     setup_logging(logging.INFO)

@@ -230,7 +230,7 @@ EDIT_BEACON = "cverifybeacon"
 PROSE_TOOL = "search_notes"
 PHASE_C_TOOLS: tuple[str, ...] = (PROSE_TOOL,)
 
-# Phase D (additive): the US1 tool batch, registered on top of Phase C.
+# Phase D (additive): the US1, US2 and US4 tool batches, on top of Phase C.
 PHASE_D_TOOLS: tuple[str, ...] = (
     "stage_untrusted",
     "confirm_untrusted",
@@ -243,6 +243,9 @@ PHASE_D_TOOLS: tuple[str, ...] = (
     "triage_inbox",
     "gen_exercise",
     "build_sentences",
+    "lesson_memory",
+    "coverage",
+    "find_i_plus_one",
 )
 
 #: The whole contract as of Phase C: additive-only, and asserted as equality.
