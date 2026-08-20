@@ -204,7 +204,10 @@ _PHASE_A_SPECS: Final[tuple[ToolSpec, ...]] = (
     ),
     ToolSpec(
         name="stop_gate_status",
-        summary="Mechanical PASS/FAIL of the study-consistency stop gate.",
+        summary=(
+            "Mechanical PASS/FAIL of the study-consistency stop gate, plus the "
+            "006 entry-gate readout."
+        ),
         args=(),
         output=(
             "{pass, failing_criterion, failing_criteria, study_days_in_window, "
@@ -214,7 +217,11 @@ _PHASE_A_SPECS: Final[tuple[ToolSpec, ...]] = (
             "required_study_days, window_length_days, excluded_pause_days, "
             "study_day_keys, consecutive_failures, re_plan_triggered, "
             "re_plan_after_failures, ignored_pause_events, ignored_gate_events, "
-            "gate_evaluation_event_id}"
+            "gate_evaluation_event_id, entry_gate{pass, failing_criterion, "
+            "failing_criteria, study_days, required_study_days, "
+            "study_days_pass, scored_observation_days, "
+            "required_scored_observation_days, scored_observation_days_pass, "
+            "dictation_days, required_dictation_days, dictation_days_pass}}"
         ),
         stability="stable",
         note=(
@@ -230,7 +237,11 @@ _PHASE_A_SPECS: Final[tuple[ToolSpec, ...]] = (
             "read-only: every call appends a gate_evaluation event carrying the "
             "verdict, which is what makes consecutive_failures and "
             "re_plan_triggered (true after 2 consecutive failing evaluations, "
-            "this one included) answerable at all."
+            "this one included) answerable at all. Additive since 006 T010: the "
+            "`entry_gate` sub-dict carries the separate 006 entry-gate verdict — "
+            "qualifying study days, scored-observation days and dictation days, "
+            "each counted over the whole event log rather than the 18-day "
+            "window — and it neither reads nor changes the `pass` verdict above."
         ),
     ),
     ToolSpec(

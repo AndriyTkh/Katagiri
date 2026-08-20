@@ -73,6 +73,28 @@ These rules are duplicated by name (not imported) in
 :mod:`katagiri.sensei_letter`, which renders them into prose and must not drag
 this module's dependencies in behind it. If a name changes, it changes in both
 places.
+
+The 006 entry gate is additive, and a separate verdict
+----------------------------------------------------------
+D-33 adds a second, unrelated question on top of the D6 mechanics above: not
+"has the loop been used consistently these last 18 days" but "does the log
+hold enough of the *right kind* of evidence to calibrate a teaching method
+against" — ten arbitrary or TIRED-only days say nothing about that. Three
+counts, each over the *whole* event log rather than the 18-day window: every
+qualifying study day the log has ever recorded (:data:`ENTRY_GATE_MIN_STUDY_DAYS`),
+every day carrying a scored observation — an :data:`ENTRY_GATE_OBSERVATION_EVENT_TYPE`
+event whose payload has every field ``session_tools.log_observations`` enforces
+before it writes one (:data:`ENTRY_GATE_MIN_SCORED_OBSERVATION_DAYS`), and every
+day carrying a dictation artifact — a :data:`ENTRY_GATE_DICTATION_EVENT_TYPE`
+event whose payload ``topic`` is the reserved Phase-0 slug
+:data:`ENTRY_GATE_DICTATION_TOPIC` (:data:`ENTRY_GATE_MIN_DICTATION_DAYS`).
+
+This lives in :func:`stop_gate`'s result as the additive ``entry_gate`` key and
+never changes the meaning of the pre-existing ``pass`` boolean: the 14-in-18
+day count and the probe battery remain necessary on their own, exactly as
+before T009. ``entry_gate`` is not written into the persisted
+``gate_evaluation`` payload; the registration task that surfaces it through
+the tool layer decides that.
 """
 
 from __future__ import annotations
@@ -163,6 +185,49 @@ MAX_GATE_HISTORY_SCAN: Final = 64
 
 _PAUSE_START_KEYS: Final = ("start_day", "from_day", "start", "from")
 _PAUSE_END_KEYS: Final = ("end_day", "to_day", "end", "to")
+
+# ---------------------------------------------------------------------------
+# The 006 entry gate (D-33) — additive, and counted over the whole log rather
+# than the 18-day D6 window. See the module docstring's "006 entry gate"
+# section for the reasoning; docs/db-schema.md documents these next to
+# `gate_evaluation`.
+# ---------------------------------------------------------------------------
+
+#: "≥10 study days" (D-33, spec FR-010). Cumulative: the whole event log, not
+#: a window — the question is whether ten such days have ever happened.
+ENTRY_GATE_MIN_STUDY_DAYS: Final = 10
+
+#: "≥6 with a scored observation" (D-33, spec FR-010).
+ENTRY_GATE_MIN_SCORED_OBSERVATION_DAYS: Final = 6
+
+#: "≥3 with a dictation artifact" (D-33, spec FR-010).
+ENTRY_GATE_MIN_DICTATION_DAYS: Final = 3
+
+#: The event type ``session_tools.log_observations`` appends one of per
+#: scored performance. Duplicated by name rather than imported, matching this
+#: module's existing convention (see the module docstring) of not dragging
+#: ``session_tools`` in as a dependency.
+ENTRY_GATE_OBSERVATION_EVENT_TYPE: Final = "observation"
+
+#: The mandatory fields ``session_tools.log_observations`` enforces before it
+#: will write an observation. A day only counts as "scored" if its event's
+#: payload actually carries all three — a hand-written or malformed
+#: ``observation`` event must not buy the day for free.
+ENTRY_GATE_SCORED_OBSERVATION_KEYS: Final = (
+    "unassisted",
+    "coverage_band",
+    "rubric_version",
+)
+
+#: The event type a dictation artifact rides (D-32): already one of
+#: :data:`ARTIFACT_EVENT_TYPES`, named again here because the entry gate reads
+#: it for a different question — which topic, not merely that it happened.
+ENTRY_GATE_DICTATION_EVENT_TYPE: Final = "lesson_close"
+
+#: The reserved Phase-0 dictation topic slug (D-32) a qualifying
+#: ``lesson_close`` payload's ``topic`` field carries — the same field
+#: ``session_tools.log_lesson`` writes.
+ENTRY_GATE_DICTATION_TOPIC: Final = "phase0-kana-dictation"
 
 
 def _parse_day(value: object) -> date | None:
@@ -395,6 +460,97 @@ def _prior_gate_failures(conn: sqlite3.Connection) -> tuple[int, list[str]]:
     return failures, ignored
 
 
+def _entry_gate(conn: sqlite3.Connection) -> dict[str, Any]:
+    """The 006 entry gate (D-33): additive to the D6 mechanics, and separate.
+
+    Three counts, each over the *whole* event log rather than the 18-day D6
+    window — the question is whether the evidence has ever accumulated, not
+    whether it accumulated recently:
+
+    * qualifying study days: the same rule :func:`_study_days` applies to the
+      D6 window, applied here with no lower bound on ``day_key``.
+    * days carrying a scored observation: an
+      :data:`ENTRY_GATE_OBSERVATION_EVENT_TYPE` event whose payload has every
+      key in :data:`ENTRY_GATE_SCORED_OBSERVATION_KEYS`.
+    * days carrying a dictation artifact: an
+      :data:`ENTRY_GATE_DICTATION_EVENT_TYPE` event whose payload ``topic``
+      equals :data:`ENTRY_GATE_DICTATION_TOPIC`.
+
+    Reported the same way the D6 criteria are: every shortfall named by a
+    stable string a test can pin, nothing interpreted. This dict becomes the
+    ``entry_gate`` key in :func:`stop_gate`'s result; it does not read or
+    change the pre-existing ``pass`` verdict.
+    """
+    study_days_total = len(_study_days(conn, ""))
+
+    scored_days: set[str] = set()
+    for row in conn.execute(
+        "SELECT day_key, payload FROM event WHERE type = ?",
+        (ENTRY_GATE_OBSERVATION_EVENT_TYPE,),
+    ):
+        data = _payload_dict(row["payload"])
+        if data is not None and all(
+            key in data for key in ENTRY_GATE_SCORED_OBSERVATION_KEYS
+        ):
+            scored_days.add(str(row["day_key"]))
+
+    dictation_days: set[str] = set()
+    for row in conn.execute(
+        "SELECT day_key, payload FROM event WHERE type = ?",
+        (ENTRY_GATE_DICTATION_EVENT_TYPE,),
+    ):
+        data = _payload_dict(row["payload"])
+        if data is not None and data.get("topic") == ENTRY_GATE_DICTATION_TOPIC:
+            dictation_days.add(str(row["day_key"]))
+
+    scored_count = len(scored_days)
+    dictation_count = len(dictation_days)
+
+    checks = (
+        (
+            "entry_gate_study_days",
+            study_days_total,
+            ENTRY_GATE_MIN_STUDY_DAYS,
+            "required qualifying study days",
+        ),
+        (
+            "entry_gate_scored_observation_days",
+            scored_count,
+            ENTRY_GATE_MIN_SCORED_OBSERVATION_DAYS,
+            "required days with a scored observation",
+        ),
+        (
+            "entry_gate_dictation_days",
+            dictation_count,
+            ENTRY_GATE_MIN_DICTATION_DAYS,
+            "required days with a dictation artifact",
+        ),
+    )
+
+    failing_criteria = [
+        f"{name}: {count} of {required} {description}"
+        for name, count, required, description in checks
+        if count < required
+    ]
+
+    return {
+        "pass": not failing_criteria,
+        "failing_criterion": failing_criteria[0] if failing_criteria else None,
+        "failing_criteria": failing_criteria,
+        "study_days": study_days_total,
+        "required_study_days": ENTRY_GATE_MIN_STUDY_DAYS,
+        "study_days_pass": study_days_total >= ENTRY_GATE_MIN_STUDY_DAYS,
+        "scored_observation_days": scored_count,
+        "required_scored_observation_days": ENTRY_GATE_MIN_SCORED_OBSERVATION_DAYS,
+        "scored_observation_days_pass": (
+            scored_count >= ENTRY_GATE_MIN_SCORED_OBSERVATION_DAYS
+        ),
+        "dictation_days": dictation_count,
+        "required_dictation_days": ENTRY_GATE_MIN_DICTATION_DAYS,
+        "dictation_days_pass": dictation_count >= ENTRY_GATE_MIN_DICTATION_DAYS,
+    }
+
+
 def stop_gate(
     conn: sqlite3.Connection, *, today: str | None = None, record: bool = True
 ) -> dict[str, Any]:
@@ -420,6 +576,11 @@ def stop_gate(
 
     ``today`` overrides the clock for tests; the tool passes ``None``. Nothing
     here interprets the verdict: it counts and names every shortfall.
+
+    The result also carries an additive ``entry_gate`` key (D-33, the 006
+    entry gate — see :func:`_entry_gate`): a separate verdict over the whole
+    log, computed alongside this one and never altering the meaning of
+    ``pass`` above.
     """
     end = date.today() if today is None else _parse_day(today)
     if end is None:
@@ -508,6 +669,7 @@ def stop_gate(
         "re_plan_after_failures": RE_PLAN_AFTER_FAILURES,
         "ignored_pause_events": ignored_pause_events,
         "ignored_gate_events": ignored_gate_events,
+        "entry_gate": _entry_gate(conn),
     }
 
     event_id = None
@@ -541,6 +703,13 @@ __all__ = [
     "ARTIFACT_EVENT_REASONS",
     "ARTIFACT_EVENT_TYPES",
     "COVERAGE_BANDS",
+    "ENTRY_GATE_DICTATION_EVENT_TYPE",
+    "ENTRY_GATE_DICTATION_TOPIC",
+    "ENTRY_GATE_MIN_DICTATION_DAYS",
+    "ENTRY_GATE_MIN_SCORED_OBSERVATION_DAYS",
+    "ENTRY_GATE_MIN_STUDY_DAYS",
+    "ENTRY_GATE_OBSERVATION_EVENT_TYPE",
+    "ENTRY_GATE_SCORED_OBSERVATION_KEYS",
     "GATE_EVENT_SESSION_ID",
     "GATE_EVENT_TYPE",
     "MAX_GATE_HISTORY_SCAN",

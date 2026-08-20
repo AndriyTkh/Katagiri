@@ -177,6 +177,40 @@ def seed_passing_gate(connection: sqlite3.Connection) -> None:
     seed_probe_battery(connection)
 
 
+def seed_scored_observation_event(
+    connection: sqlite3.Connection,
+    *,
+    day: str,
+    unassisted: bool = True,
+    band: str = ">=95",
+    rubric_version: str = "r1",
+) -> str:
+    """An ``observation`` event carrying every field ``log_observations``
+    enforces — what the 006 entry gate's scored-observation-day criterion
+    counts."""
+    return seed_event(
+        connection,
+        day=day,
+        type=sg.ENTRY_GATE_OBSERVATION_EVENT_TYPE,
+        payload={
+            "unassisted": unassisted,
+            "coverage_band": band,
+            "rubric_version": rubric_version,
+        },
+    )
+
+
+def seed_dictation_event(connection: sqlite3.Connection, *, day: str) -> str:
+    """A ``lesson_close`` carrying the reserved Phase-0 dictation topic slug —
+    what the 006 entry gate's dictation-day criterion counts."""
+    return seed_event(
+        connection,
+        day=day,
+        type=sg.ENTRY_GATE_DICTATION_EVENT_TYPE,
+        payload={"topic": sg.ENTRY_GATE_DICTATION_TOPIC},
+    )
+
+
 def gate_events(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     """Every persisted gate evaluation, oldest first, payload decoded."""
     rows = connection.execute(
@@ -585,3 +619,141 @@ def test_a_malformed_today_is_still_a_caller_error(conn):
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
         sg.stop_gate(conn, today="19/08/2026")
     assert gate_events(conn) == [], "a refused call records no verdict"
+
+
+# ---------------------------------------------------------------------------
+# T009: the 006 entry gate (D-33) — additive, and its own verdict
+#
+# spec.md "Entry Gate" acceptance scenarios 1-4: the four fixtures below are
+# named after tasks.md's Independent Test (9 days / 10-with-5-scored /
+# 10-with-6-scored-2-dictations / full pass). Each also pins the pre-existing
+# 14-in-18 and probe-battery verdict so a regression there is caught here, not
+# just left to the untouched tests above.
+# ---------------------------------------------------------------------------
+
+
+def test_entry_gate_nine_days_fails_naming_the_day_count(conn):
+    """spec.md scenario 1: 9 qualifying days -> entry gate FAILs on day-count."""
+    study_days(conn, days_back(9))
+
+    gate = sg.stop_gate(conn, today=TODAY, record=False)
+    entry = gate["entry_gate"]
+
+    assert entry["study_days"] == 9
+    assert entry["study_days_pass"] is False
+    assert entry["scored_observation_days"] == 0
+    assert entry["dictation_days"] == 0
+    assert entry["pass"] is False
+    assert "entry_gate_study_days" in entry["failing_criterion"]
+    assert "9" in entry["failing_criterion"]
+    assert str(sg.ENTRY_GATE_MIN_STUDY_DAYS) in entry["failing_criterion"]
+
+    # The pre-existing 14-in-18 mechanics are untouched: 9 < 14, same failure
+    # this file already pins for other day counts (e.g. days_back(13) above).
+    assert gate["pass"] is False
+    assert gate["study_days_in_window"] == 9
+    assert "study_days_in_window" in gate["failing_criterion"]
+
+
+def test_entry_gate_ten_with_five_scored_fails_naming_the_observation_count(conn):
+    """spec.md scenario 2: 10 days, 5 scored -> entry gate FAILs on observation."""
+    days = days_back(10)
+    study_days(conn, days)
+    for day in days[:5]:
+        seed_scored_observation_event(conn, day=day)
+
+    gate = sg.stop_gate(conn, today=TODAY, record=False)
+    entry = gate["entry_gate"]
+
+    assert entry["study_days"] == 10
+    assert entry["study_days_pass"] is True
+    assert entry["scored_observation_days"] == 5
+    assert entry["scored_observation_days_pass"] is False
+    assert entry["dictation_days"] == 0
+    assert entry["pass"] is False
+    assert entry["failing_criterion"] == entry["failing_criteria"][0]
+    assert "entry_gate_scored_observation_days" in entry["failing_criterion"]
+    assert "5" in entry["failing_criterion"]
+    assert str(sg.ENTRY_GATE_MIN_SCORED_OBSERVATION_DAYS) in entry["failing_criterion"]
+
+    # Pre-existing mechanics unchanged: only 10 of the required 14 in-window
+    # days, and no probe battery, so the old gate still fails the same way.
+    assert gate["pass"] is False
+    assert gate["study_days_in_window"] == 10
+    assert "study_days_in_window" in gate["failing_criterion"]
+
+
+def test_entry_gate_ten_with_six_scored_two_dictations_fails_on_dictation(conn):
+    """spec.md scenario 3: 10 days, 6 scored, 2 dictation -> FAILs on dictation."""
+    days = days_back(10)
+    study_days(conn, days)
+    for day in days[:6]:
+        seed_scored_observation_event(conn, day=day)
+    for day in days[:2]:
+        seed_dictation_event(conn, day=day)
+
+    gate = sg.stop_gate(conn, today=TODAY, record=False)
+    entry = gate["entry_gate"]
+
+    assert entry["study_days"] == 10
+    assert entry["study_days_pass"] is True
+    assert entry["scored_observation_days"] == 6
+    assert entry["scored_observation_days_pass"] is True
+    assert entry["dictation_days"] == 2
+    assert entry["dictation_days_pass"] is False
+    assert entry["pass"] is False
+    assert entry["failing_criteria"] == [entry["failing_criterion"]]
+    assert "entry_gate_dictation_days" in entry["failing_criterion"]
+    assert "2" in entry["failing_criterion"]
+    assert str(sg.ENTRY_GATE_MIN_DICTATION_DAYS) in entry["failing_criterion"]
+
+    # Pre-existing mechanics unchanged, same as the previous fixture.
+    assert gate["pass"] is False
+    assert gate["study_days_in_window"] == 10
+    assert "study_days_in_window" in gate["failing_criterion"]
+
+
+def test_entry_gate_full_pass(conn):
+    """spec.md scenario 4 (implicit): every criterion met -> entry gate PASSes,
+    alongside an unchanged, independently-passing 14-in-18 + probe verdict."""
+    seed_passing_gate(conn)  # the exact fixture test_two_bands_..._passes uses
+    days = days_back(14)
+    for day in days[:6]:
+        seed_scored_observation_event(conn, day=day)
+    for day in days[:3]:
+        seed_dictation_event(conn, day=day)
+
+    gate = sg.stop_gate(conn, today=TODAY, record=False)
+    entry = gate["entry_gate"]
+
+    assert entry["study_days"] == 14
+    assert entry["scored_observation_days"] == 6
+    assert entry["dictation_days"] == 3
+    assert entry["study_days_pass"] is True
+    assert entry["scored_observation_days_pass"] is True
+    assert entry["dictation_days_pass"] is True
+    assert entry["failing_criteria"] == []
+    assert entry["failing_criterion"] is None
+    assert entry["pass"] is True
+
+    # The pre-existing verdict is byte-identical to the fixture it shares with
+    # test_two_bands_with_an_unassisted_performance_passes: still True, for
+    # the same reasons, untouched by the entry gate's presence.
+    assert gate["pass"] is True
+    assert gate["failing_criterion"] is None
+    assert gate["failing_criteria"] == []
+    assert gate["probe_coverage_bands"] == [">=95", "80-95"]
+    assert gate["probe_unassisted_rate"] == 1.0
+
+
+def test_entry_gate_is_not_persisted_into_the_gate_evaluation_payload(conn):
+    """entry_gate is additive to the *result*, not to what gets recorded: T010
+    (the registration task) decides how it reaches the tool surface, not the
+    append-only log this module already writes to."""
+    seed_passing_gate(conn)
+
+    gate = sg.stop_gate(conn, today=TODAY)
+
+    (recorded,) = gate_events(conn)
+    assert "entry_gate" not in recorded["payload"]
+    assert "entry_gate" in gate

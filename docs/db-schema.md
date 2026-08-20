@@ -299,6 +299,35 @@ of the schema rather than of one module:
   evaluation ran, while `window_end` in the payload is the day it was evaluated
   *for* (they differ only when a caller overrides the clock, as tests do).
 
+#### The 006 entry gate (D-33) — additive, evaluated alongside `gate_evaluation`
+
+A second, unrelated verdict lives beside the D6 mechanics above, in the same
+`stop_gate.stop_gate` result, under the additive `entry_gate` key. D-33: none
+of 006's contract-touching taskgroups (US2–US8) may start until the event log
+shows **≥10 qualifying study days, ≥6 with a scored observation, ≥3 with a
+dictation artifact** — evaluated mechanically, not by self-assessment.
+**Additive to D-19**: the 14-in-18 day count and the probe battery above stay
+necessary conditions, byte-identical to their pre-006 values; `entry_gate`
+only adds a requirement; it never relaxes or replaces the pre-existing `pass`.
+
+Unlike the D6 window, all three counts are taken over the **whole** event log,
+not the last 18 days — the question is whether the evidence has ever
+accumulated, not whether it did so recently:
+
+| Criterion | Counted as | Threshold |
+| --- | --- | --- |
+| Qualifying study days | The same day-qualifying rule as the D6 window (`study_session` minutes, or one of `ARTIFACT_EVENT_TYPES`), applied with no lower bound on `day_key`. | `ENTRY_GATE_MIN_STUDY_DAYS` = 10 |
+| Days with a scored observation | Distinct `day_key`s carrying an `observation` event whose payload has every one of `unassisted`, `coverage_band`, `rubric_version` — exactly what `session_tools.log_observations` enforces before it writes one. A hand-written or malformed `observation` event missing any of the three does not count. | `ENTRY_GATE_MIN_SCORED_OBSERVATION_DAYS` = 6 |
+| Days with a dictation artifact | Distinct `day_key`s carrying a `lesson_close` event whose payload `topic` equals the reserved Phase-0 slug `phase0-kana-dictation` (D-32; the field `session_tools.log_lesson` writes). | `ENTRY_GATE_MIN_DICTATION_DAYS` = 3 |
+
+`entry_gate` reports the same way the D6 criteria do: `pass`, `failing_criterion`
+(first shortfall, or `None`), `failing_criteria` (every shortfall, named —
+`entry_gate_study_days`, `entry_gate_scored_observation_days`,
+`entry_gate_dictation_days`), plus each count and its own per-criterion pass
+boolean. It is **not** written into the persisted `gate_evaluation` payload —
+only into the returned result — because reaching it through the tool surface
+is a separate task (T010) that this one does not decide.
+
 ### `observation`
 
 - **`unassisted` NOT NULL** — an assisted production is a different observation,
