@@ -57,7 +57,7 @@ _log = logging.getLogger("katagiri.backup")
 
 DEFAULT_KEEP: Final = 14
 BACKUP_SUFFIX: Final = ".db"
-VAULT_SNAPSHOT_EXTENSIONS: Final = frozenset({".md", ".jsonl"})
+VAULT_SNAPSHOT_EXTENSIONS: Final = frozenset({".md", ".jsonl", ".mp3", ".wav"})
 # Excluded from vault snapshots: machine-local scratch, and anything derived is
 # rebuildable from sources that *are* backed up.
 VAULT_EXCLUDED_DIRS: Final = frozenset({"local", ".derived"})
