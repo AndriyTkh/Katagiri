@@ -96,7 +96,7 @@ Merge order (felt-value): US2 → US3 → US4. Registration for all three lands 
 
 ### Serial close of TG-D4
 
-- [ ] T017 Registration (serial, master, after US2/US3/US4 merges): additive ToolSpec batch (lesson-memory tools, intelligence tools; letter has no new tools unless spec says otherwise) + adapter blocks + smoke tests. Write: tool_registry.py, mcp_server.py, tests/test_mcp_tools.py. Read: seam layout, new module APIs. [was: kata-d4/d2]
+- [ ] T017 [in-progress: worker-t017-serial] Registration (serial, master, after US2/US3/US4 merges): additive ToolSpec batch (lesson-memory tools, intelligence tools; letter has no new tools unless spec says otherwise) + adapter blocks + smoke tests. Write: tool_registry.py, mcp_server.py, tests/test_mcp_tools.py. Read: seam layout, new module APIs. [was: kata-d4/d2]
 
 **Checkpoint**: full suite green; US2/US3/US4 done.
 
