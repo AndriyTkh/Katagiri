@@ -1,5 +1,28 @@
 <!--
 Sync Impact Report
+- Version change: 1.0.0 → 1.1.0
+- Amendment: Principle IV (Study-First, Gated Progression) gains the 006 entry gate —
+  contract-touching 006-teaching-method taskgroups (US2–US8) additionally require ≥10
+  study days, ≥6 with a scored observation, ≥3 with a dictation artifact, evaluated
+  mechanically and surfaced as additive `stop_gate_status` output keys. Explicitly
+  additive to the existing D-19 mechanics (14-in-18 study days + probe battery), which
+  remain necessary and unchanged.
+- Rationale for MINOR (not PATCH): a new gate criterion is materially expanded guidance
+  on an existing principle, not a mere clarification; no principle was removed or
+  redefined, so not MAJOR.
+- Ledger rows filed first per Governance's amendment procedure: D-32 (Phase-0 teaching
+  rules — KANA mode, coverage unit, dictation slug `phase0-kana-dictation`, staged kana
+  gates) and D-33 (006 entry gate, additive to D-19). Reasoning: docs/audit-log.md
+  "006 TG0/TG1 — Phase-0 teaching rules and entry-gate governance (2026-08-20)".
+- Added sections: none (existing Principle IV amended in place).
+- Removed sections: none.
+- Templates status: spec/plan/tasks templates are stock speckit 0.16.4; plan-template's
+  Constitution Check gate now resolves against this document. ✅
+- Follow-up TODOs: none.
+
+---
+
+Sync Impact Report (superseded by the entry above — kept for history)
 - Version change: (template, unversioned) → 1.0.0
 - Initial ratification: derived from docs/dev-plan.md v1.1 "Standing constraints",
   docs/decisions-ledger.md binding decisions D-01…D-29, and the Round-5 verification
@@ -48,6 +71,14 @@ is blocked by the D6 stop-gate: 14 study days within an 18-day window plus one c
 probe battery, evaluated mechanically by `stop_gate_status` (PASS/FAIL + failing
 criterion), never by self-assessment. If unmet twice → explicit re-plan. Sole exemption:
 the write-only mpv seek logger. (D-16, D-18, D-19.)
+
+**006 entry gate (additive)**: contract-touching 006-teaching-method taskgroups (US2–US8)
+are additionally blocked until the event log shows ≥10 study days, ≥6 with a scored
+observation, ≥3 with a dictation artifact — arbitrary or TIRED-only days do not satisfy
+it. This gate is layered on top of the D6 mechanics above, not a substitute for them: the
+14-in-18 count and the probe battery remain necessary conditions, unchanged and
+independently evaluated; the 006 criteria only add requirements. Evaluated mechanically,
+surfaced as additive `stop_gate_status` output keys — no new ToolSpec. (D-32, D-33.)
 
 ### V. Two-Gate Verification per Phase
 
@@ -123,4 +154,4 @@ materially expanded guidance, PATCH for clarifications. Every plan's Constitutio
 gates against the current version; violations require a Complexity Tracking entry or a
 scope cut.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-19
+**Version**: 1.1.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-20

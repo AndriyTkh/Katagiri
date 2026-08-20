@@ -1070,3 +1070,61 @@ splits, security, backup), Phase C shrinks to markdown search, D1 moves into A, 
 becomes fixture-based and cumulative, and the gate system now measures the learner as well as
 the software. Plan revised to v1.1; beads to be created from the revised task list with
 task-level dependencies.
+
+---
+
+## 006 TG0/TG1 — Phase-0 teaching rules and entry-gate governance (2026-08-20)
+
+Session date: 2026-08-20. Filed per spec/006-teaching-method T008 ("governance first, code
+second"): the ledger rows and constitution bump below are committed *before* T009 (the
+gate-criteria code) starts, per FR-012.
+
+**Context**: the learner's DB was reset 2026-08-20 and no first lesson has been logged yet.
+006's entire risk is designing a teaching method calibrated on evidence that does not exist.
+TG0 (prose + two data constants: `VAULT_SNAPSHOT_EXTENSIONS`, the backup task) is deliberately
+split from every later taskgroup so it can ship *before* any of that evidence, and the entry
+gate (TG1) is the structural device that stops US2–US8 (dose contract, input strand, audio
+anchors, curriculum refs, assessment cadence, kanji policy, worksheet loop) from being built
+on a foundation of zero real sessions.
+
+1. **Phase-0 teaching rules (KANA mode, coverage unit, dictation slug, staged kana gates)**
+   (ledger D-32). KANA is modeled as a peer session mode rather than a variant of FULL because
+   its constraints are categorical, not parametric: zero free conversation, a single fixed daily
+   artifact (mora-count dictation), and a suspended feature set (kanji-rival rule,
+   kanji-component hints, WATCH, mining capped at ≤3 kana-only items) — trying to express that
+   as FULL-with-flags would hide the suspensions instead of stating them. Coverage unit =
+   unread kana rather than words, because word-based coverage has no meaning before the writing
+   system itself is legible. Day qualification rides the **existing** `lesson_close` artifact
+   event type under a reserved topic slug, `phase0-kana-dictation`, instead of a new event type
+   or table: TG0 is scoped as prose/data-only (no stop-gate code change), so the slug is what
+   lets TG1's gate code count real dictation days mechanically later without the code having to
+   guess a naming convention from prose. The kana gate is staged (hiragana ≥95% both directions
+   unlocks drill tooling; katakana is a second checkpoint, never a wall) so that katakana, which
+   the learner will need less urgently, cannot stall hiragana-level progress. ACCEPTED —
+   plan v3 TG0 (teacher R2 F2/Q3); source spec.md FR-001…FR-005/FR-009, research.md TG0 notes.
+
+2. **006 entry gate: ≥10 study days / ≥6 scored observation / ≥3 dictation artifact, additive
+   to D-19** (ledger D-33). A plain day count is gameable by exactly the sessions that teach the
+   least — ten TIRED-mode or arbitrary days would pass a count-only gate while producing none of
+   the scored-observation or dictation evidence the post-gate designs (dose caps, audio anchors,
+   curriculum reachability) are calibrated against. The three-part criterion is therefore about
+   evidence *quality*: a scored observation confirms the agent is actually assessing the learner
+   (not just logging attendance), and a dictation artifact confirms Phase-0 KANA work is real and
+   recorded, not assumed. The gate is explicitly **additive** to the D-19 stop-gate mechanics (14
+   study days in an 18-day window, plus the canary probe battery) rather than a replacement,
+   because D-19 already blocks Phase E code and a 006-specific gate that quietly superseded it
+   would loosen that blocking without anyone deciding to. Both gates must independently pass;
+   006's criteria never lower or satisfy D-19's, and D-19's count never satisfies 006's evidence
+   requirement. Mechanical evaluation only (no self-assessment), surfaced as additive keys on the
+   existing `stop_gate_status` tool so no new ToolSpec is needed, consistent with constitution
+   principle V (verification is assertion-driven, never self-assessed) and principle VII
+   (contract changes are additive after freeze). ACCEPTED — plan v3 §Entry gate (architect
+   MAJOR 4 + teacher F2 re-cut, architect F5); source spec.md §Entry Gate, FR-010…FR-013,
+   research.md §Entry gate.
+
+**Net effect**: no code changes from this filing — TG0's prose/data already shipped (merged
+2026-08-20: prose 810cb6f, data 60ee5fc, ops 5f9d0a0) and this entry documents the reasoning
+behind it plus the entry-gate criteria that TG1's code (T009, next) will implement against
+`stop_gate_status`. Constitution principle IV amended to state the entry gate; version bumped
+1.0.0 → 1.1.0 (MINOR: new gate criteria layered onto an existing principle, no principle
+redefined or removed).
