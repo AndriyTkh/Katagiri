@@ -18,6 +18,55 @@ Runs in parallel with everything. No prerequisites.
 - **Hiragana** — yes, immediately. Not because reading matters yet, but because you cannot do dictation, use a dictionary, or read a subtitle without it. 46 characters, ~10 hours. Then katakana.
 - [[70-drills/shadowing]] daily from day 1
 
+Hiragana is learned row by row; each row is a node so progress and reachability
+can be tracked per block instead of as one all-or-nothing "hiragana" blob.
+Katakana starts only once every hiragana row (plain, voiced/semi-voiced and
+contracted) is in:
+
+```yaml
+id: g-hiragana-a
+level: A0
+---
+id: g-hiragana-ka
+level: A0
+---
+id: g-hiragana-sa
+level: A0
+---
+id: g-hiragana-ta
+level: A0
+---
+id: g-hiragana-na
+level: A0
+---
+id: g-hiragana-ha
+level: A0
+---
+id: g-hiragana-ma
+level: A0
+---
+id: g-hiragana-ya
+level: A0
+---
+id: g-hiragana-ra
+level: A0
+---
+id: g-hiragana-wa
+level: A0
+---
+id: g-hiragana-dakuten
+level: A0
+prereqs: [g-hiragana-ka, g-hiragana-sa, g-hiragana-ta, g-hiragana-ha]
+---
+id: g-hiragana-youon
+level: A0
+prereqs: [g-hiragana-ka, g-hiragana-sa, g-hiragana-ta, g-hiragana-na, g-hiragana-ha, g-hiragana-ma, g-hiragana-ra, g-hiragana-ya]
+---
+id: g-katakana-checkpoint
+level: A0
+prereqs: [g-hiragana-a, g-hiragana-ka, g-hiragana-sa, g-hiragana-ta, g-hiragana-na, g-hiragana-ha, g-hiragana-ma, g-hiragana-ya, g-hiragana-ra, g-hiragana-wa, g-hiragana-dakuten, g-hiragana-youon]
+```
+
 ## Phase 1 — First sentences (weeks 1–6)
 
 ```
