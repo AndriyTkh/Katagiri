@@ -907,9 +907,9 @@ def test_an_id_that_is_already_a_word_item_is_left_alone(db, tmp_path):
 def test_import_of_the_real_curriculum(db):
     result = import_curriculum(db, path=REAL_CURRICULUM)
     assert result["ok"] is True
-    assert result["nodes"]["ids"] == 7
-    assert result["edges"]["created"] == 6
-    assert result["edges"]["by_source"] == {SOURCE_DIAGRAM: 6}
+    assert result["nodes"]["ids"] == 20
+    assert result["edges"]["created"] == 30
+    assert result["edges"]["by_source"] == {SOURCE_NODE_BLOCK: 24, SOURCE_DIAGRAM: 6}
     # Idempotent on the learner's own file too.
     before = snapshot(db)
     import_curriculum(db, path=REAL_CURRICULUM)

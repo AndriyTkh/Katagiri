@@ -259,6 +259,38 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
    beads, split >8h tasks into sub-beads with own definition of done, write dedicated
    workfiles, and compute the parallel lanes from `bd ready` within the phase.
 
+## Ops
+
+- **Daily backup scheduled task (specs/006 TG0 T006)** — installed 2026-08-20:
+  `schtasks /Create /TN "Katagiri Daily Backup" /SC DAILY /ST 21:00 /F /TR "cmd /c cd /d \"C:\ProjectsC\RandomPr\Katagiri\" && uv run python -m katagiri.backup create"`
+  (the exact line `installer.schtasks_backup_command()` / the `backup.py` module docstring
+  document). Task did not previously exist; `schtasks /Create` returned SUCCESS. Verified run:
+  `schtasks /Run /TN "Katagiri Daily Backup"` returned Last Result `2` — in this dev session
+  `uv run`'s package-sync step collided with a currently-running `katagiri-mcp.exe` holding its
+  own console-script file open (file lock), not a fault in the task registration itself.
+  Bypassing `uv run`'s sync step with a direct interpreter call —
+  `.venv\Scripts\python.exe -m katagiri.backup create` — produced a real dated snapshot:
+  `C:\Users\andri\AppData\Local\Katagiri\backups\katagiri.20260820T185300.db` (78,065,664 bytes,
+  written 2026-08-20 21:53:02 local). Snapshot mechanics (VACUUM INTO, naming, retention) are
+  unchanged code; only the trigger path differed from the schtasks-run path this once. Query
+  and delete for reference: `schtasks /Query /TN "Katagiri Daily Backup"`,
+  `schtasks /Delete /TN "Katagiri Daily Backup" /F`.
+
+- **Single-writer discipline (specs/006 TG0 T007)** — one authoritative frontend process (MCP
+  server or CLI) touches the learner DB per day; SQLite WAL plus `db.connect()`'s
+  `isolation_level=None` + explicit `BEGIN IMMEDIATE` writes (`src/katagiri/db.py`) make a
+  *single* concurrent writer safe and readers non-blocking, but they do not make two writer
+  processes cooperative — a second writer contends for the same file lock, and a long-held
+  transaction from one process can push the other into (or past) `BUSY_TIMEOUT_MS` and fail its
+  write. The most likely accidental second writer is a second checkout: a git worktree opened
+  for parallel lane work can quietly point at the same real DB/config and start its own MCP
+  server or CLI session against it (`specs/README.md` "Worktree bootstrap" flags exactly this
+  class of hazard for `.venv`/hooks; the same reasoning applies to the DB). Rule: before
+  starting a second frontend process against the real (non-fixture) database, confirm no other
+  Katagiri MCP server or CLI write session is already open against it. If two are found open
+  at once, stop one immediately (the newer one, unless the older is clearly the stray) rather
+  than letting both keep writing — do not attempt to merge divergent writes by hand.
+
 ## Weekly status log
 
 (appended by the weekly review)
