@@ -72,6 +72,8 @@ T002 3 · T003 3 · T004 3 · T005 1.5 · T006 1 · T007 1 · T008 2.5 · T009 5
 
 **Checkpoint TG0**: full suite green; the three lanes merge in any order (disjoint files); T006's verified snapshot exists. **Then the learner studies** — TG0's value is not a passing test, it is a session that happens today. The entry-gate clock starts at the first KANA session; note the date here when it happens.
 
+> **Checkpoint result (2026-08-20)**: TG0 complete. All three lanes merged to master (prose 810cb6f, data 60ee5fc, ops 5f9d0a0); reserved dictation slug = `phase0-kana-dictation` (T003 — TG1's gate code counts this verbatim). Full suite 1620 pass / 5 ground-zero skips (two pre-existing real-curriculum shape tests updated for the 13 new kana nodes: 20 ids / 30 edges / node-block source). T006: "Katagiri Daily Backup" registered (daily 21:00, direct .venv interpreter action) and a real 78 MB snapshot verified — **with a caveat**: schtasks-*triggered* runs twice produced wrong-DB snapshots (quarantined); incident + manual-snapshot guidance in docs/dev-plan.md §Ops, follow-up fix filed. **First KANA session: pending — learner has not studied yet; record the date here at first session; the entry-gate clock has NOT started.**
+
 ---
 
 ## Taskgroup 1: Entry gate — governance, then code, then the calendar (P0, blocks TG2–TG8)
