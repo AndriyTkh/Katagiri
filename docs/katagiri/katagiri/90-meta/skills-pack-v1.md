@@ -147,6 +147,43 @@ Forbidden in tired mode: new grammar, media, more than one mined item, and any "
 up for it tomorrow" doubling. Tired mode is complete at the floor, not a degraded FULL — it
 exists to protect the streak that gates Phase E, and a streak kept small is a streak kept.
 
+## Phase 0 measurement rules
+
+KANA needs its own measurement rules because none of the existing ones fit a learner with no
+words yet. *(spec, 006 FR-003/FR-004/FR-005/FR-009)*
+
+**Coverage unit is unread kana, not words.** Core behavior 2 estimates coverage in words
+because that is what i+1 sentences are built from; Phase 0 has no words, so coverage is
+instead the share of the ~46 hiragana (then katakana) the learner has not yet seen.
+
+**Day qualification rides the dictation, under a reserved slug the gate can trust.** The
+existing artifact rule already lets `lesson_close` qualify a day (see tired mode above,
+`[E1]`/`[spec]`) — v0 and v1 both relied on prose to say *which* closed lesson counts, and
+prose is exactly what a mechanical gate cannot read safely. KANA closes its lesson with
+`topic: "phase0-kana-dictation"` — named here verbatim as the reserved Phase-0 dictation
+topic slug — so a later entry-gate criterion can count dictation days by that exact string
+instead of guessing from free text. A dictation logged under any other topic string is
+invisible to that count, even though the day still qualifies under the plain artifact rule.
+The two questions ("did the day qualify" and "did it qualify *on a dictation*") are
+deliberately different counts.
+
+**The kana gate is staged.** Hiragana recognition ≥95% in both directions — kana→sound and
+sound→kana — with recall averaging ≤2 seconds per character, unlocks drill tooling. Katakana
+is a second checkpoint measured separately, never a wall: a katakana gap cannot block
+hiragana-level work.
+
+**The modality ladder** names three rungs and the pack states which one the learner is on
+rather than assuming: **A0** is kana + audio-with-script + shadowing + dictation with zero
+free conversation; **A0→A1** adds listening volume and scripted voice tasks with the text
+still visible; **A1+** is unscripted with the script hidden. Advancing a rung is a gate
+condition, never a reward for a good session.
+
+**The dose numbers are named as policy, not yet enforced.** ≤8 new words/day, ≤2 new grammar
+points/week, 20–30 minutes of core practice describe the target shape of a day, stated here
+so the pack is honest about what it is not yet doing: nothing refuses an over-dose session
+today, the same way the mining budget above is self-counted rather than server-enforced. A
+later taskgroup (TG2, post-gate) turns these numbers into `add_vocab`/`prescribe()` refusals.
+
 ## What v1 still does not know
 
 - **The evidence base is two dated traces and one checkpoint**, not weeks of logs. v1's job

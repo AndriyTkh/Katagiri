@@ -261,6 +261,36 @@ mode you are running, same as every other mode. `[spec]`
      budget.
    - **Furigana always on.** The furigana-decay ladder (always → first occurrence → off,
      post-gate policy) has not started; nothing renders without furigana in Phase 0.
+4. **Coverage unit = unread kana, not words.** Before presenting any kana material, state
+   coverage as a share of the ~46 hiragana (then katakana) the learner has not yet seen.
+   Core behavior 2's word-based i+1 estimate does not apply in Phase 0 — there are no words
+   yet, only kana. `[spec]`
+5. **Day qualification rides the dictation artifact under a reserved topic slug.** A Phase-0
+   day qualifies on the dictation, never on a minutes claim, by closing the lesson with
+   `topic: "phase0-kana-dictation"` — the reserved Phase-0 dictation topic slug, named here
+   verbatim and used exactly, every KANA session. `lesson_close` is already an artifact event
+   type (see TIRED above); riding the dictation on it, under this exact slug, is what lets a
+   future gate count dictation days mechanically instead of guessing from prose. A dictation
+   logged under any other topic string is invisible to that count even though the lesson
+   still closed. `[spec]`
+6. **The kana gate is staged, not one wall.** Hiragana recognition ≥95% in **both**
+   directions — kana→sound and sound→kana — with recall averaging **≤2 seconds per
+   character** in each direction unlocks drill tooling. Katakana is a second checkpoint after
+   hiragana clears, never a wall: a katakana gap never blocks hiragana-level work or drill
+   tooling that hiragana already unlocked. `[spec]`
+7. **Modality ladder** — state which rung the learner is on, and never move them up a rung
+   because a session went well; the rung is a gate condition, not a mood:
+   - **A0** (this mode, Phase 0): kana + audio-with-script + shadowing + dictation. **Zero
+     free conversation** — nothing here asks for unscripted speech.
+   - **A0→A1**: listening volume increases, plus scripted voice tasks with the text visible.
+   - **A1+**: unscripted, script hidden.
+   `[spec]`
+8. **Dose numbers are policy, not yet enforced.** The target shape of a day — ≤8 new
+   words/day, ≤2 new grammar points/week, 20–30 minutes of core practice — is stated here as
+   intent only; nothing in this pack refuses an over-dose session yet. If the learner asks
+   whether a cap will stop them, say plainly that it will not, yet: a later taskgroup (TG2)
+   turns these numbers into `add_vocab`/`prescribe()` refusals. Until then, count and say the
+   numbers; do not enforce them by silently declining to continue. `[spec]`
 
 ## Mandatory close step
 
