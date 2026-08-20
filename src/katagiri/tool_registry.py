@@ -207,19 +207,30 @@ _PHASE_A_SPECS: Final[tuple[ToolSpec, ...]] = (
         summary="Mechanical PASS/FAIL of the study-consistency stop gate.",
         args=(),
         output=(
-            "{pass, failing_criterion, study_days_in_window, window_start, "
-            "window_end, probe_battery_recorded, required_study_days, "
-            "window_length_days, excluded_pause_days, study_day_keys, "
-            "ignored_pause_events}"
+            "{pass, failing_criterion, failing_criteria, study_days_in_window, "
+            "window_start, window_end, probe_battery_recorded, "
+            "probe_coverage_bands, probe_observations, probe_unassisted, "
+            "probe_unassisted_rate, probe_bands, required_coverage_bands, "
+            "required_study_days, window_length_days, excluded_pause_days, "
+            "study_day_keys, consecutive_failures, re_plan_triggered, "
+            "re_plan_after_failures, ignored_pause_events, ignored_gate_events, "
+            "gate_evaluation_event_id}"
         ),
         stability="stable",
         note=(
-            "14 study days inside the 18-day window ending today. A study day is "
-            "a day_key with study_session events totalling >= 10 minutes, or at "
-            "least one artifact event. Days covered by a declared pause are "
-            "dropped from the window's denominator, so the window reaches further "
-            "back in calendar time but still holds 18 countable days. Mechanical "
-            "on purpose: it reads the event log and reports, it does not judge."
+            "Two criteria gate `pass`, both counted, never judged: 14 study days "
+            "inside the 18-day window ending today (a study day is a day_key with "
+            "study_session events totalling >= 10 minutes, or at least one "
+            "artifact event; days covered by a declared pause are dropped from "
+            "the window's denominator, so the window reaches further back in "
+            "calendar time but still holds 18 countable days); and a recorded "
+            "probe_battery event whose unassisted pass-rate spans >= 2 coverage "
+            "bands with >= 1 unassisted observation somewhere in it — the rate "
+            "itself is never compared to a threshold, only that it exists. Not "
+            "read-only: every call appends a gate_evaluation event carrying the "
+            "verdict, which is what makes consecutive_failures and "
+            "re_plan_triggered (true after 2 consecutive failing evaluations, "
+            "this one included) answerable at all."
         ),
     ),
     ToolSpec(

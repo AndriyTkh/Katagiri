@@ -636,11 +636,16 @@ from katagiri.stop_gate import (  # noqa: E402
     name="stop_gate_status",
     title="Stop gate status",
     description=(
-        "Mechanical PASS/FAIL: 14 study days inside the 18-day window ending "
-        "today, where a study day means study_session events totalling at least "
-        "10 minutes or at least one artifact event, and declared pauses drop "
-        "days from the window's denominator. Reports the count and the shortfall; "
-        "it does not interpret them."
+        "Mechanical PASS/FAIL, gated on two criteria: 14 study days inside the "
+        "18-day window ending today (a study day means study_session events "
+        "totalling at least 10 minutes or at least one artifact event, and "
+        "declared pauses drop days from the window's denominator); and a "
+        "recorded probe_battery event whose unassisted pass-rate spans at least "
+        "2 coverage bands with at least 1 unassisted observation (the rate "
+        "itself is never judged, only that it was measured). Reports the count "
+        "and every failing criterion; it does not interpret them. Not read-only: "
+        "every call appends a gate_evaluation event, so two consecutive failing "
+        "evaluations trigger an explicit re_plan_triggered flag."
     ),
 )
 def stop_gate_status() -> dict[str, Any]:
