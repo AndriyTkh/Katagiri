@@ -65,13 +65,18 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+# Normal run: skips ground-zero 'compile' drills; the real JMdict comes from a
+# cached template under tests/.cache (imported once, then file-copied).
+uv run pytest
+
+# Public build / full validation: ground-zero reimports, corruption/restore
+# drills, everything. Run before releases.
+uv run pytest --public-build
 ```
+
+Test groups (see `tests/conftest.py`): `compile` (ground-zero rebuilds, first,
+public-build only) → general → `mcp` (spawns the real MCP server over stdio, last).
 
 ## Architecture Overview
 

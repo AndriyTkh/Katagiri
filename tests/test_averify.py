@@ -4,7 +4,8 @@ This file is a *cold* verification harness, not a unit-test suite. Nothing here
 mocks a Katagiri module: every step runs the real code against one temporary
 database that is built once per module —
 
-    migrate -> import JMdict (the real vendored, checksum-verified zip)
+    lay down the real JMdict (the session template, imported once from the
+    vendored checksum-verified zip) -> migrate
             -> snapshot a fabricated Anki collection
             -> sync its revlog into review_batch events
             -> mark one word known through the event path
@@ -66,6 +67,10 @@ from katagiri import (
 )
 from katagiri import config as config_mod
 from katagiri.db import open_db
+
+# The MCP checks below spawn the real server as a subprocess, so the whole
+# module belongs to the 'mcp' group and runs after the cheap unit groups.
+pytestmark = pytest.mark.mcp
 
 FIXTURES = Path(__file__).parent / "fixtures" / "averify"
 VAULT = FIXTURES / "vault"
@@ -315,13 +320,45 @@ def vault_sentences() -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def dictionary_state(conn: sqlite3.Connection) -> jmdict_import.ImportResult:
+    """The dictionary this database holds, in :class:`ImportResult` shape.
+
+    The pipeline does not run the importer any more — the session-scoped
+    template did, once — so the row counts are read back out of the tables and
+    the provenance out of ``metadata``, where ``import_jmdict`` stamps it. Both
+    survive the file copy, so the fields mean what the importer's own result
+    meant.
+    """
+    def count(table: str) -> int:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+    provenance = {
+        row["key"]: row["value"]
+        for row in conn.execute(
+            "SELECT key, value FROM metadata "
+            "WHERE key IN ('jmdict_version', 'jmdict_dict_date')"
+        )
+    }
+    return jmdict_import.ImportResult(
+        entries=count("jmdict_entry"),
+        kanji_rows=count("jmdict_kanji"),
+        reading_rows=count("jmdict_reading"),
+        sense_rows=count("jmdict_sense"),
+        version=provenance.get("jmdict_version"),
+        dict_date=provenance.get("jmdict_dict_date"),
+    )
+
+
 @pytest.fixture(scope="module")
-def pipeline(tmp_path_factory) -> dict[str, Any]:
+def pipeline(tmp_path_factory, real_jmdict_template) -> dict[str, Any]:
     """Run the whole Phase A pipeline once and hand back its artefacts.
 
-    Module-scoped because importing the real JMdict zip takes ~25s and every
-    assertion below reads the same populated database. The database is closed
-    again at teardown so the restore drill can copy the file.
+    Module-scoped because every assertion below reads the same populated
+    database. The dictionary arrives as a file copy of the session template
+    (``conftest.real_jmdict_template``) rather than a fresh ~21s import; under
+    ``--public-build`` that template is itself imported from ground zero this
+    run. The database is closed again at teardown so the restore drill can copy
+    the file.
     """
     root = tmp_path_factory.mktemp("averify")
     app_data = root / "AppData"
@@ -340,10 +377,16 @@ def pipeline(tmp_path_factory) -> dict[str, Any]:
     collection = build_collection(root / "anki" / "User 1" / "collection.anki2")
     sentences = vault_sentences()
 
+    # 1. JMdict, from the real vendored zip — imported once into the session
+    #    template and laid down here as a file copy. The template is already a
+    #    migrated Katagiri database at the current schema version, so the
+    #    open_db() below finds nothing pending and migrates nothing (see
+    #    db.migrate: no pending migrations returns before any backup or DDL).
+    real_jmdict_template.materialize(db_path)
+
     conn = open_db()
     try:
-        # 1. JMdict, from the real vendored zip. Checksum-verified inside.
-        jmdict = jmdict_import.import_jmdict(conn)
+        jmdict = dictionary_state(conn)
         # 2. Provenance, without which the FTS rebuild rightly refuses to run.
         stamps = tokenizer.stamp_versions(conn)
         # 3. Anki mirror + review history.
@@ -416,10 +459,22 @@ def test_the_vault_fixture_is_the_shape_the_arithmetic_assumes(pipeline):
 def test_jmdict_imported_from_the_checksum_verified_vendor_zip(pipeline, conn):
     result = pipeline["jmdict"]
     assert result.entries > 100_000, "the real dictionary, not a stub"
-    assert conn.execute("SELECT COUNT(*) FROM jmdict_entry").fetchone()[0] == (
-        result.entries
-    )
-    # The zip is the frozen fixture, and its provenance reached the rows.
+    # The importer ran once, into the session template, and this database is a
+    # copy of that file — so the counts are read back rather than reported, and
+    # what has to be proved here is that the copy carries a *whole* import:
+    # every detail table populated, and not one detail row orphaned from its
+    # entry. A truncated or half-written template fails this.
+    assert result.kanji_rows > 0, "a dictionary with no written forms is not one"
+    assert result.reading_rows > result.entries, "entries carry ≥1 reading each"
+    assert result.sense_rows > result.entries, "entries carry ≥1 sense each"
+    for table in ("jmdict_kanji", "jmdict_reading", "jmdict_sense"):
+        orphans = conn.execute(
+            f"SELECT COUNT(*) FROM {table} AS d WHERE NOT EXISTS "
+            "(SELECT 1 FROM jmdict_entry AS e WHERE e.seq = d.seq)"
+        ).fetchone()[0]
+        assert orphans == 0, f"{table} rows without an entry"
+    # The zip is the frozen fixture, and its provenance reached the rows: the
+    # version stamped into metadata is the one every entry row declares.
     versions = [
         row[0]
         for row in conn.execute("SELECT DISTINCT dict_version FROM jmdict_entry")
@@ -892,8 +947,12 @@ def test_stdout_carried_protocol_frames_and_nothing_else(mcp_client):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.compile
 def test_backup_verify_damage_restore_round_trip(pipeline, conn, tmp_path):
     """Snapshot the populated database, damage a copy of it, restore, recount.
+
+    A ground-zero drill: it VACUUMs, copies and rewrites the whole ~200MB
+    database, so it runs only under ``--public-build`` (see ``conftest``).
 
     The snapshot is taken with ``create_backup`` (``VACUUM INTO``) straight from
     the live connection, and *that* is what becomes the drill's starting file. A

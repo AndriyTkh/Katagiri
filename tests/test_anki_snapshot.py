@@ -935,6 +935,7 @@ def _blank_the_header(path: Path) -> None:
         handle.write(b"NOT A DATABASE")
 
 
+@pytest.mark.compile
 @pytest.mark.parametrize(
     "damage", [_truncate, _rot_every_page_but_the_first, _blank_the_header],
     ids=["truncated", "rotted-pages", "no-header"],

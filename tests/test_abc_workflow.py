@@ -31,8 +31,10 @@ over JSON-RPC on its stdin/stdout:
 Two vendored dependencies are real rather than faked, because faking either one
 would remove exactly the seam this file exists to check:
 
-* the real vendored JMdict zip, imported once into the session's database
-  (skipped, loudly, only if ``vendor/jmdict`` is genuinely absent);
+* the real vendored JMdict, present in the session's database (skipped, loudly,
+  only if ``vendor/jmdict`` is genuinely absent) — supplied by conftest's
+  ``real_jmdict_template``, which is a copy of a real import of the real zip,
+  not a fake, so what the lookup answers from is the shipped dictionary;
 * the real vendored UniDic dictionary via fugashi, needed by *both*
   ``search_db``'s sentence FTS index and ``search_notes``'s prose index — the
   whole module skips, loudly, if it is absent, since neither phase's search step
@@ -83,18 +85,25 @@ def _dicdir_available() -> bool:
     return True
 
 
-# The whole file skips here, rather than per-test, because both the Phase A
+# ``mcp``: this file spawns the real katagiri.mcp_server subprocess, so conftest
+# orders it into the last band, after the cheap unit groups have had their
+# chance to fail fast.
+#
+# The skipif is whole-file, rather than per-test, because both the Phase A
 # sentence index and the Phase C prose index need the vendored dictionary:
 # there is no partial version of "one session, three phases" that means
 # anything with the middle phase's search silently absent.
-pytestmark = pytest.mark.skipif(
-    not _dicdir_available(),
-    reason=(
-        "vendored UniDic 3.1.0 is absent (vendor/unidic/unidic); both "
-        "search_db's sentence index and search_notes' prose index need it — "
-        "see vendor/README.md"
+pytestmark = [
+    pytest.mark.mcp,
+    pytest.mark.skipif(
+        not _dicdir_available(),
+        reason=(
+            "vendored UniDic 3.1.0 is absent (vendor/unidic/unidic); both "
+            "search_db's sentence index and search_notes' prose index need it — "
+            "see vendor/README.md"
+        ),
     ),
-)
+]
 
 PROTOCOL_VERSION = "2026-07-28"
 
@@ -173,6 +182,31 @@ def _vendor_jmdict_available() -> tuple[bool, str]:
     except jmdict_import.VendorFileError as exc:
         return False, str(exc)
     return True, ""
+
+
+#: The four tables a JMdict import fills. Counted straight out of the database
+#: below, because the dictionary arrives as a file copy of conftest's template
+#: rather than as an import call that could hand back an ImportResult.
+_JMDICT_TABLES = ("jmdict_entry", "jmdict_kanji", "jmdict_reading", "jmdict_sense")
+
+
+def _jmdict_counts(conn) -> dict[str, int]:
+    """Row counts for the imported dictionary, asserting none of them is zero.
+
+    Same claim the old ``ImportResult`` carried: the dictionary in this database
+    is really populated, so a lookup that finds nothing later is a product bug
+    and not an empty table nobody noticed.
+    """
+    counts = {
+        table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        for table in _JMDICT_TABLES
+    }
+    empty = sorted(table for table, count in counts.items() if count == 0)
+    assert not empty, (
+        f"the JMdict template left {', '.join(empty)} empty; the dictionary did "
+        f"not arrive intact (counts: {counts})"
+    )
+    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +353,7 @@ def vault_stub():
 
 
 @pytest.fixture(scope="session")
-def cold(tmp_path_factory) -> dict[str, Any]:
+def cold(request, tmp_path_factory) -> dict[str, Any]:
     """A migrated database, a copy of the fixture vault, and a built prose index.
 
     Session-scoped so one MCP subprocess can serve the whole ordered scenario —
@@ -347,6 +381,18 @@ def cold(tmp_path_factory) -> dict[str, Any]:
 
     jmdict_available, jmdict_reason = _vendor_jmdict_available()
 
+    if jmdict_available:
+        # The dictionary arrives as a file copy of conftest's session template
+        # (a real import of the real vendored zip, done once per run) instead of
+        # a ~20s import repeated here. It has to land *before* open_db(): the
+        # copy replaces the whole file, so anything written to db_path first —
+        # the migration stamp, the seeds below — would be thrown away. The
+        # fixture is pulled through getfixturevalue rather than declared as a
+        # parameter so that an unvendored checkout still reaches the graceful
+        # "jmdict absent" path below instead of skipping this whole module.
+        template = request.getfixturevalue("real_jmdict_template")
+        template.materialize(db_path)
+
     try:
         conn = open_db()
         try:
@@ -364,7 +410,7 @@ def cold(tmp_path_factory) -> dict[str, Any]:
             mark = events.mark_item(conn, KNOWN_WORD_ID, "known", note="abcwf")
 
             if jmdict_available:
-                jmdict_result = jmdict_import.import_jmdict(conn)
+                jmdict_result = _jmdict_counts(conn)
             else:
                 jmdict_result = None
 

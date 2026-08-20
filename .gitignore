@@ -15,3 +15,9 @@ dist/
 vendor/*
 !vendor/README.md
 !vendor/CHECKSUMS.sha256
+
+# Test-suite JMdict template cache
+tests/.cache/
+
+# Local test-run transcripts
+test-run*.log

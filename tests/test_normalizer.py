@@ -17,10 +17,14 @@ and scores the cascade over the 200 labelled morphs in
 ``src/katagiri/data/morph_labels_200.tsv``. That is the test that actually
 protects ``known_word()``: the unit tests say each rung does what it claims, and
 only the labelled set says the cascade as a whole gets real words right. It is
-marked ``slow`` (the import costs ~21 seconds, paid once for the session) but is
-**not** skipped by default, because an accuracy target nobody runs is not a target.
-It skips only when the vendored dictionary is absent, which is the one situation
-where the test could not be meaningful.
+**not** skipped by default, because an accuracy target nobody runs is not a
+target; it reads a copy of the session-wide JMdict template (``tests/conftest.py``)
+rather than reimporting, so the dictionary costs a file copy here. It skips only
+when the vendored dictionary is absent, which is the one situation where the test
+could not be meaningful. The one ground-zero-scale rebuild in this half —
+``populate_lexemes`` over all 218k entries — is marked ``compile`` and runs under
+``--public-build`` only; nothing else in the module reads the ``lexeme`` table
+(``normalize_morph`` queries the ``jmdict_*`` tables directly).
 """
 
 from __future__ import annotations
@@ -936,34 +940,35 @@ def test_the_accuracy_set_is_well_formed_and_the_expected_size():
 
 
 @pytest.fixture(scope="session")
-def real_jmdict(tmp_path_factory):
-    """The real vendored JMdict in a scratch database, imported once per session.
+def real_jmdict(real_jmdict_template, tmp_path_factory):
+    """The real vendored JMdict in a scratch database, shared by this module.
 
-    ~21 seconds and 218k entries. Paid once; every test below shares it.
+    A copy of the session template (see ``tests/conftest.py``), so the 218k-entry
+    import is not repaid here: normal runs copy the cached file, and only
+    ``--public-build`` imports from ground zero. Writes made by tests below land
+    in this module's copy and never touch the template. Skips, via the template
+    fixture, when the vendored dictionary is absent.
     """
-    try:
-        zip_path = jm.default_jmdict_zip()
-    except jm.JmdictImportError as exc:  # pragma: no cover - unvendored checkout
-        pytest.skip(f"The vendored JMdict is not available: {exc}")
-
-    path = tmp_path_factory.mktemp("real_jmdict") / "jmdict.db"
+    path = real_jmdict_template.materialize(
+        tmp_path_factory.mktemp("real_jmdict") / "jmdict.db"
+    )
     connection = db.open_db(path)
     try:
-        jm.import_jmdict(connection, zip_path)
         yield connection
     finally:
         connection.close()
 
 
-@pytest.mark.slow
 def test_the_real_import_is_the_dictionary_we_think_it_is(real_jmdict):
+    """The dictionary under the accuracy half is present and the size we expect."""
     entries = real_jmdict.execute("SELECT COUNT(*) FROM jmdict_entry").fetchone()[0]
 
     assert entries > 200_000
 
 
-@pytest.mark.slow
+@pytest.mark.compile
 def test_populate_lexemes_scales_to_the_whole_dictionary(real_jmdict):
+    """A ~10s full rebuild; nothing else here reads ``lexeme``, so it is compile-only."""
     result = nz.populate_lexemes(real_jmdict)
 
     senses = real_jmdict.execute("SELECT COUNT(*) FROM jmdict_sense").fetchone()[0]
@@ -977,7 +982,6 @@ def test_populate_lexemes_scales_to_the_whole_dictionary(real_jmdict):
     assert mismatched == 0
 
 
-@pytest.mark.slow
 def test_accuracy_target(real_jmdict):
     """Score the whole cascade over 200 labelled morphs from the real dictionary.
 
@@ -1019,7 +1023,6 @@ def test_accuracy_target(real_jmdict):
     assert accuracy >= ACCURACY_TARGET, message
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize(
     ("lemma", "reading", "pos1", "expected", "why"),
     [
@@ -1042,7 +1045,6 @@ def test_known_hard_cases_stay_fixed(real_jmdict, lemma, reading, pos1, expected
     assert result.best == expected, f"{lemma}/{reading}: {why} (got {result.best})"
 
 
-@pytest.mark.slow
 def test_every_expected_seq_in_the_accuracy_set_exists_upstream(real_jmdict):
     """No invented seq numbers: the whole point of building the set against real data."""
     missing = [

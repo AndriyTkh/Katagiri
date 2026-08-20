@@ -94,6 +94,8 @@ from katagiri import events, mcp_server, obsidian_proxy, today_export
 from katagiri import config as config_mod
 from katagiri.db import open_db
 
+pytestmark = pytest.mark.mcp
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_ROOT = REPO_ROOT / "src" / "katagiri"
 

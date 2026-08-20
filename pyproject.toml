@@ -32,4 +32,12 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-markers = ["slow: long-running test, runs by default, skips only if vendor data absent"]
+# The suite copies ~200MB dictionary databases into tmp; keeping pytest's
+# default 3 historical temp roots costs gigabytes. Keep only failed runs, one deep.
+tmp_path_retention_count = 1
+tmp_path_retention_policy = "failed"
+markers = [
+    "slow: long-running test, runs by default, skips only if vendor data absent",
+    "mcp: spawns the real MCP server over stdio; ordered last in the run",
+    "compile: ground-zero rebuild (real reimports, corruption drills); runs only with --public-build, ordered first",
+]
