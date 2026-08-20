@@ -106,7 +106,7 @@ Merge order (felt-value): US2 → US3 → US4. Registration for all three lands 
 
 **[was: kata-dvf]** Needs US1+US2+US4 merged. Max two rerun cycles.
 
-- [ ] T018 [Gate] Cumulative cold-subagent scenarios A..D: full lesson loop lands artifacts in vault + event log. Write: NEW tests/test_dverify.py. Read: quickstart.md (runbook), prior *verify tests. [was: kata-dvf]
+- [ ] T018 [in-progress: worker-t018-gate] [Gate] Cumulative cold-subagent scenarios A..D: full lesson loop lands artifacts in vault + event log. Write: NEW tests/test_dverify.py. Read: quickstart.md (runbook), prior *verify tests. [was: kata-dvf]
 - [ ] T019 [Gate] Learner metric + ledger/coverage update + weekly status line; mark gate complete here. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: event log, coverage table. [was: kata-dvf]
 
 ## Taskgroup D6: Gate — D6 STOP-GATE (P0, blocks ALL Phase E code)
