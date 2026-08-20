@@ -1,0 +1,77 @@
+# Katagiri DEMO PROFILE configuration template — specs/005-mcp-assignment.
+#
+# This is a TEMPLATE, not a config file Katagiri reads directly: copy it
+# somewhere outside the repository (never commit the copy), edit the paths
+# for the machine it runs on, and point `KATAGIRI_CONFIG` at the copy:
+#
+#   setx KATAGIRI_CONFIG "C:\path\to\your\demo-config.toml"
+#   (or set it for one shell: $env:KATAGIRI_CONFIG = "C:\path\to\demo-config.toml")
+#
+# Absent that variable, Katagiri is unaffected and loads its normal
+# %LOCALAPPDATA%\Katagiri\config.toml — this file changes nothing until
+# KATAGIRI_CONFIG is set (src/katagiri/config.py, T007, additive-only).
+#
+# Same key set and same shapes as the real config.toml (see
+# src/katagiri/config.py's _KNOWN_KEYS / _KEY_BLOCKS) — this file is
+# deliberately not a special demo-only schema, so config.py needs no
+# demo-specific code path.
+
+# --- vault_path -------------------------------------------------------------
+# The demo vault fixture committed at tests/demo_fixtures/vault/ (goal-note
+# variants + a small curriculum + inbox stub — see docs/assignment/
+# demo-setup.md). Point this at wherever that tree lives on the machine
+# running the demo (a plain copy of the checked-in fixture works; nothing
+# here needs to be inside a git worktree at demo time).
+vault_path = "C:/ProjectsC/RandomPr/Katagiri/tests/demo_fixtures/vault"
+
+# --- db_path -----------------------------------------------------------------
+# The fixture DB built by scripts/build_demo_db.py (path and flags finalized
+# alongside that script; see docs/assignment/demo-setup.md step "Build the
+# fixture DB"). NEVER the personal db_path.
+db_path = "C:/ProjectsC/RandomPr/Katagiri/tests/demo_fixtures/demo.db"
+
+# --- scratch_root -------------------------------------------------------------
+# Scratch space for the demo run only (temp exports, caches). Kept separate
+# from the personal scratch_root so a demo run can never leave artefacts
+# next to real study data.
+scratch_root = "C:/ProjectsC/RandomPr/Katagiri/tests/demo_fixtures/scratch"
+
+# --- anki_data_dir -------------------------------------------------------------
+# Not needed for the demo (no Anki-backed tool is part of the graded flow);
+# left unset on purpose. Uncomment only if a future demo step needs it, and
+# never point it at the personal Anki profile.
+# anki_data_dir = ""
+
+# --- obsidian_api_token --------------------------------------------------------
+# IMPORTANT, read before filling this in: Katagiri's OWN Obsidian proxy
+# (src/katagiri/obsidian_proxy.py — the vault_file / vault_list /
+# obsidian_active_note tools) is HARDCODED to http://127.0.0.1:27123. That
+# constant is not read from this file and cannot be overridden here. The
+# demo Local REST API plugin instance is deliberately bound to a
+# NON-default port (e.g. 27224/27223 HTTPS, see docs/assignment/
+# demo-setup.md) specifically so it is never confused with the personal
+# instance on 27123 — which also means katagiri's own proxy tools CANNOT
+# reach the demo vault, by construction, regardless of what is set here.
+#
+# Consequences:
+#   - Leave this key unset/commented (as below) for the demo profile. There
+#     is no usable value: katagiri's proxy will never call the demo
+#     instance's port, and pointing this at the demo token would only
+#     invite someone to mistakenly believe it does something.
+#   - The homework agent's OWN connection to the demo vault (US1's goal-note
+#     read) does NOT go through this key or through katagiri at all — it
+#     connects directly to the plugin's built-in /mcp/ endpoint using its
+#     own demo token, configured in agent/.env's OBSIDIAN_API_TOKEN /
+#     OBSIDIAN_MCP_URL (see agent/.env.example). The two tokens (this one,
+#     and the agent's) are DISTINCT by construction (FR-010) even though
+#     this one is never actually used in the demo.
+#   - katagiri's vault_file/vault_list/obsidian_active_note tools will
+#     report themselves unreachable (obsidian_unreachable) whenever nothing
+#     listens on 27123 during the demo — including if the operator decides
+#     to keep personal Obsidian closed for the recording (see
+#     docs/assignment/demo-setup.md's "personal Obsidian during recording"
+#     decision). That degradation is graceful and accepted: disk-backed
+#     reads (curriculum, md_search / search_notes) still work via
+#     vault_path above, independent of whether anything is listening on
+#     any Obsidian REST port.
+# obsidian_api_token = ""
