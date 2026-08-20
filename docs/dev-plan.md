@@ -284,3 +284,13 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   green, cold-subagent scripted lesson loop lands all six US1 event types in the event log).
   **D6 calendar clock (T022) starts today**: 14 study days in an 18-day window counted from
   2026-08-19. Vault half of the loop (Today.md lesson-memory section) is T010/TG-D4.
+- 2026-08-20 — Phase D TG-D4 checkpoint: US2 (lesson memory + skills pack v1 + Today.md
+  section), US3 (sensei letter errors/threads/probes paragraphs), US4 (vocab/grammar
+  intelligence: coverage, DAG-gated i+1, comprehension debt, difficulty-for-me) all merged.
+  14 new tools registered (`lesson_memory`, `coverage`, `find_i_plus_one`); suite 1461 green.
+  Incident: intel worktree's vendored difficulty datasets (jreadability/BCCWJ/JLPT, gitignored)
+  destroyed by `git worktree remove --force` before re-fetch; recovered same-session,
+  bit-identical to pinned checksums — no data-integrity loss, but a reminder that
+  `--force` on a worktree holding real (non-junction) untracked vendor data needs an
+  explicit re-vendor step first, not after. tanos JLPT source is unversioned (checksum-only
+  pin); BCCWJ is research/education-only licensed (correctly never committed).

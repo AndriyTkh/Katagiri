@@ -100,6 +100,8 @@ Merge order (felt-value): US2 → US3 → US4. Registration for all three lands 
 
 **Checkpoint**: full suite green; US2/US3/US4 done.
 
+> **Checkpoint result (2026-08-20)**: suite 1461 green (14 new US2/US4 tools registered: `lesson_memory`, `coverage`, `find_i_plus_one`; US3 adds no tool by design). One operational incident during teardown: the intel worktree's vendored difficulty datasets (jreadability/BCCWJ/JLPT — gitignored per vendor/* pattern) were destroyed by `git worktree remove --force` before being re-fetched into the main checkout; recovered same-session, bit-identical to the pinned checksums (see docs/dev-plan.md incident log — same class as the earlier worktree-junction incident). `tests/test_intelligence.py` now 152/152 with real vendored data. Flag for D-verify (T018): tanos JLPT source is unversioned (checksum is the only real pin — future re-vendor may legitimately fail); BCCWJ carries a research/education-only license (correctly gitignored, never committed, worth a decisions-ledger line per T017's agent note).
+
 ## Taskgroup D5: Gate — D-verify (P0)
 
 **[was: kata-dvf]** Needs US1+US2+US4 merged. Max two rerun cycles.
