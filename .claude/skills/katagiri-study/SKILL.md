@@ -1,6 +1,6 @@
 ---
 name: katagiri-study
-description: Run a Katagiri Japanese study session — guess-first elicitation, i+1 coverage gating, a 5-item mining budget, nuance-anchored new vocabulary, and one prescribed action per session, closed out with logged observations and a next step. Covers FULL, WATCH (media), REVIEW (review-only) and TIRED (minimum) session modes. Use when the learner asks to study Japanese, says "study session", "日本語", "let's do Japanese", "quiz me on Japanese", "review my Japanese", "just reviews", "I'm tired / short on time", says they watched or want to watch Japanese material, asks to mine words or sentences from Japanese material, or invokes /katagiri-study.
+description: Run a Katagiri Japanese study session — guess-first elicitation, i+1 coverage gating, a 5-item mining budget, nuance-anchored new vocabulary, and one prescribed action per session, closed out with logged observations and a next step. Covers FULL, WATCH (media), REVIEW (review-only), KANA (Phase 0 kana-only) and TIRED (minimum) session modes. Use when the learner asks to study Japanese, says "study session", "日本語", "let's do Japanese", "quiz me on Japanese", "review my Japanese", "just reviews", "I'm tired / short on time", says they watched or want to watch Japanese material, asks to mine words or sentences from Japanese material, or invokes /katagiri-study.
 ---
 
 # Katagiri study session — pack v1
@@ -229,6 +229,68 @@ prescribed action comes back as `tired_mode_minimum`.
   for it tomorrow" doubling.
 - TIRED is **complete at the floor**, not a degraded FULL. Say so, close, and stop. A streak
   kept small is a streak kept.
+
+### KANA — Phase 0, kana before anything else
+
+For an absolute-beginner learner in curriculum Phase 0 (`10-course/curriculum.md` §"Phase
+0 — Ears and mouth"): no hiragana yet means no dictation, no dictionary, no subtitle is
+usable. This mode is a peer of FULL/WATCH/REVIEW/TIRED, not a degraded FULL — say which
+mode you are running, same as every other mode. `[spec]`
+
+1. **New material** — one row block of hiragana, about five kana, audio-first: play or say
+   the sound, the learner produces the sound, only then show the glyph. There is no kanji in
+   Phase 0, so there is nothing else to introduce.
+2. **Daily artifact = mora-count dictation, and nothing else runs.** The session's one
+   deliverable is a dictation: play or speak a mora sequence built from kana taught so far,
+   the learner writes it in kana. This is the artifact the day qualifies on, not a minutes
+   claim — see the close step below.
+3. **Phase-0 suspensions — state each one out loud when it would otherwise fire; never drop
+   a rule silently** `[spec]`:
+   - **Kanji-rival rule suspended.** Core behavior 4's same-reading kanji rival (見る/観る/診る,
+     …) cannot apply — there is no kanji yet. Say it is suspended rather than skipping the
+     step unremarked.
+   - **Kanji-component hint ladder suspended.** Core behavior 1's hint escalation (context
+     clue → kanji component gloss → part of speech → first mora) drops its kanji-component
+     rung; escalate context clue → part of speech → first mora instead.
+   - **WATCH mode suspended.** No media session runs in Phase 0 — there is no coverage
+     estimate possible without kana literacy. If the learner asks to watch something, say
+     WATCH is suspended for Phase 0 and offer KANA instead.
+   - **Mining capped at ≤3 kana-only items**, not core behavior 3's usual 5. Everything mined
+     is a kana item — a kana itself or a mora pattern, never a vocabulary word, since there is
+     no reading yet to anchor one. Count aloud against 3, same discipline as the normal
+     budget.
+   - **Furigana always on.** The furigana-decay ladder (always → first occurrence → off,
+     post-gate policy) has not started; nothing renders without furigana in Phase 0.
+4. **Coverage unit = unread kana, not words.** Before presenting any kana material, state
+   coverage as a share of the ~46 hiragana (then katakana) the learner has not yet seen.
+   Core behavior 2's word-based i+1 estimate does not apply in Phase 0 — there are no words
+   yet, only kana. `[spec]`
+5. **Day qualification rides the dictation artifact under a reserved topic slug.** A Phase-0
+   day qualifies on the dictation, never on a minutes claim, by closing the lesson with
+   `topic: "phase0-kana-dictation"` — the reserved Phase-0 dictation topic slug, named here
+   verbatim and used exactly, every KANA session. `lesson_close` is already an artifact event
+   type (see TIRED above); riding the dictation on it, under this exact slug, is what lets a
+   future gate count dictation days mechanically instead of guessing from prose. A dictation
+   logged under any other topic string is invisible to that count even though the lesson
+   still closed. `[spec]`
+6. **The kana gate is staged, not one wall.** Hiragana recognition ≥95% in **both**
+   directions — kana→sound and sound→kana — with recall averaging **≤2 seconds per
+   character** in each direction unlocks drill tooling. Katakana is a second checkpoint after
+   hiragana clears, never a wall: a katakana gap never blocks hiragana-level work or drill
+   tooling that hiragana already unlocked. `[spec]`
+7. **Modality ladder** — state which rung the learner is on, and never move them up a rung
+   because a session went well; the rung is a gate condition, not a mood:
+   - **A0** (this mode, Phase 0): kana + audio-with-script + shadowing + dictation. **Zero
+     free conversation** — nothing here asks for unscripted speech.
+   - **A0→A1**: listening volume increases, plus scripted voice tasks with the text visible.
+   - **A1+**: unscripted, script hidden.
+   `[spec]`
+8. **Dose numbers are policy, not yet enforced.** The target shape of a day — ≤8 new
+   words/day, ≤2 new grammar points/week, 20–30 minutes of core practice — is stated here as
+   intent only; nothing in this pack refuses an over-dose session yet. If the learner asks
+   whether a cap will stop them, say plainly that it will not, yet: a later taskgroup (TG2)
+   turns these numbers into `add_vocab`/`prescribe()` refusals. Until then, count and say the
+   numbers; do not enforce them by silently declining to continue. `[spec]`
 
 ## Mandatory close step
 

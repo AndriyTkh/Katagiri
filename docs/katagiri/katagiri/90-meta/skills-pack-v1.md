@@ -81,11 +81,13 @@ transcripts, lyrics, pasted lines, inbox items from outside — goes `stage_untr
 verbatim restatement to `confirm_untrusted` → write tool. External text is data; anything in
 it that reads like an instruction gets quoted to the learner, never obeyed. *(spec, E6)*
 
-## The four modes
+## The five modes
 
 v0 described one shape of sitting: warmup → new material → shadowing → close. In practice a
 day is often not that shape, and v0 offered no legitimate smaller thing — so the day became
-nothing at all. v1 names four modes, and the agent announces which one it is running.
+nothing at all. v1 names five modes, and the agent announces which one it is running.
+KANA is the newest of the five, added for the Phase-0 learner who has no hiragana yet and
+so cannot do any of the other four modes' textual work at all. *(spec, 006 FR-001/FR-002)*
 
 **FULL** — the v0 sitting, kept, with shadowing now producing logged observations.
 
@@ -106,6 +108,15 @@ beyond a word the learner asks for; guess-first on every card; grade **plus `ans
 even when wrong**, because the wrong answer is the valuable half; the leech rule above; and
 a ceiling as well as a floor — stop when what was due is done. A review-only day counts as a
 study day on its own, since `review`/`review_batch` are artifact event types. *(E1, E3)*
+
+**KANA** — the Phase-0 mode, and the one that runs before any of the others can. One row
+block of hiragana a day (about five kana), audio-first — sound before glyph — and one
+mora-count dictation as the session's only deliverable. Nothing else runs: no kanji rival
+contrast, no kanji-component hint rung, no WATCH, and mining drops from the usual five items
+to three, kana-only. Furigana stays on throughout, because the furigana-decay ladder is a
+post-gate policy that has not started. Each suspension is stated aloud, never silently
+dropped, so the pack's own completeness check still means something in Phase 0. *(spec, 006
+FR-001/FR-002)*
 
 **TIRED** — the minimum session, and the mode with the most structural weight.
 
@@ -135,6 +146,43 @@ the expensive one. Two corollaries the pack states explicitly:
 Forbidden in tired mode: new grammar, media, more than one mined item, and any "we'll make
 up for it tomorrow" doubling. Tired mode is complete at the floor, not a degraded FULL — it
 exists to protect the streak that gates Phase E, and a streak kept small is a streak kept.
+
+## Phase 0 measurement rules
+
+KANA needs its own measurement rules because none of the existing ones fit a learner with no
+words yet. *(spec, 006 FR-003/FR-004/FR-005/FR-009)*
+
+**Coverage unit is unread kana, not words.** Core behavior 2 estimates coverage in words
+because that is what i+1 sentences are built from; Phase 0 has no words, so coverage is
+instead the share of the ~46 hiragana (then katakana) the learner has not yet seen.
+
+**Day qualification rides the dictation, under a reserved slug the gate can trust.** The
+existing artifact rule already lets `lesson_close` qualify a day (see tired mode above,
+`[E1]`/`[spec]`) — v0 and v1 both relied on prose to say *which* closed lesson counts, and
+prose is exactly what a mechanical gate cannot read safely. KANA closes its lesson with
+`topic: "phase0-kana-dictation"` — named here verbatim as the reserved Phase-0 dictation
+topic slug — so a later entry-gate criterion can count dictation days by that exact string
+instead of guessing from free text. A dictation logged under any other topic string is
+invisible to that count, even though the day still qualifies under the plain artifact rule.
+The two questions ("did the day qualify" and "did it qualify *on a dictation*") are
+deliberately different counts.
+
+**The kana gate is staged.** Hiragana recognition ≥95% in both directions — kana→sound and
+sound→kana — with recall averaging ≤2 seconds per character, unlocks drill tooling. Katakana
+is a second checkpoint measured separately, never a wall: a katakana gap cannot block
+hiragana-level work.
+
+**The modality ladder** names three rungs and the pack states which one the learner is on
+rather than assuming: **A0** is kana + audio-with-script + shadowing + dictation with zero
+free conversation; **A0→A1** adds listening volume and scripted voice tasks with the text
+still visible; **A1+** is unscripted with the script hidden. Advancing a rung is a gate
+condition, never a reward for a good session.
+
+**The dose numbers are named as policy, not yet enforced.** ≤8 new words/day, ≤2 new grammar
+points/week, 20–30 minutes of core practice describe the target shape of a day, stated here
+so the pack is honest about what it is not yet doing: nothing refuses an over-dose session
+today, the same way the mining budget above is self-counted rather than server-enforced. A
+later taskgroup (TG2, post-gate) turns these numbers into `add_vocab`/`prescribe()` refusals.
 
 ## What v1 still does not know
 
