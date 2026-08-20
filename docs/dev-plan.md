@@ -308,3 +308,10 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   data exists yet. Same gap as the C-verify SC-002 finding, still covered by the 2026-08-19
   Phase D entry waiver. TG-D5 complete; TG-D6 (T020–T022) is next, and T022's 14-study-days-in-
   18-days window (clock from 2026-08-19) cannot advance until real study days are logged.
+- 2026-08-20 — **Phase D CLOSED (user waiver on T022)**: user directed phase close at 005/006
+  launch; `phase-d` branch fast-forward merged to `master` (8051309 + close commit). T022's
+  live-gate criteria were NOT met — learner DB reset 2026-08-20 leaves 0 real study days and
+  the 2026-08-19 clock unsatisfiable. Waiver closes the phase-D ledger only; the mechanical
+  stop gate (`stop_gate_status`, T020/T021) still blocks all Phase E (specs/004) code until
+  real 14/18-day evidence plus a recorded probe battery exist. Consumption-mix record (F-10)
+  deferred to Phase E entry for the same reason. Next work: specs/006 TG0 + specs/005 TG-A.
