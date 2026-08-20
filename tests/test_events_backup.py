@@ -499,7 +499,27 @@ def test_copy_vault_snapshot_captures_text_and_skips_local_and_derived(tmp_path)
     archive = backup.copy_vault_snapshot(vault, tmp_path / "backups")
     with zipfile.ZipFile(archive) as zf:
         names = set(zf.namelist())
-    assert names == {"notes/keep.md", "notes/log.jsonl"}
+    assert names == {"notes/keep.md", "notes/log.jsonl", "notes/audio.mp3"}
+
+
+def test_copy_vault_snapshot_includes_audio_and_skips_local_and_derived(tmp_path):
+    # FR-007: audio artifacts (.mp3/.wav) must be captured by vault snapshots
+    # before any such artifact can land in the vault, but local/.derived stay
+    # excluded regardless of extension.
+    vault = tmp_path / "vault"
+    (vault / "notes").mkdir(parents=True)
+    (vault / "local").mkdir()
+    (vault / ".derived").mkdir()
+    (vault / "notes" / "keep.md").write_text("kept", encoding="utf-8")
+    (vault / "notes" / "shadowing.mp3").write_bytes(b"mp3-binary")
+    (vault / "notes" / "dictation.wav").write_bytes(b"wav-binary")
+    (vault / "local" / "machine.mp3").write_bytes(b"skip-mp3")
+    (vault / ".derived" / "cache.wav").write_bytes(b"skip-wav")
+
+    archive = backup.copy_vault_snapshot(vault, tmp_path / "backups")
+    with zipfile.ZipFile(archive) as zf:
+        names = set(zf.namelist())
+    assert names == {"notes/keep.md", "notes/shadowing.mp3", "notes/dictation.wav"}
 
 
 def test_copy_vault_snapshot_rejects_a_missing_vault(tmp_path):
