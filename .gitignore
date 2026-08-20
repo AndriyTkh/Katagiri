@@ -21,3 +21,12 @@ tests/.cache/
 
 # Local test-run transcripts
 test-run*.log
+
+# agent/ (005-mcp-assignment): separate uv subproject, own secrets and venv
+agent/.env
+agent/.venv/
+agent/**/checkpoints.sqlite
+agent/**/checkpoints.sqlite-*
+agent/scratch/
+agent/run-transcripts/
+agent/*.log
