@@ -107,7 +107,9 @@ Merge order (felt-value): US2 → US3 → US4. Registration for all three lands 
 **[was: kata-dvf]** Needs US1+US2+US4 merged. Max two rerun cycles.
 
 - [x] T018 [Gate] Cumulative cold-subagent scenarios A..D: full lesson loop lands artifacts in vault + event log. Write: NEW tests/test_dverify.py. Read: quickstart.md (runbook), prior *verify tests. [was: kata-dvf]
-- [ ] T019 [in-progress: worker-t019-gate] [Gate] Learner metric + ledger/coverage update + weekly status line; mark gate complete here. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: event log, coverage table. [was: kata-dvf]
+- [x] T019 [Gate] Learner metric + ledger/coverage update + weekly status line; mark gate complete here. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: event log, coverage table. [was: kata-dvf]
+
+> **Checkpoint result (2026-08-20)**: TG-D5 complete — **D-verify PASS**. tests/test_dverify.py green on all 7 quickstart "Expected outcomes (D-verify)" (T018); full suite 1480 tests. Learner metric (D-23) read read-only from the real event log at `%LOCALAPPDATA%\Katagiri\katagiri.db` via `events.recent_events`: **0 events total, 0 Phase-D tool events since 2026-08-19** — an honest zero: all Phase D verification to date is agent/fixture-only, so no real-usage data exists yet (same gap as C-verify SC-002, covered by the 2026-08-19 Phase D entry waiver). Coverage row appended to docs/decisions-ledger.md; status line appended to docs/dev-plan.md. Carry-ins for TG-D6: T021 must define/persist the gate-evaluation event type before any two-miss re-plan history can exist, and T022's 14-in-18-day window (clock 2026-08-19) cannot advance on fixture events — it needs real logged study days. Still open from TG-D4 for a future ledger/panel pass: tanos JLPT source is unversioned (checksum-only pin) and BCCWJ is research/education-only licensed.
 
 ## Taskgroup D6: Gate — D6 STOP-GATE (P0, blocks ALL Phase E code)
 

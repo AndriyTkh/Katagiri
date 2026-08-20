@@ -4,7 +4,7 @@ Running record: decisions made, options deferred (revisit conditions noted), and
 excluded from the current dev plan. Update whenever a decision lands or scope moves.
 Detailed reasoning lives in [audit-log.md](audit-log.md); this file is the index.
 
-Last updated: 2026-08-19.
+Last updated: 2026-08-20.
 
 ## Review coverage (what has already been audited — don't re-review)
 
@@ -17,6 +17,7 @@ Last updated: 2026-08-19.
 | dev-plan v1.1 revisions themselves | nobody | — | unreviewed delta; spot-check only the *changes* if ever re-reviewed |
 | Beads DAG (38 beads, created 2026-08-19) | nobody | — | unreviewed; per-phase estimates/workfiles/parallel lanes computed at implementation time |
 | Phase C scope (src/katagiri/md_search.py + search_notes registration) | nobody | shipped 2026-08-19, C-verify green | unreviewed — gate-verified only, not panel-audited |
+| Phase D scope (envelope, session tools, exercises, lesson memory + skills pack v1, full sensei letter, intelligence; 14 new MCP tools) | nobody | shipped 2026-08-20, D-verify green (T018: 7/7 quickstart outcomes, suite 1480) | unreviewed — gate-verified only, not panel-audited; learner metric 0 real-usage events (agent/fixture-only) |
 
 Rule: a new review round scopes only the delta since the last one. Re-reviewing a settled row
 is waste unless new external facts invalidate it (note the invalidation here first).

@@ -294,3 +294,17 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   `--force` on a worktree holding real (non-junction) untracked vendor data needs an
   explicit re-vendor step first, not after. tanos JLPT source is unversioned (checksum-only
   pin); BCCWJ is research/education-only licensed (correctly never committed).
+- 2026-08-20 — Phase D D-verify gate PASS (specs/003 TG-D5, T018+T019): tests/test_dverify.py
+  cold cumulative gate green on all 7 quickstart "Expected outcomes (D-verify)" — full fixture
+  lesson loop lands artifacts in vault + event log; `log_observations` without `rubric_version`
+  rejected; `start_session` returns exactly one prescribed action reflecting the prior
+  `next_step`; unreachable-grammar sentence excluded from `find_i_plus_one` at 100% vocab
+  coverage; media-derived write without echo-back refused; canary-referencing drill trips the
+  validator; scenarios A..C still green. Full suite 1480 tests. Learner metric (D-23, required
+  on every gate) read read-only from the real event log
+  (`%LOCALAPPDATA%\Katagiri\katagiri.db`, via `events.recent_events`): **0 events total, 0
+  Phase-D tool events since 2026-08-19, 0 distinct day_keys** — honest zero, not a shortfall
+  in the code: every Phase D exercise so far has been agent/fixture-only, so no real-usage
+  data exists yet. Same gap as the C-verify SC-002 finding, still covered by the 2026-08-19
+  Phase D entry waiver. TG-D5 complete; TG-D6 (T020–T022) is next, and T022's 14-study-days-in-
+  18-days window (clock from 2026-08-19) cannot advance until real study days are logged.
