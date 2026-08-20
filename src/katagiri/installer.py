@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -45,6 +46,12 @@ from pathlib import Path
 from typing import Any
 
 from katagiri import config as config_mod
+
+# stdlib ``logging`` rather than ``katagiri.applog.get_logger``: the no-imports
+# rule above is what lets a half-set-up checkout still start the installer. The
+# name is the same child the helper would build, so the records land in the
+# shared log file once the ``__main__`` block has configured it.
+_log = logging.getLogger("katagiri.installer")
 
 TOTAL_STEPS = 10
 
@@ -913,6 +920,9 @@ def step_backup() -> StepResult:
 def _print_step(n: int, total: int, name: str, result: StepResult) -> None:
     suffix = f" ({result.detail})" if result.detail else ""
     print(f"[{n}/{total}] {name} ... {result.status}{suffix}")
+    # Same text to the shared log: a wizard run is the thing most likely to be
+    # reported after the fact, when the console has long since been closed.
+    _log.info("step %d/%d %s: %s%s", n, total, name, result.status, suffix)
 
 
 def run_wizard(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> None:
@@ -996,11 +1006,19 @@ def main(argv: list[str] | None = None) -> int:
         cfg = read_raw_config(cfg_path)
         statuses = collect_doctor_statuses(cfg, repo_root)
         print(render_doctor_table(statuses))
-        return doctor_exit_code(statuses)
+        code = doctor_exit_code(statuses)
+        _log.info("doctor finished with exit code %d", code)
+        return code
 
     run_wizard(cfg_path, repo_root, assume_yes=args.yes)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Production entry point: runs under the shared rotating log in
+    # %LOCALAPPDATA%\Katagiri\logs. Wired here rather than inside main() so an
+    # in-process main() call does not install a process-wide handler as a side
+    # effect. See katagiri.applog.run_cli.
+    from katagiri.applog import run_cli
+
+    raise SystemExit(run_cli("installer", main))

@@ -2,7 +2,8 @@
 
 There is no network listener: this process is spawned by an MCP client, speaks
 JSON-RPC over stdin/stdout, and exits with it. stdout belongs to the protocol;
-all diagnostics go to stderr (see :mod:`katagiri.logging_setup`).
+all diagnostics go to stderr (see :mod:`katagiri.logging_setup`) and, additively,
+to the shared rotating log file (see :mod:`katagiri.applog`).
 
 Two layers live in this file, and the boundary between them is load-bearing:
 
@@ -60,6 +61,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from typing import Any, Final
 
@@ -72,13 +74,71 @@ from katagiri import (
     events,
     jmdict_import,
 )
-from katagiri.db import open_db, resolve_alias
-from katagiri.logging_setup import get_logger, setup_logging
+from katagiri.applog import (
+    exception_summary,
+    get_logger,
+    log_file_path,
+    log_level,
+    setup_logging,
+    truncated_repr,
+)
+from katagiri.db import database_path, open_db, resolve_alias
 from katagiri.tool_registry import redact
 
 logger = get_logger("mcp_server")
 
-server: MCPServer[Any] = MCPServer(
+
+class _LoggedMCPServer(MCPServer[Any]):
+    """:class:`MCPServer` that records one line per ``tools/call``.
+
+    ``call_tool`` is the single funnel every tool invocation passes through —
+    the SDK's ``_handle_call_tool`` delegates to it, and the ``@server.tool``
+    adapters below are reached only from it. Subclassing here therefore costs
+    one line per call and cannot be forgotten when a new tool is added, which a
+    per-adapter decorator on ~30 call sites would be.
+
+    What is logged at INFO is deliberately thin: tool name, duration, and
+    ok/error. Arguments and results are *not* — they carry vault and subtitle
+    text that the learner or a web page wrote, they can be large, and this file
+    outlives the session. They go to DEBUG as a bounded repr, behind
+    ``KATAGIRI_LOG_LEVEL=DEBUG``.
+
+    Errors are logged as ``type: message``, never with ``exc_info``: the stderr
+    handler is shared, and a traceback there is both noise on the MCP channel
+    and indistinguishable from a crash to anything scraping it.
+    """
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Any = None,
+    ) -> Any:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("tool %s arguments %s", name, truncated_repr(arguments))
+        started = time.perf_counter()
+        try:
+            result = await super().call_tool(name, arguments, context)
+        except BaseException as exc:
+            logger.info(
+                "tool %s error in %.1f ms: %s",
+                name,
+                (time.perf_counter() - started) * 1000,
+                exception_summary(exc),
+            )
+            logger.debug("tool %s error detail %s", name, truncated_repr(str(exc)))
+            raise
+        elapsed = (time.perf_counter() - started) * 1000
+        # A tool that raised inside the SDK comes back as a result flagged
+        # is_error rather than as an exception; both are "error" here.
+        outcome = "error" if getattr(result, "is_error", False) else "ok"
+        logger.info("tool %s %s in %.1f ms", name, outcome, elapsed)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("tool %s result %s", name, truncated_repr(result))
+        return result
+
+
+server: MCPServer[Any] = _LoggedMCPServer(
     name="katagiri",
     version=__version__,
     instructions=(
@@ -1248,17 +1308,43 @@ def find_i_plus_one(
         )
 
 
+def _describe(resolve: Any) -> str:
+    """A path for the startup line, or why it is not knowable yet.
+
+    The startup line must survive an unconfigured machine: ``database_path()``
+    reads config.toml and ``log_file_path()`` needs ``%LOCALAPPDATA%``, and a
+    first run with either missing should still get a logged startup, not a
+    traceback before the transport is even up.
+    """
+    try:
+        return str(resolve())
+    except Exception as exc:  # noqa: BLE001 - a startup line never fails startup
+        return f"<unavailable: {type(exc).__name__}>"
+
+
 def main() -> None:
-    """Entry point: stderr logging, then serve MCP over stdio."""
-    setup_logging(logging.INFO)
+    """Entry point: stderr + file logging, then serve MCP over stdio."""
+    # One positional argument, resolved from KATAGIRI_LOG_LEVEL.
+    setup_logging(log_level())
     logger.info(
         "starting katagiri %s (python %s) on stdio",
         __version__,
         platform.python_version(),
     )
+    logger.info(
+        "katagiri db %s; log file %s",
+        _describe(database_path),
+        _describe(log_file_path),
+    )
     if sys.stdout is None:  # pragma: no cover - defensive
         raise RuntimeError("stdout is unavailable; the MCP stdio transport needs it.")
-    server.run(transport="stdio")
+    try:
+        server.run(transport="stdio")
+    finally:
+        # The client closes stdin to stop us, so this is the normal exit path,
+        # not just the crash one: it is what marks the end of a session in the
+        # shared log.
+        logger.info("stopping katagiri %s", __version__)
 
 
 if __name__ == "__main__":

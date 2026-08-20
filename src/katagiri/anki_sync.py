@@ -800,4 +800,10 @@ __all__ = [
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    # Production entry point (scheduled task, installer subprocess): runs under
+    # the shared rotating log in %LOCALAPPDATA%\Katagiri\logs. Wired here rather
+    # than inside main() so an in-process main() call does not install a
+    # process-wide handler as a side effect. See katagiri.applog.run_cli.
+    from katagiri.applog import run_cli
+
+    raise SystemExit(run_cli("anki_sync", main))

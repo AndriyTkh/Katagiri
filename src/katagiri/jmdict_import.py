@@ -1058,4 +1058,9 @@ __all__ = [
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    # Production entry point (installer subprocess, manual reimport): runs under
+    # the shared rotating log in %LOCALAPPDATA%\Katagiri\logs. See
+    # katagiri.applog.run_cli for why this is not inside main().
+    from katagiri.applog import run_cli
+
+    raise SystemExit(run_cli("jmdict_import", main))
