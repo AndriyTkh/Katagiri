@@ -92,7 +92,7 @@ Merge order (felt-value): US2 → US3 → US4. Registration for all three lands 
 - [x] T014 [US4] coverage(text) from real known_set + grammar-DAG import from curriculum.md (prereqs/unlocks → item rows). Write: NEW src/katagiri/intelligence.py. Read: docs/katagiri/katagiri/10-course/curriculum.md, docs/db-schema.md (item DAG rows), src/katagiri/known.py (the known-set access module). [was: kata-d2]
 - [x] T015a [US4] find_i_plus_one gated on DAG reachability AND coverage + comprehension-debt ranking (folded from observation/item_stat_cache). No external data. Write: src/katagiri/intelligence.py (serial after T014). Read: T014 output, docs/db-schema.md. [was: kata-d2; split from T015 per D-29]
 - [x] T015b [US4] difficulty-for-me scoring + vendored difficulty data: vendor jreadability + BCCWJ frequency + JLPT lists under vendor/ with CHECKSUMS.sha256 entries per D-10, loader/parse layer, combined score (readability + frequency + JLPT + coverage %). Write: src/katagiri/intelligence.py (serial after T015a), vendor/ additions. Read: research.md sourcing note, vendor/README.md + CHECKSUMS.sha256 pattern. [was: kata-d2; split from T015 per D-29]
-- [ ] T016 [in-progress: lane-d-intel] [P] [US4] Unit tests incl. the unreachable-grammar gating case. Written against T015b's API; [P] only after T015a lands. Write: NEW tests/test_intelligence.py. Read: fixture recipe, intelligence.py API. [was: kata-d2]
+- [x] T016 [P] [US4] Unit tests incl. the unreachable-grammar gating case. Written against T015b's API; [P] only after T015a lands. Write: NEW tests/test_intelligence.py. Read: fixture recipe, intelligence.py API. [was: kata-d2]
 
 ### Serial close of TG-D4
 
