@@ -14,6 +14,8 @@ state as live for those phases only. Once `kata-bvf` closes, beads becomes a rea
 | `002-phase-c-prose-search` | **spec-kit tasks.md** | kata-ph-c |
 | `003-phase-d-teacher-loop` | **spec-kit tasks.md** | kata-ph-d |
 | `004-phase-e-media-overlay` | **spec-kit tasks.md** | kata-ph-e |
+| `005-mcp-assignment` | **spec-kit tasks.md** | — (no beads history) |
+| `006-teaching-method` | **spec-kit tasks.md** | — (no beads history) |
 
 Phase A closed pre-migration; record in docs/dev-plan.md, docs/audit-log.md, closed beads.
 Historical bead IDs survive in tasks as `[was: kata-*]` for traceability.
