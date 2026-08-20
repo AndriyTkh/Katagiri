@@ -705,7 +705,11 @@ from katagiri.stop_gate import (  # noqa: E402
         "itself is never judged, only that it was measured). Reports the count "
         "and every failing criterion; it does not interpret them. Not read-only: "
         "every call appends a gate_evaluation event, so two consecutive failing "
-        "evaluations trigger an explicit re_plan_triggered flag."
+        "evaluations trigger an explicit re_plan_triggered flag. Also reports an "
+        "additive `entry_gate` sub-dict: the separate 006 entry-gate verdict "
+        "over qualifying study days, scored-observation days and dictation "
+        "days, each counted over the whole event log; it does not affect the "
+        "`pass` verdict above."
     ),
 )
 def stop_gate_status() -> dict[str, Any]:

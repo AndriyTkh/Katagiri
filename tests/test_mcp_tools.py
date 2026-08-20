@@ -1520,6 +1520,44 @@ def test_empty_log_fails_the_gate_with_a_zero_count(db):
     assert "0 of 14" in gate["failing_criterion"]
 
 
+def test_stop_gate_status_surfaces_the_entry_gate_additively(db):
+    """006 T010: the entry_gate sub-dict rides through the MCP adapter untouched.
+
+    The dict's own arithmetic is built and tested in test_stop_gate_d6.py; what
+    is defended here is the registration boundary — the tool's redact() pass
+    does not drop or rename any entry_gate key, the ToolSpec output string says
+    so, and none of this required a new tool (the registry stays at 26).
+    """
+    gate = mcp_server.stop_gate_status()
+
+    assert "entry_gate" in gate
+    entry = gate["entry_gate"]
+    for key in (
+        "pass",
+        "failing_criterion",
+        "failing_criteria",
+        "study_days",
+        "required_study_days",
+        "study_days_pass",
+        "scored_observation_days",
+        "required_scored_observation_days",
+        "scored_observation_days_pass",
+        "dictation_days",
+        "required_dictation_days",
+        "dictation_days_pass",
+    ):
+        assert key in entry, f"entry_gate.{key} did not reach the tool boundary"
+
+    spec = get_spec("stop_gate_status")
+    assert "entry_gate" in spec.output
+
+
+def test_t010_registers_zero_new_toolspecs():
+    """T010's rule: surface entry_gate as additive output keys, not a new tool."""
+    assert len(TOOL_SPECS) == 26
+    assert len(registered_tools()) == 26
+
+
 # ---------------------------------------------------------------------------
 # security_status
 # ---------------------------------------------------------------------------
