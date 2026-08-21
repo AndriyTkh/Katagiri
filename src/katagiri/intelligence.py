@@ -152,8 +152,21 @@ and no new edge type: the schema already expresses this.
 
 ``sealed`` items are never offered, with no flag to override it (D-26 — probes
 may read the canary set, drills never). ``production_eligible`` is deliberately
-*not* consulted: it restricts what may be drilled *as production*, and this
-function selects reading material.
+*not* consulted: it restricts what may be drilled *as production* on grounds of
+*register*, and this function selects reading material by default.
+
+``production=True`` is the opt-in that finally consumes the reading/production
+distinction this function otherwise leaves alone: A0 **production** drills may
+draw only from the audio-anchored pool (D-38 — ``item.audio_source IS NOT
+NULL``), and an item marked ``text_only`` is withheld from it even when
+anchored, because "was recorded" and "is fit to produce from" are different
+claims. An unanchored or ``text_only`` candidate is gated with
+:data:`GATE_NOT_AUDIO_ANCHORED` rather than dropped or replaced — no
+substitution and no synthesis (no TTS; F-02 stays deferred) — so the reason is
+always visible in ``gated_by``. A candidate with no stored ``item`` row (ad hoc
+text offered by the caller) carries no anchor metadata to check, so it is
+withheld the same way: absence of anchoring information is not evidence of
+anchoring.
 
 Comprehension debt, and how it is folded
 ---------------------------------------
@@ -485,6 +498,11 @@ GATE_GRAMMAR_UNKNOWN: Final = "grammar_unknown"
 GATE_TOO_MUCH_NEW_GRAMMAR: Final = "too_much_new_grammar"
 GATE_COVERAGE_TOO_LOW: Final = "coverage_too_low"
 GATE_TOO_MANY_UNKNOWN: Final = "too_many_unknown_types"
+#: Withheld from an A0 **production** pool (``find_i_plus_one(production=True)``)
+#: for lacking an audio anchor, or for carrying ``text_only=1`` despite one —
+#: spec.md FR-018's own wording, kept verbatim (unlike its snake_case siblings)
+#: because it is also T025's independent test string.
+GATE_NOT_AUDIO_ANCHORED: Final = "text-only-not-for-A0-production"
 GATE_NO_CONTENT: Final = "no_content_tokens"
 GATE_SEALED: Final = "sealed"
 
@@ -3586,7 +3604,8 @@ def _candidate_rows(
     for chunk in _chunks(ids):
         marks = ",".join("?" * len(chunk))
         for row in conn.execute(
-            f"SELECT id, kind, sealed, home_topic FROM item WHERE id IN ({marks})",
+            "SELECT id, kind, sealed, home_topic, audio_source, text_only "
+            f"FROM item WHERE id IN ({marks})",
             tuple(chunk),
         ):
             out[row["id"]] = row
@@ -3731,6 +3750,7 @@ def find_i_plus_one(
     max_new_grammar: int | None = DEFAULT_MAX_NEW_GRAMMAR,
     min_understanding: int = DEFAULT_MIN_UNDERSTANDING,
     require_grammar: bool = True,
+    production: bool = False,
     include_gated: bool = False,
     top_unknown: int = DEFAULT_CANDIDATE_TOP_UNKNOWN,
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
@@ -3753,6 +3773,14 @@ def find_i_plus_one(
     passes, so ``coverage``/``grammar``/``debt`` are real numbers on gated
     candidates too; ``include_gated=True`` returns them with their reasons rather
     than only counting them.
+
+    ``production=True`` restricts the pool to A0 **production** drills (D-38 /
+    FR-018): a candidate is gated with :data:`GATE_NOT_AUDIO_ANCHORED` unless it
+    is a stored item with ``audio_source IS NOT NULL`` and ``text_only = 0``. An
+    unanchored or ``text_only`` item is never substituted or synthesised (no
+    TTS) — it is reported, in ``gated_by``, with that reason and nothing else
+    changes about it. Default ``False`` selects reading material exactly as
+    before, unaffected by ``audio_source``/``text_only``.
 
     Every entry also carries a difficulty-for-me score
     (:func:`difficulty_for_me`, ``score_difficulty=False`` to skip the extra
@@ -3889,6 +3917,14 @@ def find_i_plus_one(
             # No override flag on purpose: D-26 — probes may read the sealed
             # pool, material selection never serves from it.
             reasons.append(GATE_SEALED)
+        if production and (
+            row is None or row["audio_source"] is None or row["text_only"]
+        ):
+            # A0 production pool restriction (D-38 / FR-018): withheld, never
+            # substituted, never synthesised (no TTS — F-02 stays deferred). A
+            # candidate with no stored row (ad hoc text) has no anchor to
+            # check, which is withheld the same way as an unanchored one.
+            reasons.append(GATE_NOT_AUDIO_ANCHORED)
 
         grammar_ids, grammar_source = _resolve_candidate_grammar(
             conn, candidate, row
@@ -4140,6 +4176,7 @@ def find_i_plus_one(
             "max_new_grammar": max_new_grammar,
             "min_understanding": min_understanding,
             "require_grammar": bool(require_grammar),
+            "production": bool(production),
             "reachability_edge_type": EDGE_PREREQ,
         },
         "ranked_by": RANKED_BY_DEBT,
@@ -4206,6 +4243,7 @@ __all__ = [
     "FUNCTION_POS1",
     "GATE_COVERAGE_TOO_LOW",
     "GATE_GRAMMAR_UNKNOWN",
+    "GATE_NOT_AUDIO_ANCHORED",
     "GATE_NO_CONTENT",
     "GATE_SEALED",
     "GATE_TOO_MANY_UNKNOWN",
