@@ -270,7 +270,7 @@ Check for drift without writing anything:
 - **Input schema**:
   - `tired` (`bool`, optional) — Declare a tired session: the prescription becomes reviews plus one mined word, which still counts as a study day.
   - `session_id` (`str | None`, optional) — Reuse an existing session id; omitted, a fresh one is minted.
-- **Output schema**: {ok, error, field, note, session_id, opened_ts, event_id, tired_mode, action{kind, instruction, rationale, topic, lesson_id, unresolved_id, revisit_after, source}} — action is one dict, never a list
+- **Output schema**: {ok, error, field, note, session_id, opened_ts, event_id, tired_mode, action{kind, instruction, rationale, topic, lesson_id, unresolved_id, revisit_after, source, caps{new_words_left, grammar_left, listening_reps_left}}} — action is one dict, never a list; caps (FR-015) rides on every action, tired mode and fallback included
 <!-- END GENERATED: start_session -->
 <!-- BEGIN HAND: start_session -->
 - **Purpose**: Open a study session and get back exactly one prescribed action — never a menu — chosen by a fixed ladder: tired mode, then an unconsumed `next_step`, then an overdue topic revisit, then the oldest open thread, then "open a lesson". Call it at the start of a study session to know what to do next, without the caller re-deriving that ladder from raw history itself.
@@ -367,7 +367,7 @@ Check for drift without writing anything:
 ### `add_vocab`
 
 - **Name**: `add_vocab`
-- **Model-facing description**: Mine one word: an item row plus a 'mining' event.
+- **Model-facing description**: Mine one word: an item row plus a 'mining' event — refused past the day's new-word cap.
 - **Input schema**:
   - `word` (`str`, required) — The headword the learner vouches for, so it is trusted text.
   - `reading` (`str | None`, optional) — Kana reading.

@@ -30,7 +30,7 @@ from typing import Any
 import pytest
 
 from katagiri import config as config_mod
-from katagiri import events, mcp_server, tool_registry
+from katagiri import events, mcp_server, session_tools, tool_registry
 from katagiri.db import open_db
 from katagiri.tool_registry import (
     CIRCULAR,
@@ -829,6 +829,24 @@ def test_start_session_prescribes_exactly_one_action_and_logs_it(db):
     assert json.loads(logged[0]["payload"])["action"]["kind"] == "open_first_lesson"
 
 
+def test_start_session_reports_the_caps_block_over_mcp(db):
+    """006 T017: FR-015's dose caps ride on every action, tired mode included."""
+    result = mcp_server.start_session()
+
+    caps = result["action"]["caps"]
+    assert set(caps) == {"new_words_left", "grammar_left", "listening_reps_left"}
+    assert caps["new_words_left"] == session_tools.MAX_NEW_WORDS_PER_DAY
+    assert caps["grammar_left"] == session_tools.MAX_NEW_GRAMMAR_PER_WEEK
+    assert caps["listening_reps_left"] == session_tools.LISTENING_REPS_DAILY_TARGET
+
+    tired = mcp_server.start_session(tired=True)
+    assert set(tired["action"]["caps"]) == {
+        "new_words_left",
+        "grammar_left",
+        "listening_reps_left",
+    }
+
+
 def test_log_lesson_and_lessons_round_trip_through_the_tools(db):
     session = mcp_server.start_session()["session_id"]
 
@@ -903,6 +921,42 @@ def test_add_vocab_writes_an_item_and_a_mining_event(db):
     assert mcp_server.known_word("走る")["item_id"] == result["item_id"]
     mined = mcp_server.recent_events(limit=1, type="mining")
     assert json.loads(mined[0]["payload"])["source"] == "add_vocab"
+
+
+def test_add_vocab_refuses_past_the_daily_new_word_cap_over_mcp(db):
+    """006 T017: the MCP wrapper exposes no 'today' — the refusal runs off the
+
+    real wall clock, so the cap is seeded against the actual current day.
+    """
+    from datetime import date
+
+    today = date.today().isoformat()
+    for _ in range(session_tools.MAX_NEW_WORDS_PER_DAY):
+        seed_event(db, day=today, type=session_tools.MINING_EVENT)
+
+    refused = mcp_server.add_vocab(word="猫")
+
+    assert refused["ok"] is False
+    assert refused["error"] == session_tools.NEW_WORD_CAP_REACHED
+    assert str(session_tools.MAX_NEW_WORDS_PER_DAY) in refused["note"]
+    assert "triage_inbox" in refused["note"]
+    # No new required MCP argument: 'today' stays an internal-only parameter.
+    assert "today" not in set(get_spec("add_vocab").arg_names)
+
+
+def test_start_session_spec_documents_the_caps_block():
+    """006 T017: the ToolSpec string is the contract a caller reads first."""
+    spec = get_spec("start_session")
+    for key in ("caps", "new_words_left", "grammar_left", "listening_reps_left"):
+        assert key in spec.output, f"start_session output string is missing {key!r}"
+
+
+def test_add_vocab_spec_documents_the_cap_refusal():
+    """006 T017: the summary and note must say what the cap refusal looks like."""
+    spec = get_spec("add_vocab")
+    assert "cap" in spec.summary.lower()
+    assert "new_word_cap_reached" in spec.note
+    assert "triage_inbox" in spec.note
 
 
 def test_the_echo_back_ceremony_runs_as_three_tool_calls(db):

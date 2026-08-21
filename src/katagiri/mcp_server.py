@@ -901,7 +901,9 @@ def confirm_untrusted(challenge_id: str, echo: str) -> dict[str, Any]:
         "Open a study session and get exactly one prescribed action with its "
         "rationale — never a menu and never a dashboard. Set 'tired' to be "
         "prescribed the minimum session (reviews plus one mined word), which "
-        "still counts as a study day. Appends one 'session_open' event."
+        "still counts as a study day. Appends one 'session_open' event. The "
+        "action carries a 'caps' block (new_words_left, grammar_left, "
+        "listening_reps_left) reporting today's/this week's dose budget."
     ),
 )
 def start_session(tired: bool = False, session_id: str | None = None) -> dict[str, Any]:
@@ -1060,7 +1062,9 @@ def log_error(
         "trusted text the learner vouches for; 'example_envelope_id' names the "
         "staged anchor sentence, which is untrusted-only because it is lifted "
         "from whatever they were watching. Nothing is written to the vault — "
-        "the bridge is GET-only, so the derived exporters pick this up."
+        "the bridge is GET-only, so the derived exporters pick this up. "
+        "Refuses past the day's new-word cap with 'new_word_cap_reached'; "
+        "the overflow route is triage_inbox, not a smaller mining."
     ),
 )
 def add_vocab(

@@ -531,8 +531,10 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
         output=(
             "{ok, error, field, note, session_id, opened_ts, event_id, "
             "tired_mode, action{kind, instruction, rationale, topic, lesson_id, "
-            "unresolved_id, revisit_after, source}} — action is one dict, never "
-            "a list"
+            "unresolved_id, revisit_after, source, caps{new_words_left, "
+            "grammar_left, listening_reps_left}}} — action is one dict, never "
+            "a list; caps (FR-015) rides on every action, tired mode and "
+            "fallback included"
         ),
         stability="experimental",
         note=(
@@ -735,7 +737,10 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
     ),
     ToolSpec(
         name="add_vocab",
-        summary="Mine one word: an item row plus a 'mining' event.",
+        summary=(
+            "Mine one word: an item row plus a 'mining' event — refused past "
+            "the day's new-word cap."
+        ),
         args=(
             ArgSpec(
                 "word",
@@ -781,7 +786,10 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
             "mining the same word twice fills in blanks rather than duplicating "
             "it, and never overwrites a curated value. Nothing is written to "
             "the vault — the Obsidian bridge is GET-only, so the topic file "
-            "gets this word when the derived exporters next run."
+            "gets this word when the derived exporters next run. Refuses past "
+            "the day's new-word cap (FR-015, MAX_NEW_WORDS_PER_DAY) with "
+            "'new_word_cap_reached', naming how many were already mined "
+            "today; the overflow route is triage_inbox, not a smaller mining."
         ),
     ),
     ToolSpec(
