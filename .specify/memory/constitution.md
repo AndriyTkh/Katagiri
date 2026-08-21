@@ -1,5 +1,31 @@
 <!--
 Sync Impact Report
+- Version change: 1.2.0 → 1.3.0
+- Amendment: Principle IV (Study-First, Gated Progression) — the 006 entry gate addendum
+  records a user waiver of its blocking effect. The D-33 criteria (≥10 study days, ≥6
+  scored, ≥3 dictation) remain computed mechanically and surfaced as informational
+  `stop_gate_status` keys, but no longer block 006 TG2–TG8 implementation, which the user
+  authorized to proceed before the first study day (D-35, 2026-08-21). Rationale recorded:
+  the gate assumed study concurrent with build; the user's setting inverts that — the
+  teaching method must be complete before learning starts. The D6 stop-gate for Phase E
+  (D-19: 14-in-18 + probe battery) is untouched and remains fully blocking.
+- Rationale for MINOR (not MAJOR): the addendum is not removed or redefined — its criteria,
+  mechanics, and instrumentation stand verbatim; what changes is a recorded, scoped waiver
+  of one enforcement effect, per the same user-override mechanism already precedented in
+  the ledger (D-30). Materially changed guidance on an existing principle, no principle
+  removed.
+- Ledger row filed first per Governance's amendment procedure: D-35 (usage gates waived
+  pre-study — Phase B adoption metric + 006 entry gate blocking effect). Reasoning:
+  docs/audit-log.md "Gate waivers — pre-study build-out (2026-08-21)".
+- Added sections: none (existing Principle IV addendum amended in place).
+- Removed sections: none.
+- Templates status: spec/plan/tasks templates are stock speckit 0.16.4; plan-template's
+  Constitution Check gate now resolves against this document. ✅
+- Follow-up TODOs: none.
+
+---
+
+Sync Impact Report (superseded by the entry above — kept for history)
 - Version change: 1.1.0 → 1.2.0
 - Amendment: Principle VI (Security Hardening by Default) gains a scoping clause on the
   Obsidian-proxy sentence. "The plugin's own MCP endpoint is never registered with the
@@ -105,6 +131,10 @@ it. This gate is layered on top of the D6 mechanics above, not a substitute for 
 14-in-18 count and the probe battery remain necessary conditions, unchanged and
 independently evaluated; the 006 criteria only add requirements. Evaluated mechanically,
 surfaced as additive `stop_gate_status` output keys — no new ToolSpec. (D-32, D-33.)
+**Blocking effect waived by user decision (D-35, 2026-08-21)**: the criteria above remain
+computed and surfaced as informational keys, but do not block 006 TG2–TG8 implementation,
+which proceeds pre-study so the teaching method is complete before learning starts. The
+D6 stop-gate for Phase E is not covered by this waiver and remains fully blocking.
 
 ### V. Two-Gate Verification per Phase
 
@@ -189,4 +219,4 @@ materially expanded guidance, PATCH for clarifications. Every plan's Constitutio
 gates against the current version; violations require a Complexity Tracking entry or a
 scope cut.
 
-**Version**: 1.2.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-20
+**Version**: 1.3.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21

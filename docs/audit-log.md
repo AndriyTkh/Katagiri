@@ -1128,3 +1128,42 @@ behind it plus the entry-gate criteria that TG1's code (T009, next) will impleme
 `stop_gate_status`. Constitution principle IV amended to state the entry gate; version bumped
 1.0.0 → 1.1.0 (MINOR: new gate criteria layered onto an existing principle, no principle
 redefined or removed).
+
+## Gate waivers — pre-study build-out (2026-08-21)
+
+Session date: 2026-08-21. Filed as ledger D-35, constitution bumped 1.2.0 → 1.3.0.
+
+**Context**: every usage gate in the plan (Phase B's Today.md adoption metric, the 006 entry
+gate's ≥10/≥6/≥3 study-day criteria, T011 "live the gate") was written on the assumption that
+the learner studies *while* the system is built, so real usage evidence accumulates alongside
+the code. The user's actual constraint is the inverse: a tight schedule where learning cannot
+start until the teaching method is finished — the agent needs a complete program to follow
+from day one. Under that ordering the gates are not merely unmet, they are unsatisfiable:
+each blocks the very work that would make satisfying it worthwhile. The user stated the
+blocks were "conflicting and impossible to follow" in this setting and explicitly approved
+gate removal and continued implementation.
+
+1. **Phase B learner metric waived** (D-35a). kata-bvf's technical checks went green
+   2026-08-19 (tests/test_bverify.py 10 passed, incl. the live bypass 401/200 check and the
+   token-canary boundary proof; suite 795 green at the time). Only the user-side ≥5-of-7-days
+   Today.md adoption metric held the bead open. Precedent: D-30 (Phase C entry gate waived by
+   user 2026-08-19) and D-31 (Phase C closed with its learner metric recorded as NOT met under
+   the D-30 waiver context). Same shape here: the code is done and verified; the usage
+   evidence is deferred, not the engineering. Phase B closes; kata-bvf and kata-ph-b close in
+   beads with the waiver as the recorded reason.
+
+2. **006 entry gate's blocking effect waived** (D-35b). D-33's criteria and T009/T010's
+   mechanical evaluation are *kept*: `stop_gate_status` continues to compute and surface the
+   three counts as informational keys, so the moment real study starts the same instrument
+   reports honestly against the same bar. What is waived is solely the gate's blocking effect
+   on TG2–TG8 — the dose contract, input strand, audio anchors, curriculum refs, cadence,
+   worksheet loop now proceed pre-study. This is deliberately narrower than deleting the gate:
+   the constitution amendment records the waiver on the addendum rather than removing it.
+
+3. **What is NOT waived**. The D6 stop-gate for Phase E (D-19: 14-in-18 study days + probe
+   battery, evaluated by `stop_gate_status`) remains fully binding — 004 media overlay is
+   separately deferred to dead-last by user instruction and its gate is untouched. The
+   ~20–30 min study-first norm in Principle IV stays as stated intent for once learning
+   begins; it was never a build blocker enforced in code.
+
+ACCEPTED — user override 2026-08-21; source D-35, constitution Sync Impact Report 1.3.0.
