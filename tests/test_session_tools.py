@@ -39,7 +39,9 @@ from typing import Any
 
 import pytest
 
+from katagiri import events
 from katagiri import session_tools as st
+from katagiri import stop_gate as sg
 from katagiri.db import open_db
 from katagiri.envelope import (
     CONFIRMATION_MISMATCH,
@@ -2164,3 +2166,131 @@ def test_an_invalid_pitch_is_refused_before_the_example_is_unwrapped(conn, gate)
 
     assert retried["ok"] is True, retried
     assert payload_of(conn, retried["event_id"])["example"] == "毎朝走ります。"
+
+
+# ---------------------------------------------------------------------------
+# log_listening: reps-of-known-audio under the listen: dedupe namespace
+# ---------------------------------------------------------------------------
+
+
+def _write_study_log(path, records: list[dict[str, Any]]):
+    path.write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records), encoding="utf-8"
+    )
+    return path
+
+
+def test_log_listening_is_idempotent_for_the_same_timestamp(conn):
+    ts = "2026-08-19T20:00:00Z"
+
+    first = st.log_listening(conn, source="Irodori L3 dialogue", reps=10, ts=ts)
+    assert first["ok"] is True, first
+    assert first["duplicate"] is False
+
+    second = st.log_listening(conn, source="Irodori L3 dialogue", reps=10, ts=ts)
+    assert second["ok"] is True, second
+    assert second["duplicate"] is True
+    assert second["event_id"] == first["event_id"]
+
+    # One event, not two: the repeat call is absorbed, not appended.
+    assert count(conn, "event") == 1
+    assert event_types(conn) == [events.STUDY_LOG_TYPE]
+
+
+def test_log_listening_and_the_importer_do_not_collide_on_the_same_day(conn, tmp_path):
+    # Both paths write into the same `study_session` series over the exact same
+    # normalised timestamp, distinguished only by dedupe-key namespace.
+    ts = "2026-08-19T20:00:00Z"
+
+    listening = st.log_listening(conn, source="Irodori L3 dialogue", reps=10, ts=ts)
+    assert listening["ok"] is True, listening
+
+    log = _write_study_log(
+        tmp_path / "study-log.jsonl",
+        [
+            {
+                "ts": ts,
+                "type": events.STUDY_LOG_TYPE,
+                "minutes": 30,
+                "activities": ["immersion"],
+                "items_mined": 0,
+                "notes": None,
+            }
+        ],
+    )
+    imported = events.import_study_log(conn, log)
+    assert (imported["imported"], imported["duplicate"]) == (1, 0)
+
+    # Two distinct events, one per namespace, both survive.
+    assert count(conn, "event") == 2
+    assert event_types(conn) == [events.STUDY_LOG_TYPE, events.STUDY_LOG_TYPE]
+    keys = {
+        row[0]
+        for row in conn.execute("SELECT dedupe_key FROM event ORDER BY dedupe_key")
+    }
+    assert keys == {f"listen:{ts}", f"study:{ts}"}
+
+    # Re-running the importer over the same file adds nothing...
+    reimported = events.import_study_log(conn, log)
+    assert (reimported["imported"], reimported["duplicate"]) == (0, 1)
+    # ...and re-logging the same listening block adds nothing either.
+    relistened = st.log_listening(conn, source="Irodori L3 dialogue", reps=10, ts=ts)
+    assert relistened["duplicate"] is True
+
+    assert count(conn, "event") == 2
+
+
+def test_listening_reps_are_stored_as_reps_never_as_minutes(conn):
+    answer = st.log_listening(
+        conn, source="Irodori L3 dialogue", reps=7, ts="2026-08-19T20:00:00Z"
+    )
+    assert answer["ok"] is True, answer
+    assert answer["listening_reps"] == 7
+
+    payload = payload_of(conn, answer["event_id"])
+    assert payload["listening_reps"] == 7
+    assert isinstance(payload["listening_reps"], int)
+    assert "minutes" not in payload
+
+
+def test_a_reps_only_log_does_not_change_day_qualification_counts(conn):
+    # `record=False` so this look does not itself append a `gate_evaluation`
+    # event between the two calls being compared.
+    before = sg.stop_gate(conn, today=TODAY, record=False)
+
+    answer = st.log_listening(
+        conn, source="Irodori L3 dialogue", reps=10, ts=f"{TODAY}T20:00:00Z"
+    )
+    assert answer["ok"] is True, answer
+
+    after = sg.stop_gate(conn, today=TODAY, record=False)
+
+    assert after["study_days_in_window"] == before["study_days_in_window"]
+    assert after["entry_gate"]["study_days"] == before["entry_gate"]["study_days"]
+
+
+@pytest.mark.parametrize("bad_reps", [0, -1, True, "5"])
+def test_log_listening_refuses_a_reps_value_that_is_not_a_positive_int(conn, bad_reps):
+    answer = st.log_listening(conn, source="Irodori L3 dialogue", reps=bad_reps)
+
+    assert answer["error"] == st.INVALID_REPS
+    assert answer["field"] == "reps"
+    assert count(conn, "event") == 0
+
+
+def test_log_listening_refuses_a_missing_source(conn):
+    answer = st.log_listening(conn, source="   ", reps=5)
+
+    assert answer["error"] == st.MISSING_FIELD
+    assert answer["field"] == "source"
+    assert count(conn, "event") == 0
+
+
+def test_log_listening_refuses_a_malformed_timestamp(conn):
+    answer = st.log_listening(
+        conn, source="Irodori L3 dialogue", reps=5, ts="not-a-timestamp"
+    )
+
+    assert answer["error"] == st.INVALID_TIMESTAMP
+    assert answer["field"] == "ts"
+    assert count(conn, "event") == 0
