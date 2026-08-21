@@ -78,8 +78,8 @@ Merge order: US4 → US2 → US3 → US5 (screenshot ships first — completes t
 
 **[was: kata-evf]** Needs all built channels merged (cut stories noted first). Max two rerun cycles.
 
-- [ ] T013 [Gate] [in-progress: master checkout] Cumulative cold-subagent scenarios A..E: mpv position/title; asbplayer window from anchor; mokuro page; screenshot round-trip; one .lrc through WATCH mode; **adversarial subtitle-injection refused**. Write: NEW tests/test_everify.py. Read: quickstart.md runbook, envelope.py contract, prior *verify tests. [was: kata-evf]
-- [ ] T014 [Gate] Milestone E manual checks (anchored question on primary surface, mined words with source refs, learner metric); ledger/coverage update; weekly status line; mark phase complete. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: event log, coverage table. [was: kata-evf]
+- [x] T013 [Gate] Cumulative cold-subagent scenarios A..E: mpv position/title; asbplayer window from anchor; mokuro page; screenshot round-trip; one .lrc through WATCH mode; **adversarial subtitle-injection refused**. Write: NEW tests/test_everify.py. Read: quickstart.md runbook, envelope.py contract, prior *verify tests. [was: kata-evf] — done 2026-08-21, user-authorized override of the D-42 TG-E5 exclusion scoped to this task only (13/13 tests pass); two pre-existing bugs found and fixed alongside (test_cverify.py's mokuro-HTTP-server allowlist gap, tool-contracts.md's missing generated sections for the 6 Phase-E tools). T014 remains explicitly blocked — not covered by the override.
+- [ ] T014 [Gate] **BLOCKED on real D6 pass (D-42) — do not dispatch until the learner has real study days on record.** Milestone E manual checks (anchored question on primary surface, mined words with source refs, learner metric); ledger/coverage update; weekly status line; mark phase complete. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: event log, coverage table. [was: kata-evf]
 
 ## Dependencies & Execution Order
 
