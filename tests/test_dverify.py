@@ -106,7 +106,6 @@ from katagiri.intelligence import (
 from katagiri.session_tools import (
     ACTION_KINDS,
     ACTION_NEXT_STEP,
-    ACTION_OPEN_FIRST_LESSON,
     CONFIRMATION_REQUIRED,
     ENVELOPE_REQUIRED,
     ERROR_EVENT,
@@ -840,18 +839,22 @@ def test_start_session_returns_exactly_one_action_and_reflects_a_next_step(world
 
 
 def test_an_empty_log_still_prescribes_exactly_one_action(world):
-    """The fallback, checked where an empty log is guaranteed.
+    """One action even when the log is empty, checked where that is guaranteed.
 
     Scenario C cannot assert this — by section 7 the log has history — but the
     "never a menu, never empty" property is most at risk precisely when there is
-    nothing to choose from, so it is asserted once, here.
+    nothing to choose from, so it is asserted once, here. With this world's
+    fixture curriculum imported, the 006 curriculum rung outranks the
+    ``open_first_lesson`` fallback, so the one action is a curriculum topic;
+    the bare fallback itself is asserted in ``tests/test_session_tools.py``
+    (``test_curriculum_unavailable_falls_back_to_open_first_lesson``).
     """
     opened = start_session(world.conn)
     assert opened["ok"] is True, opened
     action = opened["action"]
     assert isinstance(action, dict)
-    assert action["kind"] == ACTION_OPEN_FIRST_LESSON, action
-    assert action["source"] == "empty_log", action
+    assert action["kind"] == session_tools.ACTION_CURRICULUM_TOPIC, action
+    assert action["source"] == "curriculum_reachability", action
     assert action["lesson_id"] is None
     assert world.event_count(SESSION_OPEN_EVENT) == 1
 
