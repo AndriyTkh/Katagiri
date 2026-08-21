@@ -92,6 +92,7 @@ from katagiri.intelligence import (
     STATE_UNSEEN,
     TEXT_TOO_LARGE,
     TOO_MANY_CANDIDATES,
+    TRAJECTORY_WINDOW,
     Candidate,
     DatasetStatus,
     FrequencyList,
@@ -104,6 +105,7 @@ from katagiri.intelligence import (
     candidates_from_items,
     combine_difficulty,
     comprehension_debt,
+    construction_trajectory,
     coverage,
     coverage_band,
     coverage_from_morphs,
@@ -924,6 +926,101 @@ def test_import_of_the_real_curriculum(db):
     before = snapshot(db)
     import_curriculum(db, path=REAL_CURRICULUM)
     assert snapshot(db) == before
+
+
+# ---------------------------------------------------------------------------
+# 5b. Curriculum attribute tags (T028/T030, D-39): jf_can_do, irodori_lesson,
+# tae_kim_section. Additive in `settings`, orphan-reported, never deleted.
+# ---------------------------------------------------------------------------
+
+CURRICULUM_TAGS_MD = """```yaml
+id: g-tagged
+level: A0
+jf_can_do: A1.1
+irodori_lesson: L3-1
+tae_kim_section: 3.2
+```
+"""
+
+CURRICULUM_TAGS_REMOVED_MD = """```yaml
+id: g-tagged
+level: A0
+```
+"""
+
+
+def _stored_attrs(conn: sqlite3.Connection, item_id: str) -> dict[str, str]:
+    return dict(
+        conn.execute(
+            "SELECT key, value FROM settings WHERE scope = ?", (item_id,)
+        )
+    )
+
+
+def test_all_three_tag_kinds_parse_and_import(db, tmp_path):
+    parsed = parse_curriculum(CURRICULUM_TAGS_MD)
+    assert parsed.attributes[("g-tagged", "jf_can_do")][0] == "A1.1"
+    assert parsed.attributes[("g-tagged", "irodori_lesson")][0] == "L3-1"
+    assert parsed.attributes[("g-tagged", "tae_kim_section")][0] == "3.2"
+
+    path = write_curriculum(tmp_path, CURRICULUM_TAGS_MD)
+    result = import_curriculum(db, path=path)
+    assert result["ok"] is True
+    assert result["attributes"] == {
+        "parsed": 3,
+        "created": 3,
+        "already_present": 0,
+        "by_attr": {"jf_can_do": 1, "irodori_lesson": 1, "tae_kim_section": 1},
+    }
+    assert result["orphan_attributes"] == []
+    assert _stored_attrs(db, "g-tagged") == {
+        "curriculum_jf_can_do": "A1.1",
+        "curriculum_irodori_lesson": "L3-1",
+        "curriculum_tae_kim_section": "3.2",
+    }
+
+
+def test_removing_a_tag_reports_an_orphan_and_deletes_nothing(db, tmp_path):
+    first = write_curriculum(tmp_path, CURRICULUM_TAGS_MD, name="c1.md")
+    import_curriculum(db, path=first)
+
+    second = write_curriculum(tmp_path, CURRICULUM_TAGS_REMOVED_MD, name="c2.md")
+    result = import_curriculum(db, path=second)
+    assert result["ok"] is True
+    orphans = {(row["id"], row["attribute"]) for row in result["orphan_attributes"]}
+    assert orphans == {
+        ("g-tagged", "jf_can_do"),
+        ("g-tagged", "irodori_lesson"),
+        ("g-tagged", "tae_kim_section"),
+    }
+    assert "never deleted" in result["note"]
+    # The underlying stored values are untouched by the orphan-reporting import.
+    assert _stored_attrs(db, "g-tagged") == {
+        "curriculum_jf_can_do": "A1.1",
+        "curriculum_irodori_lesson": "L3-1",
+        "curriculum_tae_kim_section": "3.2",
+    }
+
+
+def test_readding_a_tag_restores_it_as_live_not_orphaned(db, tmp_path):
+    first = write_curriculum(tmp_path, CURRICULUM_TAGS_MD, name="c1.md")
+    import_curriculum(db, path=first)
+    second = write_curriculum(tmp_path, CURRICULUM_TAGS_REMOVED_MD, name="c2.md")
+    orphaned = import_curriculum(db, path=second)
+    assert orphaned["orphan_attributes"] != []
+
+    third = write_curriculum(tmp_path, CURRICULUM_TAGS_MD, name="c3.md")
+    restored = import_curriculum(db, path=third)
+    assert restored["ok"] is True
+    assert restored["orphan_attributes"] == []
+    assert restored["attributes"]["created"] == 0
+    assert restored["attributes"]["already_present"] == 3
+    assert restored["note"] is None
+    assert _stored_attrs(db, "g-tagged") == {
+        "curriculum_jf_can_do": "A1.1",
+        "curriculum_irodori_lesson": "L3-1",
+        "curriculum_tae_kim_section": "3.2",
+    }
 
 
 # ===========================================================================
@@ -2102,3 +2199,144 @@ def test_a_missing_dataset_changes_the_note_but_not_the_verdict(
         DIFFICULTY_WEIGHTS[COMPONENT_COVERAGE]
     )
     assert summary["components_used"] == [COMPONENT_COVERAGE]
+
+
+# ===========================================================================
+# 11. construction_trajectory (T029/T030, D-40)
+# ===========================================================================
+
+
+def _seed_trajectory_run(
+    conn: sqlite3.Connection, item_id: str, *, clean_flags: list[bool]
+) -> None:
+    """One ``observation`` per flag, in ascending ``ts`` order, unassisted.
+
+    ``clean_flags[i]`` True means the attempt matched ``expected`` (a hit);
+    False means it did not (a miss). Timestamps count down from the run's
+    length so the insertion order is also the ``ts`` order
+    :func:`construction_trajectory` reads back.
+    """
+    total = len(clean_flags)
+    for index, clean in enumerate(clean_flags):
+        seed_observation(
+            conn,
+            item_id,
+            ts=days_ago(total - index),
+            unassisted=1,
+            expected="X",
+            produced="X" if clean else "Y",
+        )
+
+
+def test_construction_trajectory_shows_a_u_shaped_dip(db):
+    """A run of hits, then a run of misses, then hits again is a visible dip.
+
+    ``points`` walks the trailing ``TRAJECTORY_WINDOW`` accuracy at every
+    attempt, so the middle window (all misses) must read lower than both the
+    window before it and the window after it — a non-monotonic shape, not
+    just "some numbers differ".
+    """
+    seed_item(db, "g-focus", kind="grammar")
+    w = TRAJECTORY_WINDOW
+    _seed_trajectory_run(
+        db, "g-focus", clean_flags=([True] * w) + ([False] * w) + ([True] * w)
+    )
+
+    out = construction_trajectory(db, ["g-focus"])["g-focus"]
+    assert out["attempts"] == 3 * w
+    assert out["clean"] == 2 * w
+    assert out["window"] == w
+    points = out["points"]
+    assert len(points) == 3 * w
+
+    early = points[w - 1]["accuracy"]        # trailing window: the first w hits
+    mid = points[2 * w - 1]["accuracy"]      # trailing window: the w misses
+    late = points[3 * w - 1]["accuracy"]     # trailing window: the last w hits
+    assert early == 1.0
+    assert mid == 0.0
+    assert late == 1.0
+    # The dip is non-monotonic: lower than what came before AND what came after.
+    assert mid < early
+    assert mid < late
+
+
+def test_construction_trajectory_dip_never_lowers_the_reachability_gate(db):
+    """T029/T030, D-40: the trajectory is a read-only comprehension report.
+
+    grammar_reachability reads only known_set/understanding/item_edge, never
+    observation-derived trajectory, so the exact same U-dip run must leave its
+    verdict byte-for-byte identical to the no-evidence baseline.
+    """
+    seed_item(db, "g-focus", kind="grammar")
+    baseline = grammar_reachability(db, ["g-focus"])["g-focus"]
+
+    w = TRAJECTORY_WINDOW
+    _seed_trajectory_run(
+        db, "g-focus", clean_flags=([True] * w) + ([False] * w) + ([True] * w)
+    )
+    dip = construction_trajectory(db, ["g-focus"])["g-focus"]
+    assert dip["points"][2 * w - 1]["accuracy"] < dip["points"][w - 1]["accuracy"]
+
+    after = grammar_reachability(db, ["g-focus"])["g-focus"]
+    assert after == baseline
+    assert after["reachable"] is True   # a root grammar point, no prereqs to miss
+
+
+def test_construction_trajectory_reports_every_requested_id_with_no_evidence(db):
+    out = construction_trajectory(db, ["g-nothing"])
+    assert out["g-nothing"]["attempts"] == 0
+    assert out["g-nothing"]["points"] == []
+    assert out["g-nothing"]["accuracy"] is None
+    assert construction_trajectory(db, []) == {}
+
+
+def test_construction_trajectory_refuses_a_bad_window(db):
+    with pytest.raises(ValueError):
+        construction_trajectory(db, ["g-focus"], window=0)
+    with pytest.raises(TypeError):
+        construction_trajectory(db, ["g-focus"], window="5")  # type: ignore[arg-type]
+
+
+# ===========================================================================
+# 12. Sealed items stay sealed regardless of trajectory (T030 regression)
+# ===========================================================================
+
+
+def test_sealed_item_stays_sealed_even_with_a_strong_trajectory(
+    gate_world, stub_tokenizer
+):
+    """T029's read-only trajectory must not accidentally unseal anything.
+
+    ``g-wa-topic`` gets a run of clean, unassisted observations — a strong,
+    high-accuracy trajectory — while the candidate sentence anchored to it is
+    sealed. The trajectory is real and high; the seal must still win. The
+    tokenizer is stubbed (see the audio-anchor block above) because this
+    worktree has no vendored UniDic dictionary; only the sealed gate is under
+    test here, not tokenization.
+    """
+    seed_sentence(gate_world, "s-sealed-traj", "猫です。", sealed=1)
+    stub_tokenizer["猫です。"] = [morph("w-neko", "w-neko")]
+    _seed_trajectory_run(gate_world, "g-wa-topic", clean_flags=[True] * TRAJECTORY_WINDOW)
+
+    trajectory = construction_trajectory(gate_world, ["g-wa-topic"])["g-wa-topic"]
+    assert trajectory["accuracy"] == 1.0
+    assert trajectory["attempts"] == TRAJECTORY_WINDOW
+
+    candidate = {
+        "id": "s-sealed-traj",
+        "text": "猫です。",
+        "grammar_ids": ["g-wa-topic"],
+    }
+    result = find_i_plus_one(
+        gate_world,
+        [candidate],
+        min_coverage_pct=0.0,
+        max_unknown_types=None,
+        max_new_grammar=None,
+        require_grammar=False,
+        include_gated=True,
+        score_difficulty=False,
+    )
+    assert result["candidates"] == []
+    assert result["gated"][0]["gated_by"] == [GATE_SEALED]
+    assert candidates_from_items(gate_world) == []
