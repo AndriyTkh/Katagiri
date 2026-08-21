@@ -630,6 +630,18 @@ HTTP_CLIENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 HTTP_CLIENT_ALLOWLIST = frozenset({"obsidian_proxy.py"})
 
+#: Phase E's mokuro page-change bridge is the one deliberate exception to
+#: "no HTTP server anywhere in the package". mokuro's browser extension is a
+#: userscript running inside a page — it cannot reach a named pipe the way
+#: mpv's Lua scripting can, so a localhost HTTP listener (shared secret +
+#: Origin check, per specs/004-phase-e-media-overlay/research.md) is the only
+#: transport the extension can actually speak. The property this file's
+#: docstring cares about — "a listening socket... reachable by something
+#: other than the one process the operator launched" — is checked directly
+#: below instead: the bridge defers binding out of ``__init__`` into an
+#: explicit ``start()``, and no MCP tool path ever calls it.
+HTTP_SERVER_ALLOWLIST = frozenset({"media_mokuro.py"})
+
 
 def package_sources() -> list[Path]:
     """Every ``.py`` file the wheel ships, found by walking rather than by list."""
@@ -768,10 +780,15 @@ def test_the_package_still_ships_no_http_server_construct_anywhere():
 
     The premise of the whole token boundary is that stdio is the only way in. A
     listening socket anywhere in the package would mean the token is reachable by
-    something other than the one process the operator launched.
+    something other than the one process the operator launched — except for the
+    one module on ``HTTP_SERVER_ALLOWLIST``, whose own test below re-asserts that
+    same property by a different, runtime-shaped route rather than exempting it
+    from scrutiny.
     """
     offences: list[str] = []
     for path in package_sources():
+        if path.name in HTTP_SERVER_ALLOWLIST:
+            continue
         text = path.read_text(encoding="utf-8")
         for label, pattern in HTTP_SERVER_PATTERNS:
             for match in pattern.finditer(text):
@@ -784,6 +801,45 @@ def test_the_package_still_ships_no_http_server_construct_anywhere():
     server_source = (PACKAGE_ROOT / "mcp_server.py").read_text(encoding="utf-8")
     assert 'server.run(transport="stdio")' in server_source
     assert len(re.findall(r"\.run\(transport=", server_source)) == 1
+
+
+def test_the_mokuro_bridge_is_the_only_allowlisted_http_server_and_stays_unstarted():
+    """The one exception on ``HTTP_SERVER_ALLOWLIST`` is real, and still confined.
+
+    Allowlisting a filename out of a text scan is worthless if nothing else backs
+    it up, so this asserts the two properties that actually matter instead:
+
+    1. the allowlisted module still looks like an HTTP server (else the entry is
+       dead weight, quietly covering for something else if the code ever moves);
+    2. no MCP tool path — the only process boundary a caller of this package can
+       reach — ever starts it. ``mcp_server.py`` constructs
+       ``MokuroChannel(secret=None)`` as a plain probe object and calls only
+       ``media_now``/``media_context`` on it; it never enters it as a context
+       manager or reaches through to ``.bridge.start()``, so the socket
+       ``MokuroBridgeServer.start`` would open is never opened by calling a tool.
+    """
+    mokuro_source = (PACKAGE_ROOT / "media_mokuro.py").read_text(encoding="utf-8")
+    hits = [label for label, pattern in HTTP_SERVER_PATTERNS if pattern.search(mokuro_source)]
+    assert hits, "the allowlisted mokuro bridge no longer looks like an HTTP server"
+
+    # Binding is deferred out of __init__ into an explicit start() — the module's
+    # own documented discipline, re-checked here rather than trusted on faith.
+    assert "def start(self) -> None:" in mokuro_source
+    assert re.search(r"self\._httpd\s*:\s*_BridgeHTTPServer \| None\s*=\s*None", mokuro_source)
+
+    server_source = (PACKAGE_ROOT / "mcp_server.py").read_text(encoding="utf-8")
+    assert "with MokuroChannel" not in server_source, (
+        "mcp_server.py enters the mokuro bridge as a context manager, which "
+        "would start it from a tool call"
+    )
+    assert ".bridge.start(" not in server_source
+    for match in re.finditer(r"MokuroChannel\(", server_source):
+        line_no = server_source[: match.start()].count("\n") + 1
+        line_text = server_source.splitlines()[line_no - 1]
+        assert "with " not in line_text, (
+            f"mcp_server.py:{line_no} constructs the mokuro bridge inside a "
+            "with-statement"
+        )
 
 
 def test_the_obsidian_proxy_is_still_the_only_http_client():

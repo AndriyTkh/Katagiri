@@ -520,3 +520,100 @@ Check for drift without writing anything:
 - **Example**: 猫です。is 100% vocabulary coverage, but its grammar point `g-masu-form` sits behind an unmastered `g-o-object` — `find_i_plus_one(candidates=[{"text": "猫です。", "grammar_ids": ["g-masu-form"]}], include_gated=true, score_difficulty=false)` → `{"ok": true, "candidates": [], "gated": [{"id": null, "text": "猫です。", "source": null, "accepted": false, "gated_by": ["unreachable_grammar"], "coverage": {"known_pct": 100.0, "known_ratio": 1.0, "band": ">=95", "counted_tokens": 1, "unknown_types": 0, "unknown": []}, "grammar": {"ids": ["g-masu-form"], "resolved_from": "explicit", "reachable": false, "new": ["g-masu-form"], "unresolved": [], "unreachable": [{"id": "g-masu-form", "missing_prereqs": ["g-o-object"]}], "points": [{"id": "g-masu-form", "canonical_id": "g-masu-form", "exists": true, "kind": "grammar", "mastered": false, "mastered_via": null, "understanding": null, "suspect": false, "redirected": false, "is_new": true, "reachable": false, "prereqs": ["g-o-object"], "closure_size": 1, "missing_prereqs": [{"id": "g-o-object", "exists": true, "understanding": null}], "unlocked_by": [], "unlock_ready": []}]}, "debt": {"total": 0.0, "grammar": 0.0, "vocab": 0.0, "by_item": [{"item_id": "g-masu-form", "debt": 0.0, "source": "none", "observations": 0, "folded_observations": 0, "assisted": 0, "misses": 0, "clean": 0, "skipped_observations": 0, "last_observation_ts": null, "cache": null}, {"item_id": "w-neko", "debt": 0.0, "source": "none", "observations": 0, "folded_observations": 0, "assisted": 0, "misses": 0, "clean": 0, "skipped_observations": 0, "last_observation_ts": null, "cache": null}]}, "difficulty": null}], "counts": {"offered": 1, "accepted": 0, "returned": 0, "gated": 1, "by_reason": {"unreachable_grammar": 1}, "unannotated": 0}, "gates": {"min_coverage_pct": 80.0, "max_unknown_types": 1, "max_new_grammar": 1, "min_understanding": 3, "require_grammar": true, "reachability_edge_type": "prereq"}, "ranked_by": "comprehension_debt", "scored_difficulty": false, "difficulty_datasets": {}, "as_of": "2026-08-21T09:00:00Z", "known_queries": 1, "mastery_queries": 2, "mastered_nodes": 1, "note": "every candidate was gated out; 'counts.by_reason' names why, and include_gated=True returns each candidate's measurements."}` — the tempting 100% is right there in the result and is still not enough. Accepted entries additionally carry `order` (1-based rank); gated ones never do.
 - **Why this belongs at the MCP boundary**: this is the tool whose whole value is saying *no*, and a model holding a fluent, plausible-looking sentence is the last thing that should be trusted to refuse it — coverage is the seductive number, and "100% of the words are known" reads like permission to serve. The prerequisite closure lives in the stored DAG, mastery lives in the known set and `item.understanding`, and debt is folded out of real `observation` rows against a decayed cache prior; none of that is reconstructible from a prompt, and a wall the model can talk itself past is not a wall. So the guarantees are structural rather than instructional: both axes must pass, sealed canary material is never offered and no override flag exists to ask for it, a cyclic graph is refused by name instead of answered, difficulty-for-me is reported and never gating so a vendored dataset appearing or disappearing changes only how material is *described*, and the ranking is deterministic down to the tie-breakers so the same call twice never reshuffles the study queue.
 <!-- END HAND: find_i_plus_one -->
+
+<!-- BEGIN GENERATED: media_now -->
+### `media_now`
+
+- **Name**: `media_now`
+- **Model-facing description**: What is on screen right now on the active media channel: title and playhead position, enveloped.
+- **Input schema**:
+  _none_
+- **Output schema**: {ok, active, note, channel, media_id, anchor_ms, displayed_text, title, updated_ts} — displayed_text/title are null or {text, untrusted (always true), note, digest, envelope_id, envelope_version, chars, provenance{source, locator, retrieved_ts, detail}}; active=false (channel/media_id/anchor_ms/displayed_text/title all null) means nothing is currently playing or the channel is unreachable, not an error
+<!-- END GENERATED: media_now -->
+<!-- BEGIN HAND: media_now -->
+- **Purpose**: _TODO (T020)_
+- **Error conditions**: _TODO (T020)_
+- **Side effects**: _TODO (T020)_
+- **Example**: _TODO (T020)_
+<!-- END HAND: media_now -->
+
+<!-- BEGIN GENERATED: media_context -->
+### `media_context`
+
+- **Name**: `media_context`
+- **Model-facing description**: The subtitle/lyric window around the current playhead on the active media channel, enveloped.
+- **Input schema**:
+  _none_
+- **Output schema**: {ok, active, note, channel, media_id, anchor_ms, lines[{text, start_ms, end_ms}]} — each line's 'text' is the same envelope shape as media_now's displayed_text/title; an empty 'lines' means nothing is currently displayed, not an error; active=false means the channel is unreachable or nothing is playing
+<!-- END GENERATED: media_context -->
+<!-- BEGIN HAND: media_context -->
+- **Purpose**: _TODO (T020)_
+- **Error conditions**: _TODO (T020)_
+- **Side effects**: _TODO (T020)_
+- **Example**: _TODO (T020)_
+<!-- END HAND: media_context -->
+
+<!-- BEGIN GENERATED: lyrics_now -->
+### `lyrics_now`
+
+- **Name**: `lyrics_now`
+- **Model-facing description**: The lyric line active at the current mpv playhead, from a '.lrc'/'.ass' file, enveloped.
+- **Input schema**:
+  - `path` (`str`, required) — Path to the '.lrc' or '.ass' lyrics file, parsed once per call. The playhead comes from the mpv channel (media_lyrics.mpv_anchor_supplier), not from this tool's arguments.
+- **Output schema**: {ok, active, note, channel, media_id, anchor_ms, displayed_text, title, updated_ts} — same envelope shape as media_now; active=false means mpv has no anchor right now (nothing playing) or the anchor is before the file's first line, not an error
+<!-- END GENERATED: lyrics_now -->
+<!-- BEGIN HAND: lyrics_now -->
+- **Purpose**: _TODO (T020)_
+- **Error conditions**: _TODO (T020)_
+- **Side effects**: _TODO (T020)_
+- **Example**: _TODO (T020)_
+<!-- END HAND: lyrics_now -->
+
+<!-- BEGIN GENERATED: lyrics_context -->
+### `lyrics_context`
+
+- **Name**: `lyrics_context`
+- **Model-facing description**: The window of lyric lines around the current mpv playhead, enveloped.
+- **Input schema**:
+  - `path` (`str`, required) — Path to the '.lrc' or '.ass' lyrics file. Same file argument as lyrics_now.
+  - `radius` (`int`, optional) — Lines before/after the active line to include (default: media_lyrics.DEFAULT_CONTEXT_RADIUS). Unlike mpv's own single-line context MVP, lyrics genuinely supports a multi-line window because the whole file is already parsed.
+- **Output schema**: {ok, active, note, channel, media_id, anchor_ms, lines[{text, start_ms, end_ms}]} — same envelope shape as media_context; an empty 'lines' means the anchor is before the file's first line, not an error
+<!-- END GENERATED: lyrics_context -->
+<!-- BEGIN HAND: lyrics_context -->
+- **Purpose**: _TODO (T020)_
+- **Error conditions**: _TODO (T020)_
+- **Side effects**: _TODO (T020)_
+- **Example**: _TODO (T020)_
+<!-- END HAND: lyrics_context -->
+
+<!-- BEGIN GENERATED: screenshot_capture -->
+### `screenshot_capture`
+
+- **Name**: `screenshot_capture`
+- **Model-facing description**: Capture mpv's current frame into a confined scratch root, server-named.
+- **Input schema**:
+  _none_
+- **Output schema**: {ok, active, note, screenshot_id, media_id, anchor_ms, title, created_ts} — 'screenshot_id' is a server-generated name (never derived from the media title), passed to screenshot_read for the bytes; active=false (screenshot_id null) means nothing is playing on mpv right now, not an error
+<!-- END GENERATED: screenshot_capture -->
+<!-- BEGIN HAND: screenshot_capture -->
+- **Purpose**: _TODO (T020)_
+- **Error conditions**: _TODO (T020)_
+- **Side effects**: _TODO (T020)_
+- **Example**: _TODO (T020)_
+<!-- END HAND: screenshot_capture -->
+
+<!-- BEGIN GENERATED: screenshot_read -->
+### `screenshot_read`
+
+- **Name**: `screenshot_read`
+- **Model-facing description**: The raw bytes of a previously captured screenshot, base64-encoded.
+- **Input schema**:
+  - `screenshot_id` (`str`, required) — The id screenshot_capture returned. Validated against a closed character set and re-confined to the scratch root before any file is touched — a path-traversal or malformed id is refused, never 'fixed' into place.
+- **Output schema**: {ok, screenshot_id, mime_type, image_base64} — 'image_base64' is the PNG file's bytes, base64-encoded (JSON has no binary type); raises rather than returning a placeholder when the id is malformed (ScreenshotConfinementError) or names no file (ScreenshotNotFoundError)
+<!-- END GENERATED: screenshot_read -->
+<!-- BEGIN HAND: screenshot_read -->
+- **Purpose**: _TODO (T020)_
+- **Error conditions**: _TODO (T020)_
+- **Side effects**: _TODO (T020)_
+- **Example**: _TODO (T020)_
+<!-- END HAND: screenshot_read -->
