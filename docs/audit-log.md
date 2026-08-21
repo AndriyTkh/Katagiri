@@ -1443,3 +1443,64 @@ be heard and read, it simply cannot yet be asked for in a production drill.
 **Net effect**: no code changes from this filing. This entry and ledger rows D-39/D-40 are the
 governance step FR-025 requires before T028/T029 (the curriculum-attribute parser and the
 construction-state read-path) are written.
+
+## 006 TG7 — worksheet loop reuse justification (2026-08-21)
+
+Session date: 2026-08-21. Filed as ledger D-41, per spec.md FR-025's governance-first rule: T037
+(this filing) is the gate that lands before T038 (the code that renders the worksheet into
+`.derived/`) is written. This is a ledger/audit-log-only task — no code file is touched here;
+T038 implements what this entry authorizes.
+
+**Why 100% reuse, not a new writer.** FR-024 states the requirement plainly: "The worksheet loop
+MUST write through the existing `today_export` `.derived/` pattern (`generated: true` frontmatter
+check, confined path, server-named file) and read back through the existing GET-only vault proxy.
+The agent never writes vaults. No new MCP tool surface." The `today_export` module already
+carries the exact doctrine a worksheet writer would otherwise have to reinvent, documented at its
+own module header (today_export.py:14-21): "Writes are confined to `<vault>/.derived/` and refuse
+to overwrite any file whose frontmatter does not say `generated: true`." Two mechanisms make that
+true today, and the worksheet loop calls them rather than restating them: `derived_target`
+(today_export.py:1001-1028) resolves any requested name against the resolved `.derived` root and
+refuses anything whose resolved path is not a strict descendant of that root — checked on the
+resolved path, so `..` segments, absolute paths and drive-relative paths all fail the same way,
+regardless of what the worksheet's requested name looked like before resolution; and
+`is_generated_note` (today_export.py:984-988, aliased from `sensei_letter.is_generated_letter` so
+the frontmatter-parsing rule exists in exactly one place, not two subtly different ones) gates
+every overwrite on the target file's own frontmatter already declaring `generated: true` — an
+unreadable file is refused exactly as firmly as a hand-authored one, because "I could not check"
+is never treated as permission to overwrite. Layered on top, the worksheet's filename is chosen by
+the server, never accepted from a caller argument, which is what keeps the confinement check
+meaningful rather than a check a caller could route around by naming its own path. None of this is
+new code: T038 calls the existing `derived_target`/`is_generated_note`/write machinery with a
+worksheet-specific name and body, the same way `write_today` already does for `Today.md`.
+
+**What would have been at risk if the worksheet loop had instead opened a new write path or a new
+tool.** A second writer means a second implementation of "confined to `.derived`" and a second
+implementation of the `generated: true` guard — exactly the failure mode the project's other
+additive doctrines (D-24 for tool contracts; `intelligence.py:104-107`'s additive-import rule cited
+in D-39/D-40) all exist to prevent: two places that each believe they enforce the same invariant,
+with no mechanical guarantee they agree, and a real chance one of the two is subtly wrong in a way
+the other's tests never catch. A new MCP tool for either the write or the read would additionally
+blow FR-025's "zero new ToolSpecs across the whole feature" budget, and would need its own security
+review pass — confinement, overwrite guard, envelope handling for anything read back as untrusted
+content — that the existing tools have already had under D-22. Reusing both paths verbatim means
+the worksheet loop inherits every property those two mechanisms already have, including the ones
+nobody has to re-argue here, rather than opening a new surface that starts from zero accumulated
+trust.
+
+**Why this is not a new instance of D-20, just its record.** D-20 already states, as a general
+rule, that the agent never writes vaults — Katagiri holds the vault REST token, exposes only
+GET-only tools to the agent, and the Obsidian plugin's own MCP write endpoint is never registered
+with it. The worksheet loop does not need a vault *write* tool at all, because the write is not a
+call through any vault API in the first place: it is a local filesystem write inside the vault
+directory, performed by Katagiri's own process under the `derived_target`/`generated: true`
+guards above, exactly as `write_today` already performs one for `Today.md`. The *read* of the
+filled-in worksheet, once the learner has hand-edited it in Obsidian, goes through the same
+GET-only proxy every other read (`vault_file`/`vault_list`/`obsidian_active_note`) already uses,
+and its content is treated as untrusted data on the way back in, same as any other vault read.
+Nothing about this taskgroup asks D-20 to bend or grow an exception; this row exists so the
+worksheet-specific instance of that compliance is on the record, rather than merely implied by
+"D-20 already covers it."
+
+**Net effect**: no code changes from this filing. This entry and ledger row D-41 are the
+governance step FR-025 requires before T038 (the worksheet writer) and T039/T040 (the confinement/
+overwrite/round-trip tests and the read-back wiring check) are written.
