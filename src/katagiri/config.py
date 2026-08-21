@@ -9,8 +9,17 @@ Two kinds of key exist, and the split is deliberate: ``_PATH_KEYS`` are coerced 
 ``Path``, ``_SECRET_KEYS`` stay strings and are kept out of ``Config.__repr__``.
 
 Config *values* are never logged — they are local filesystem paths (vault, Anki
-profile, scratch) and one credential (the Obsidian REST API key). Errors
-reference the config file path and the offending key *name* only, never a value.
+profile, scratch, screenshot root) and credentials (the Obsidian REST API key,
+the mokuro bridge's shared secret). Errors reference the config file path and
+the offending key *name* only, never a value.
+
+``MOKURO_BRIDGE_PORT`` is a third, deliberately non-TOML kind of Phase-E config:
+a *pinned* port number, declared here (not in ``mcp_server.py``) so this module
+stays the single source of truth for Phase-E configuration, but not exposed as a
+``config.toml`` key — like the other third-party ports Katagiri hardens
+(Obsidian's 27123, AnkiConnect's 8765, yomitan-api's 19633, asbplayer's 8766),
+it is a fixed contract the bridge and its client must agree on, not something
+an operator should be able to drift out from under ``HARDENED_PORTS``.
 """
 
 from __future__ import annotations
@@ -27,12 +36,25 @@ from typing import Any, Final
 APP_DIR_NAME: Final = "Katagiri"
 CONFIG_FILE_NAME: Final = "config.toml"
 
-_PATH_KEYS: Final = ("vault_path", "anki_data_dir", "scratch_root", "db_path")
+# Phase E (media overlay): the mokuro page-change bridge's local port. Pinned to
+# a concrete number rather than left TOML-configurable — see the module
+# docstring. Chosen because it collides with none of the ports Katagiri already
+# hardens (27123 Obsidian, 8765 AnkiConnect, 8766 asbplayer, 19633 yomitan-api)
+# while sitting next to asbplayer's 8766 in the same "local media bridge" block.
+MOKURO_BRIDGE_PORT: Final[int] = 8767
+
+_PATH_KEYS: Final = (
+    "vault_path",
+    "anki_data_dir",
+    "scratch_root",
+    "db_path",
+    "screenshot_scratch_root",
+)
 
 # Keys that are plain strings rather than paths. Kept as a separate tuple so the
 # path coercion in :func:`_coerce_path` cannot reach a credential and turn it into
 # a ``Path``, and so that adding one is a visible, deliberate edit.
-_SECRET_KEYS: Final = ("obsidian_api_token",)
+_SECRET_KEYS: Final = ("obsidian_api_token", "mokuro_shared_secret")
 
 _KNOWN_KEYS: Final = _PATH_KEYS + _SECRET_KEYS
 
@@ -79,6 +101,21 @@ _KEY_BLOCKS: Final[dict[str, str]] = {
 # logged, never returned by a tool, and never written back to this file.
 # Leave it unset and the Obsidian tools report themselves unconfigured.
 # obsidian_api_token = ""
+""",
+    "screenshot_scratch_root": """\
+# Confined directory the screenshot-question tool (Phase E) writes frames into.
+# Filenames are always server-generated, never derived from media titles, so
+# this directory stays safe to point the agent at even when a title is
+# attacker-controlled.
+# screenshot_scratch_root = "{screenshot_scratch_root}"
+""",
+    "mokuro_shared_secret": """\
+# Shared secret for the mokuro page-change bridge (Phase E, localhost-only,
+# port {mokuro_bridge_port}). The bridge's userscript sends this value on every
+# page-change call; requests without it (or with the wrong Origin) are
+# rejected. This is a credential: never logged, never returned by a tool, and
+# never written back to this file.
+# mokuro_shared_secret = ""
 """,
 }
 
@@ -136,17 +173,20 @@ class Config:
     ``vault_path`` and ``anki_data_dir`` are ``None`` until the operator sets
     them; tools that need them must raise a clear error rather than guessing.
 
-    ``obsidian_api_token`` is a credential and is excluded from ``repr``: this
-    object is passed around freely and a dataclass repr is exactly the kind of
-    thing that ends up in a log line or an exception message.
+    ``obsidian_api_token`` and ``mokuro_shared_secret`` are credentials and are
+    excluded from ``repr``: this object is passed around freely and a dataclass
+    repr is exactly the kind of thing that ends up in a log line or an
+    exception message.
     """
 
     config_file: Path
     scratch_root: Path
     db_path: Path
+    screenshot_scratch_root: Path
     vault_path: Path | None = None
     anki_data_dir: Path | None = None
     obsidian_api_token: str | None = field(default=None, repr=False)
+    mokuro_shared_secret: str | None = field(default=None, repr=False)
 
     def require_vault_path(self) -> Path:
         return self._require("vault_path", self.vault_path)
@@ -168,6 +208,7 @@ def _defaults(base: Path) -> dict[str, Path]:
     return {
         "scratch_root": base / "scratch",
         "db_path": base / "katagiri.db",
+        "screenshot_scratch_root": base / "screenshots",
     }
 
 
@@ -175,6 +216,8 @@ def _render_block(key: str, defaults: dict[str, Path]) -> str:
     return _KEY_BLOCKS[key].format(
         scratch_root=defaults["scratch_root"].as_posix(),
         db_path=defaults["db_path"].as_posix(),
+        screenshot_scratch_root=defaults["screenshot_scratch_root"].as_posix(),
+        mokuro_bridge_port=MOKURO_BRIDGE_PORT,
     )
 
 
@@ -345,9 +388,13 @@ def load_config(*, create_missing: bool = True) -> Config:
         config_file=path,
         scratch_root=values["scratch_root"] or defaults["scratch_root"],
         db_path=values["db_path"] or defaults["db_path"],
+        screenshot_scratch_root=(
+            values["screenshot_scratch_root"] or defaults["screenshot_scratch_root"]
+        ),
         vault_path=values["vault_path"],
         anki_data_dir=values["anki_data_dir"],
         obsidian_api_token=secrets["obsidian_api_token"],
+        mokuro_shared_secret=secrets["mokuro_shared_secret"],
     )
 
 
