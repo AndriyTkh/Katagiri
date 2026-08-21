@@ -33,12 +33,18 @@ This directory holds large third-party data files that Katagiri needs at runtime
 | `vendor/jreadability/jreadability-*.tar.gz` | jreadability sdist — the readability coefficients | ~12 KB |
 | `vendor/bccwj/BCCWJ_frequencylist_suw_ver*.zip` | BCCWJ short-unit frequency list (one TSV inside) | ~8 MB |
 | `vendor/jlpt/n<1-5>-vocab-*.anki` | tanos JLPT vocabulary lists, one file per level | ~8 MB total |
+| `vendor/irodori/` | Irodori (Japan Foundation) PDF/MP3 lesson materials — **hand-acquired, never committed** | varies |
+| `vendor/taekim/` | Tae Kim's Guide to Japanese Grammar extracts — CC BY-NC-SA, **committable with attribution** | small (HTML/text extracts) |
 
-The last three are the **difficulty-for-me** datasets (D-10 policy, `docs/dev-plan.md`
-D2). They are *optional*: `katagiri.intelligence.difficulty_for_me` scores on
-whichever of them loaded and reports `weight_used`, so a checkout without them
-still runs a study session — with a visibly partial score. Everything above them
-is not optional.
+jreadability, BCCWJ, and the tanos JLPT lists are the **difficulty-for-me**
+datasets (D-10 policy, `docs/dev-plan.md` D2). They are *optional*:
+`katagiri.intelligence.difficulty_for_me` scores on whichever of them loaded and
+reports `weight_used`, so a checkout without them still runs a study session —
+with a visibly partial score. Irodori and Tae Kim (FR-019/FR-020, D-10) are
+optional in the same sense but for a different reason: the curriculum importer
+tolerates their absence, marking affected items unanchored or text-only rather
+than failing (see `research.md` §Post-gate). Everything else above is not
+optional.
 
 ## Acquisition
 
@@ -129,6 +135,55 @@ is legacy BIFF8, which would mean a new dependency), and an Anki-1 export is pla
 SQLite, so the loader reads it with the standard library. If you prefer a
 different tanos artefact, the loader's contract is "one file per level, named
 `n<level>-vocab-*.anki`, with a `Front` field holding the Japanese".
+
+### Irodori (Japan Foundation)
+
+* **Source**: the official Japan Foundation Irodori distribution. **Not pinned
+  here** — `scripts/fetch_irodori.py` carries a `TODO` for the operator to
+  confirm the exact page and fill it in; this document deliberately does not
+  guess a URL either.
+* **License**: custom Japan Foundation terms. Non-commercial text extraction is
+  acceptable; the textbook's illustrations are untouchable; **no
+  redistribution**. Because of this, **the PDF/MP3 files are never committed to
+  this repository, under any circumstance** — stricter than every other row in
+  this document, and stricter than the `vendor/*` gitignore rule needs to be for
+  anything else here.
+* **Version pinned**: none. Files are hand-acquired and hand-verified per
+  operator, not pinned to a release; `CHECKSUMS.sha256` carries no entry for
+  them until you have real local files to check.
+
+1. Acquire the lesson PDF(s)/MP3(s) yourself, by hand, from the official Japan
+   Foundation Irodori site (or whatever other means you already have the rights
+   to use them through).
+2. Place them under `vendor/irodori/`.
+3. Run `python scripts/fetch_irodori.py`. It computes their digests and checks
+   them against anything already recorded in `CHECKSUMS.sha256`, then reports
+   which files are new. Review its output and append digests yourself — the
+   script never downloads, scrapes, or writes `CHECKSUMS.sha256`; it only reads
+   files you already placed locally.
+
+### Tae Kim's Guide to Japanese Grammar
+
+* **Source**: `https://guidetojapanese.org/` (Tae Kim's Guide to Japanese
+  Grammar); `scripts/fetch_taekim.py` fetches the grammar-index page as the
+  specific extract.
+* **License**: Creative Commons **Attribution-NonCommercial-ShareAlike**
+  (CC BY-NC-SA). Unlike Irodori, extracts of this material **are** committable
+  — but only together with attribution. Required attribution text:
+
+  > Tae Kim's Guide to Japanese Grammar, © Tae Kim, https://guidetojapanese.org/
+  > — licensed under CC BY-NC-SA (Creative Commons
+  > Attribution-NonCommercial-ShareAlike).
+
+* **Version pinned**: whatever `scripts/fetch_taekim.py` last fetched; see its
+  recorded digest in `CHECKSUMS.sha256` for the exact bytes.
+
+1. Run `python scripts/fetch_taekim.py`. It fetches the extract, writes it under
+   `vendor/taekim/`, appends its digest to `CHECKSUMS.sha256` if new, and checks
+   that this file still carries the attribution notice above.
+2. Review the extract and the `CHECKSUMS.sha256` diff before committing either
+   — unlike every other vendored component, these files are allowed into the
+   repository.
 
 ## Recording checksums
 
