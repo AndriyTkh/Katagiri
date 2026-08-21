@@ -180,10 +180,9 @@ misconfigured; only a human running `netstat` will.
 3. Note (and record, for the grader) the wall-clock time the JMdict
    import step takes — this script is expected to print it.
 
-*Reachable-states section*: which specific `action.kind` values and
-coverage outcomes the seeded DB reaches is finalized at T016 (after this
-script's seed rows land) and will be appended here as its own section —
-not duplicated in advance of that task actually seeding the DB.
+*Reachable-states section*: see "Reachable states (T016)" below for exactly
+which `action.kind` values and `coverage()` outcomes this build reaches, and
+what to run to show each one.
 
 ### Step 8 — Decide: does personal Obsidian stay closed during recording?
 
@@ -223,11 +222,82 @@ connection, which is orthogonal to everything this recording exercises.
 Re-run Step 5's second `netstat` check afterward to confirm you know
 which state you're back in before recording anything.
 
+## Reachable states (T016)
+
+`_seed_demo_state` (`scripts/build_demo_db.py`) writes two things on top of
+the migrated schema — no JMdict/kanjium import required for either:
+
+1. **Four known-vocabulary items** (猫/ネコ "cat", 学校/ガッコウ "school",
+   好き/スキ "fond of", 行く/イク "go"), each with a `manual_marks` row
+   marking it `known`. `katagiri.intelligence.coverage()` resolves a
+   morph's lemma or surface against exactly these rows via the real
+   `known_set` view — nothing here is mocked.
+2. **Two lessons**: `demo-lesson-particles-wa-ga` (topic "Particle は vs
+   が"), closed with an **unconsumed `next_step`**; and
+   `demo-lesson-te-form` (topic "Te-form conjugation"), closed with **one
+   open `lesson_unresolved` thread** and no `next_step`. Neither lesson
+   sets `revisit_after` — see "Why `revisit_topic` is not seeded" below.
+
+Note on scope: the `food`/`transport` goal-theme split mentioned under Step
+7 belongs to the demo *vault* fixtures (`tests/demo_fixtures/vault/00-goals/`,
+T009), used by the changed-valid-input demo over goal notes/curriculum. It
+is independent of this seed, which is scoped to `prescribe()`'s ladder and
+`coverage()`'s known set only, per T016's task text.
+
+### `prescribe()` rungs — drive with `start_session` (MCP tool or
+`katagiri.session_tools.start_session(conn, ...)` in-process)
+
+Call `start_session` **repeatedly against the same, once-built demo DB** —
+each call is one of the states below, in this order:
+
+| # | Call | `action.kind` | Why |
+|---|------|----------------|-----|
+| 1 | 1st `start_session()` | `continue_next_step` | `_next_step_action` outranks everything else in the ladder; `demo-lesson-particles-wa-ga`'s `next_step` has not been prescribed yet. Names that lesson's id. |
+| 2 | 2nd `start_session()` (and every call after) | `resolve_thread` | Call 1's `session_open` event now names that lesson, so `_next_step_action` skips it on every later call; no `lesson.revisit_after` is due (none seeded); the ladder falls to `demo-lesson-te-form`'s open thread. |
+| 3 | Any call with `tired=True` | `tired_mode_minimum` | Overrides the ladder unconditionally — reachable from any DB state, seeded or not. |
+| 4 | 1st `start_session()` against a **different, unseeded** DB (e.g. `--no-seed`, or before this build's seed step has run) | `open_first_lesson` | The pitfall this task exists to prevent, kept here deliberately as the contrast case: nothing in the log for any rung to match. |
+
+That is 4 distinct `action.kind` values across the states above — the task's
+`>=2` bar with headroom. `agent/tests/test_reachability.py::test_seeded_demo_db_reaches_more_than_one_action_kind`
+asserts exactly this set (and that `revisit_topic` is deliberately absent).
+
+**Why `revisit_topic` is not seeded.** `_revisit_action` has no one-shot
+rule — unlike `_next_step_action`, a due revisit stays due until a *newer*
+lesson opens on the same topic after the revisit date. Seeding a
+permanently-due revisit would rank above `demo-lesson-te-form`'s thread in
+the ladder forever, silently making state 2 above unreachable from this
+same DB. Showing `revisit_topic` too is possible (open a new lesson dated
+before today with `revisit_after` in the past) but was left out of the
+committed seed to keep this DB's two sequential states reliable in a live
+defence rather than order-sensitive.
+
+### `coverage()` outcomes — call `katagiri.intelligence.coverage(conn, text)`
+(or the `coverage` MCP tool) against the same seeded DB
+
+| # | Text | `known_pct` | `band` | Why |
+|---|------|-------------|--------|-----|
+| 5 | `猫が好きです。` | `100.0` | `>=95` | Tokenizes to two content morphs, 猫 and 好き — both seeded known; nothing else in the sentence counts (が is a particle, です an auxiliary, 。ignored). |
+| 6 | `経済成長率が上昇した。` | `0.0` | `<80` | Tokenizes to five content morphs (経済, 成長, 率, 上昇, 為る) — none seeded known. |
+
+Two materially different bands (`>=95` vs. `<80`, an 100-point spread) from
+one seeded DB — `agent/tests/test_reachability.py::test_coverage_reaches_materially_different_bands`
+asserts the gap is at least 15 points, well under what this seed actually
+produces.
+
+### Running the assertions
+
+```
+./.venv/Scripts/python.exe -m pytest agent/tests/test_reachability.py -v
+```
+
+Not part of `uv run pytest` (root `pyproject.toml`'s `testpaths` is
+`["tests"]` only) — see that file's own header comment for why it lives
+under `agent/tests` regardless, and for how it builds its scratch DB (schema
++ seed only, skipping JMdict/kanjium, in well under a second).
+
 ## What comes later (not this task)
 
 - **Pre-flight + Windows Defender section**: added by T026
   (`scripts/preflight_demo.py`), appended below this runbook's numbered
   steps once that script exists — do not duplicate its content here in
   advance.
-- **Reachable-states table**: added by T016 once the fixture DB's seed
-  rows are finalized (see the placeholder note under Step 7).

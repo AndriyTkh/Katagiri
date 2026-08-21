@@ -52,6 +52,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Final
 
 # Allow running this script directly (``python scripts/build_demo_db.py``)
 # without the package having been installed: add the lane's ``src`` to
@@ -71,11 +72,59 @@ DB_FILE_NAME = "katagiri.db"
 BACKUP_DIR_NAME = "backups"
 TIMING_FILE_NAME = "build_demo_db.timing.json"
 
-# Bumped whenever the placeholder seed section below changes shape. T016 will
-# take this over and grow it into the real seed content (>=2 prescribe()
-# rungs, >=2 coverage outcomes per spec.md). Until then this stays a no-op on
-# rerun once stamped.
-SEED_PLACEHOLDER_VERSION = "0-placeholder"
+# Bumped whenever the seed section below changes shape. T016 replaced the
+# placeholder with real seed content: >=2 reachable prescribe() rungs and >=2
+# reachable coverage() bands (see docs/assignment/demo-setup.md). Still a
+# no-op on rerun once stamped -- see the idempotence note on _seed_demo_state.
+SEED_PLACEHOLDER_VERSION = "1-t016-reachability"
+
+# ---------------------------------------------------------------------------
+# T016 seed content
+# ---------------------------------------------------------------------------
+#
+# Fixed "demo epoch" timestamps rather than _utc_now(): every seed row below
+# is inserted with INSERT OR IGNORE against a natural primary key (item.id,
+# manual_marks' (item_id, ts), lesson.id), so a rerun only dedupes cleanly if
+# the timestamp is stable across runs. Using _utc_now() here would insert a
+# fresh manual_marks row (new ts, same item_id) on every rebuild instead of
+# being ignored.
+_SEED_ITEM_TS: Final = "2026-08-01T00:00:00Z"
+_SEED_MARK_TS: Final = "2026-08-01T00:00:01Z"
+_SEED_L1_OPENED: Final = "2026-08-10T09:00:00Z"
+_SEED_L1_CLOSED: Final = "2026-08-10T09:40:00Z"
+_SEED_L2_OPENED: Final = "2026-08-12T09:00:00Z"
+_SEED_L2_CLOSED: Final = "2026-08-12T09:35:00Z"
+_SEED_U1_CREATED: Final = "2026-08-12T09:30:00Z"
+
+#: A handful of common words marked known (via manual_marks) so that
+#: intelligence.coverage() has vocabulary to actually recognise. A sentence
+#: built only from these words reaches a ">=95" band; a sentence built from
+#: anything else stays at "<80" (see docs/assignment/demo-setup.md).
+_SEED_KNOWN_WORDS: Final[tuple[tuple[str, str, str], ...]] = (
+    # (item_id, kanji, reading) -- kanji is also what coverage()'s known-set
+    # lookup matches on (lemma or surface), so conjugated forms of 行く still
+    # resolve to this row via their dictionary-form lemma.
+    ("w-demo-neko", "猫", "ネコ"),
+    ("w-demo-gakkou", "学校", "ガッコウ"),
+    ("w-demo-suki", "好き", "スキ"),
+    ("w-demo-iku", "行く", "イク"),
+)
+
+#: Lesson with an unconsumed next_step. prescribe()'s ladder checks this
+#: rung first, so the *first* start_session() call against a freshly seeded
+#: DB returns ``continue_next_step`` naming this lesson.
+_SEED_LESSON_NEXT_STEP: Final = "demo-lesson-particles-wa-ga"
+
+#: Lesson with no next_step but one open (never-resolved) thread. Once the
+#: lesson above's next_step has been prescribed once (first call), it drops
+#: out of the ladder (see _next_step_action's one-shot rule) and, since this
+#: seed deliberately has no due topic revisit, every subsequent
+#: start_session() call falls through to this lesson's unresolved thread and
+#: returns ``resolve_thread``.
+_SEED_LESSON_UNRESOLVED: Final = "demo-lesson-te-form"
+_SEED_UNRESOLVED_TEXT: Final = (
+    "Why does 買う become 買って and not 買いて?"
+)
 
 
 class DemoProfileError(RuntimeError):
@@ -212,10 +261,79 @@ def _run_kanjium_import(
 
 
 def _seed_demo_state(conn: sqlite3.Connection) -> StepTiming:
-    """Placeholder for the demo study-state seed. Extend in T016."""
+    """Write the demo's study state (T016).
+
+    Just enough for two distinct :func:`~katagiri.session_tools.prescribe`
+    rungs and two distinct :func:`~katagiri.intelligence.coverage` bands to
+    be reachable against this one DB -- the "fresh DB collapses every run to
+    open_first_lesson" pitfall spec.md warns about. See
+    ``docs/assignment/demo-setup.md`` for the full reachable-states table and
+    exactly which calls surface each one; ``agent/tests/test_reachability.py``
+    asserts it directly.
+
+    Idempotent: every insert below is either ``INSERT OR IGNORE`` against a
+    natural primary key with a fixed ("demo epoch") timestamp, or preceded by
+    an existence check, so rerunning this against an already-seeded DB adds
+    nothing.
+    """
     start = time.perf_counter()
     conn.execute("BEGIN IMMEDIATE")
     try:
+        for item_id, kanji, reading in _SEED_KNOWN_WORDS:
+            conn.execute(
+                "INSERT OR IGNORE INTO item (id, kind, kanji, reading, created_ts) "
+                "VALUES (?, 'word', ?, ?, ?)",
+                (item_id, kanji, reading, _SEED_ITEM_TS),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO manual_marks (item_id, mark, ts, note) "
+                "VALUES (?, 'known', ?, ?)",
+                (
+                    item_id,
+                    _SEED_MARK_TS,
+                    "T016 demo seed: marked known so coverage() has a >=95% "
+                    "band to reach.",
+                ),
+            )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO lesson "
+            "(id, opened_ts, closed_ts, topic, objective, next_step) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                _SEED_LESSON_NEXT_STEP,
+                _SEED_L1_OPENED,
+                _SEED_L1_CLOSED,
+                "Particle は vs が",
+                "Choose は or が correctly in five short sentences "
+                "without hesitating.",
+                "Drill 10 more は/が pairs, then explain out loud "
+                "why each one is which.",
+            ),
+        )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO lesson (id, opened_ts, closed_ts, topic, objective) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                _SEED_LESSON_UNRESOLVED,
+                _SEED_L2_OPENED,
+                _SEED_L2_CLOSED,
+                "Te-form conjugation",
+                "Conjugate five godan/ichidan verbs into te-form from memory.",
+            ),
+        )
+        already_unresolved = conn.execute(
+            "SELECT 1 FROM lesson_unresolved WHERE lesson_id = ? AND text = ? LIMIT 1",
+            (_SEED_LESSON_UNRESOLVED, _SEED_UNRESOLVED_TEXT),
+        ).fetchone()
+        if already_unresolved is None:
+            conn.execute(
+                "INSERT INTO lesson_unresolved (lesson_id, text, created_ts) "
+                "VALUES (?, ?, ?)",
+                (_SEED_LESSON_UNRESOLVED, _SEED_UNRESOLVED_TEXT, _SEED_U1_CREATED),
+            )
+
         conn.execute(
             "INSERT OR REPLACE INTO metadata(key, value, updated_ts) "
             "VALUES ('demo_seed_version', ?, ?)",
@@ -227,8 +345,9 @@ def _seed_demo_state(conn: sqlite3.Connection) -> StepTiming:
         raise
     elapsed = time.perf_counter() - start
     print(
-        f"seed: placeholder marker only (version {SEED_PLACEHOLDER_VERSION!r}); "
-        "real seed content lands in T016 -- {:.3f}s".format(elapsed)
+        f"seed: {len(_SEED_KNOWN_WORDS)} known words, 2 lessons (1 next_step, "
+        f"1 unresolved thread) -- version {SEED_PLACEHOLDER_VERSION!r} -- "
+        f"{elapsed:.3f}s"
     )
     return StepTiming(name="seed_demo_state", seconds=elapsed)
 
