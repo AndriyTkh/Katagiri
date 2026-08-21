@@ -82,6 +82,7 @@ from katagiri.applog import (
     setup_logging,
     truncated_repr,
 )
+from katagiri.config import MOKURO_BRIDGE_PORT
 from katagiri.db import database_path, open_db, resolve_alias
 from katagiri.tool_registry import redact
 
@@ -423,10 +424,16 @@ def dictionary_lookup(conn: sqlite3.Connection, surface: str) -> dict[str, Any]:
 # Logic: local-exposure check
 # ---------------------------------------------------------------------------
 
-HARDENED_PORTS: Final[tuple[int, ...]] = (27123, 8766, 19633, 8765)
+HARDENED_PORTS: Final[tuple[int, ...]] = (
+    27123,
+    8766,
+    19633,
+    8765,
+    MOKURO_BRIDGE_PORT,
+)
 FIREWALL_COMMAND: Final = (
     'netsh advfirewall firewall add rule name="Katagiri deny inbound" dir=in '
-    "action=block protocol=TCP localport=27123,8766,19633,8765"
+    f"action=block protocol=TCP localport=27123,8766,19633,8765,{MOKURO_BRIDGE_PORT}"
 )
 SECURITY_NOTE: Final = (
     "Read-only check. Katagiri never edits firewall rules; run firewall_command "
@@ -726,9 +733,9 @@ def stop_gate_status() -> dict[str, Any]:
     title="Security status",
     description=(
         "Read-only hardening check: are the local helper ports (27123, 8766, "
-        "19633, 8765) bound to 127.0.0.1 rather than 0.0.0.0? Reports per-port "
-        "state and the exact netsh command for the operator to run. Changes "
-        "nothing."
+        f"19633, 8765, {MOKURO_BRIDGE_PORT}) bound to 127.0.0.1 rather than "
+        "0.0.0.0? Reports per-port state and the exact netsh command for the "
+        "operator to run. Changes nothing."
     ),
 )
 def security_status() -> dict[str, Any]:

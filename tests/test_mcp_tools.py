@@ -1915,7 +1915,7 @@ def test_t010_registers_zero_new_toolspecs():
 # security_status
 # ---------------------------------------------------------------------------
 
-NETSTAT_SAMPLE = """
+NETSTAT_SAMPLE = f"""
 Active Connections
 
   Proto  Local Address          Foreign Address        State           PID
@@ -1924,6 +1924,7 @@ Active Connections
   TCP    0.0.0.0:8765           0.0.0.0:0              LISTENING       3333
   TCP    127.0.0.1:8766         0.0.0.0:0              LISTENING       4444
   TCP    [::1]:8766             [::]:0                 LISTENING       4444
+  TCP    127.0.0.1:{config_mod.MOKURO_BRIDGE_PORT}         0.0.0.0:0              LISTENING       5555
   TCP    192.168.1.20:5555      10.0.0.9:443           ESTABLISHED     6666
 """
 
@@ -1941,12 +1942,32 @@ def test_netstat_parser_separates_loopback_from_wildcard_binds():
     assert report["8766"]["loopback_only"] is True
     assert report["8766"]["bound_addresses"] == ["127.0.0.1", "::1"]
 
+    # The mokuro bridge port (T004) is hardened the same way as the other
+    # third-party helper ports above.
+    mokuro_port = str(config_mod.MOKURO_BRIDGE_PORT)
+    assert report[mokuro_port]["listening"] is True
+    assert report[mokuro_port]["loopback_only"] is True
+    assert report[mokuro_port]["bound_addresses"] == ["127.0.0.1"]
+
     # Nothing listening means there is no binding to vouch for.
     assert report["19633"] == {
         "listening": False,
         "loopback_only": None,
         "bound_addresses": [],
     }
+
+
+def test_mokuro_bridge_port_is_hardened():
+    """T004: the mokuro page-change bridge's pinned port joins the same
+    loopback-only hardening as asbplayer's :8766 (test_mcp_tools.py's existing
+    coverage above) rather than being a silent gap in HARDENED_PORTS."""
+    assert config_mod.MOKURO_BRIDGE_PORT in mcp_server.HARDENED_PORTS
+
+    report = mcp_server.parse_netstat(NETSTAT_SAMPLE, mcp_server.HARDENED_PORTS)
+    mokuro_port = str(config_mod.MOKURO_BRIDGE_PORT)
+    assert report[mokuro_port]["listening"] is True
+    assert report[mokuro_port]["loopback_only"] is True
+    assert report[mokuro_port]["bound_addresses"] == ["127.0.0.1"]
 
 
 def test_netstat_parser_ignores_established_connections():
