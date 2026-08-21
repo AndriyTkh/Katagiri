@@ -56,9 +56,9 @@
 
 **Goal**: playhead-anchored context for local files. **[was: kata-e1]** (If T001 swapped channels, this group builds asbplayer with the same three-task shape and US4/US5 wait for the mpv lane in TG-E4.)
 
-- [ ] T005 [US1] jsonipc (or Lua pusher) channel over `\\.\pipe\mpv-katagiri`, heartbeat via media_heartbeat rows (stale never reported live), media_now/media_context implementing the media_channel interface. Worktree `wt/e-mpv`. Write: NEW src/katagiri/media_mpv.py. Read: media_channel.py interface, src/katagiri/mpv_seek_logger.py (existing pipe usage), research.md mpv IPC notes. [was: kata-e1]
-- [ ] T006 [P] [US1] Unit tests incl. stale-heartbeat path + enveloped subtitle windows; mock the pipe peer (no live mpv dependency). Write: NEW tests/test_media_mpv.py. Read: fixture recipe (tests/test_mcp_tools.py:1–80), media_mpv.py API. [was: kata-e1]
-- [ ] T007 [US1] Registration (serial, master): additive ToolSpec entries into phase-E fragment + adapter block + smoke tests; enveloped subtitle windows verified at the tool boundary. Write: tool_registry.py, mcp_server.py, tests/test_mcp_tools.py. Read: seam layout (specs/003 T003), media_mpv.py + media_channel.py APIs. [was: kata-e1]
+- [x] T005 [US1] jsonipc (or Lua pusher) channel over `\\.\pipe\mpv-katagiri`, heartbeat via media_heartbeat rows (stale never reported live), media_now/media_context implementing the media_channel interface. Worktree `wt/e-mpv`. Write: NEW src/katagiri/media_mpv.py. Read: media_channel.py interface, src/katagiri/mpv_seek_logger.py (existing pipe usage), research.md mpv IPC notes. [was: kata-e1]
+- [x] T006 [P] [US1] Unit tests incl. stale-heartbeat path + enveloped subtitle windows; mock the pipe peer (no live mpv dependency). Write: NEW tests/test_media_mpv.py. Read: fixture recipe (tests/test_mcp_tools.py:1–80), media_mpv.py API. [was: kata-e1]
+- [x] T007 [US1] Registration (serial, master): additive ToolSpec entries into phase-E fragment + adapter block + smoke tests; enveloped subtitle windows verified at the tool boundary. Write: tool_registry.py, mcp_server.py, tests/test_mcp_tools.py. Read: seam layout (specs/003 T003), media_mpv.py + media_channel.py APIs. [was: kata-e1]
 
 **Checkpoint**: full suite green; first channel live — unblocks TG-E4 lanes (all four if this was mpv; US2/US3 only if it wasn't).
 
