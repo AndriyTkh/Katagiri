@@ -86,7 +86,7 @@ from katagiri.envelope import (
     make_excerpt,
     wrap,
 )
-from katagiri.events import append_event, new_ulid, utc_now_stamp
+from katagiri.events import STUDY_LOG_TYPE, append_event, new_ulid, utc_now_stamp
 from katagiri.logging_setup import get_logger
 from katagiri.normalizer import is_han_char, is_kana_char
 
@@ -204,6 +204,33 @@ DEFAULT_LESSON_LIMIT: Final = 20
 #: Staged envelopes held for the MCP adapter seam. Small on purpose: this is a
 #: hand-off buffer for one conversation, not a content store.
 MAX_STAGED: Final = 64
+
+# ---------------------------------------------------------------------------
+# Dose caps (FR-015) — how much of a session the learner is allowed to spend,
+# as opposed to the "Caps" section above, which bounds how big one field or
+# one call is allowed to be. Sourced from research.md, "Post-gate": "Caps:
+# 20-30 min core/day, <=8 new words/day, <=2 new grammar/week, review queue
+# hard-capped with deferral." Overflow past any of these is a DEFERRAL (the
+# excess waits for tomorrow/next week), never a longer session.
+# ---------------------------------------------------------------------------
+
+#: research.md, "Post-gate": "<=8 new words/day". Counted from today's mining
+#: events — mining is how a new word enters the log (see :func:`add_vocab`).
+MAX_NEW_WORDS_PER_DAY: Final = 8
+#: research.md, "Post-gate": "<=2 new grammar/week". Counted from lessons
+#: whose topic is a grammar item and whose *first* lesson opened this week —
+#: a later lesson revisiting the same topic does not spend the budget again.
+MAX_NEW_GRAMMAR_PER_WEEK: Final = 2
+#: A rolling 7-day window ending today, matching the precedent in
+#: stop_gate.py (``STOP_GATE_WINDOW_DAYS``) of counting backwards from today
+#: rather than snapping to a calendar week.
+GRAMMAR_WEEK_WINDOW_DAYS: Final = 7
+#: research.md, "Post-gate", A0 strand example: "10 replays of one 40-second
+#: Irodori dialogue" — narrow-listening reps, not raw minutes. The event that
+#: counts against this (a ``study_session`` payload's ``listening_reps``) is
+#: written by a later lane (specs/006-teaching-method tasks T018/T019); until
+#: then no session has logged any, so the full target is always left.
+LISTENING_REPS_DAILY_TARGET: Final = 10
 
 # ---------------------------------------------------------------------------
 # Refusal codes (stable; adapters and tests may compare against these)
@@ -1027,6 +1054,60 @@ def _curriculum_action(conn: sqlite3.Connection) -> dict[str, Any] | None:
     )
 
 
+def _caps_block(conn: sqlite3.Connection, today: date) -> dict[str, int]:
+    """How much dose budget is left today/this week (FR-015). Reads only.
+
+    Additive on every action payload — the caller decides what to prescribe;
+    this decides how much of it still fits. Overflow is reported here as a
+    smaller number, never enforced by shortening what was already prescribed:
+    the actual refusal (past zero) lives at the tool that would spend the
+    budget, e.g. :func:`add_vocab`.
+    """
+    day_key = today.isoformat()
+    mined_today = conn.execute(
+        "SELECT COUNT(*) FROM event WHERE type = ? AND day_key = ?",
+        (MINING_EVENT, day_key),
+    ).fetchone()[0]
+    new_words_left = max(0, MAX_NEW_WORDS_PER_DAY - int(mined_today))
+
+    window_start = (
+        today - timedelta(days=GRAMMAR_WEEK_WINDOW_DAYS - 1)
+    ).isoformat()
+    grammar_introduced = conn.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT l.topic, MIN(l.opened_ts) AS first_opened
+              FROM lesson l
+              JOIN item i ON i.id = l.topic
+             WHERE i.kind = 'grammar'
+             GROUP BY l.topic
+            HAVING substr(first_opened, 1, 10) >= ?
+        )
+        """,
+        (window_start,),
+    ).fetchone()[0]
+    grammar_left = max(0, MAX_NEW_GRAMMAR_PER_WEEK - int(grammar_introduced))
+
+    listening_reps_done = conn.execute(
+        """
+        SELECT COALESCE(SUM(json_extract(payload, '$.listening_reps')), 0)
+          FROM event
+         WHERE type = ?
+           AND day_key = ?
+        """,
+        (STUDY_LOG_TYPE, day_key),
+    ).fetchone()[0]
+    listening_reps_left = max(
+        0, LISTENING_REPS_DAILY_TARGET - int(listening_reps_done)
+    )
+
+    return {
+        "new_words_left": new_words_left,
+        "grammar_left": grammar_left,
+        "listening_reps_left": listening_reps_left,
+    }
+
+
 def prescribe(
     conn: sqlite3.Connection, *, tired: bool = False, today: str | None = None
 ) -> dict[str, Any]:
@@ -1054,31 +1135,42 @@ def prescribe(
     started beats starting something new. The fallback names the one thing
     that is always available, so the answer is never a menu and never empty.
 
+    Every action, whichever rung produced it, carries an additive ``caps`` key
+    (FR-015: ``new_words_left``, ``grammar_left``, ``listening_reps_left`` —
+    see :func:`_caps_block`) reporting how much of today's/this week's dose
+    budget is left. It never changes *which* action is chosen.
+
     Exposed separately from :func:`start_session` so the choice can be inspected
     (and tested) without appending an event.
     """
     day = _today(today)
     if tired:
-        return _action(
+        action = _action(
             ACTION_TIRED_MODE,
             TIRED_MODE_INSTRUCTION,
             TIRED_MODE_RATIONALE,
             source="tired_mode",
         )
-    for candidate in (
-        _next_step_action(conn),
-        _revisit_action(conn, day),
-        _unresolved_action(conn),
-        _curriculum_action(conn),
-    ):
-        if candidate is not None:
-            return candidate
-    return _action(
-        ACTION_OPEN_FIRST_LESSON,
-        OPEN_FIRST_LESSON_INSTRUCTION,
-        OPEN_FIRST_LESSON_RATIONALE,
-        source="empty_log",
-    )
+    else:
+        action = None
+        for candidate in (
+            _next_step_action(conn),
+            _revisit_action(conn, day),
+            _unresolved_action(conn),
+            _curriculum_action(conn),
+        ):
+            if candidate is not None:
+                action = candidate
+                break
+        if action is None:
+            action = _action(
+                ACTION_OPEN_FIRST_LESSON,
+                OPEN_FIRST_LESSON_INSTRUCTION,
+                OPEN_FIRST_LESSON_RATIONALE,
+                source="empty_log",
+            )
+    action["caps"] = _caps_block(conn, day)
+    return action
 
 
 def start_session(
@@ -2568,6 +2660,7 @@ __all__ = [
     "ERROR_EVENT",
     "EVENT_TYPES",
     "FIELD_TOO_LONG",
+    "GRAMMAR_WEEK_WINDOW_DAYS",
     "INBOX_TOO_LARGE",
     "INVALID_COVERAGE_BAND",
     "INVALID_FIELD",
@@ -2578,8 +2671,11 @@ __all__ = [
     "INVALID_UNASSISTED",
     "LESSON_CLOSE_EVENT",
     "LESSON_OPEN_EVENT",
+    "LISTENING_REPS_DAILY_TARGET",
     "MAX_FREE_NOTES_CHARS",
     "MAX_INBOX_LINES",
+    "MAX_NEW_GRAMMAR_PER_WEEK",
+    "MAX_NEW_WORDS_PER_DAY",
     "MAX_OBSERVATIONS_PER_CALL",
     "MAX_STAGED",
     "MAX_TEXT_CHARS",
