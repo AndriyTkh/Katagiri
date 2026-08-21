@@ -598,18 +598,47 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
                 False,
                 "Questions served in the lesson and left open, at most 20.",
             ),
+            ArgSpec(
+                "listening_reps",
+                "int | None",
+                False,
+                "D-37: reps of known audio replayed this session (not minutes). "
+                "Pass together with listening_source to additionally log a "
+                "listening block via log_listening; omit both to leave this "
+                "call exactly as it was before D-37.",
+            ),
+            ArgSpec(
+                "listening_source",
+                "str | None",
+                False,
+                "The known recording replayed (e.g. an Irodori lesson/dialogue "
+                "label). Required alongside listening_reps to log a listening "
+                "block.",
+            ),
+            ArgSpec(
+                "listening_ts",
+                "str | None",
+                False,
+                "Timestamp for the listening block (defaults to now). The "
+                "dedupe key is derived from this value, so logging the same "
+                "listening_ts twice is a no-op the second time.",
+            ),
         ),
         output=(
             "{ok, error, field, note, lesson_id, created, closed, session_id, "
             "opened_ts, closed_ts, topic, next_step, revisit_after, "
-            "unresolved_ids, event_id, untrusted}"
+            "unresolved_ids, event_id, untrusted, listening}"
         ),
         stability="experimental",
         note=(
             "The lesson row, its unresolved threads and the event land in one "
             "transaction. An update COALESCEs each omitted field, so closing a "
             "lesson does not blank what opening it recorded. Katagiri schedules "
-            "topics (revisit_after); Anki schedules items."
+            "topics (revisit_after); Anki schedules items. D-37: when "
+            "listening_reps and listening_source are both given, log_listening "
+            "also runs and its result (including any duplicate=True) is "
+            "reported under the additive 'listening' output key, independent "
+            "of the lesson write's own outcome."
         ),
     ),
     ToolSpec(

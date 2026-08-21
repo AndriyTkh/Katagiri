@@ -295,7 +295,10 @@ Check for drift without writing anything:
   - `revisit_after` (`str | int | None`, optional) — Schedule the topic: a YYYY-MM-DD day key, or a number of days from today.
   - `free_notes` (`str | None`, optional) — Free text, at most 500 characters (the schema's CHECK).
   - `unresolved` (`list[str] | None`, optional) — Questions served in the lesson and left open, at most 20.
-- **Output schema**: {ok, error, field, note, lesson_id, created, closed, session_id, opened_ts, closed_ts, topic, next_step, revisit_after, unresolved_ids, event_id, untrusted}
+  - `listening_reps` (`int | None`, optional) — D-37: reps of known audio replayed this session (not minutes). Pass together with listening_source to additionally log a listening block via log_listening; omit both to leave this call exactly as it was before D-37.
+  - `listening_source` (`str | None`, optional) — The known recording replayed (e.g. an Irodori lesson/dialogue label). Required alongside listening_reps to log a listening block.
+  - `listening_ts` (`str | None`, optional) — Timestamp for the listening block (defaults to now). The dedupe key is derived from this value, so logging the same listening_ts twice is a no-op the second time.
+- **Output schema**: {ok, error, field, note, lesson_id, created, closed, session_id, opened_ts, closed_ts, topic, next_step, revisit_after, unresolved_ids, event_id, untrusted, listening}
 <!-- END GENERATED: log_lesson -->
 <!-- BEGIN HAND: log_lesson -->
 - **Purpose**: Record one lesson — open it, close it, or both in a single call — the structured write that turns "we studied X" into a queryable row plus an event, and the source of the `next_step`/`revisit_after` state `start_session`'s ladder and `lesson_memory` read back.

@@ -922,7 +922,11 @@ def start_session(tired: bool = False, session_id: str | None = None) -> dict[st
         "call) or omit it to insert a new row. 'closed' defaults to true, which "
         "stamps the close and logs 'lesson_close'. 'next_step' is refused "
         "unless the lesson is being closed — it is a conclusion, not a plan. "
-        "'revisit_after' schedules the topic, as a day key or a number of days."
+        "'revisit_after' schedules the topic, as a day key or a number of days. "
+        "D-37: pass listening_reps together with listening_source to also log "
+        "a listening block (reps of known audio, not minutes) via "
+        "log_listening; the result is reported under the 'listening' output "
+        "key, independent of whether the lesson write itself succeeds."
     ),
 )
 def log_lesson(
@@ -935,10 +939,13 @@ def log_lesson(
     revisit_after: str | int | None = None,
     free_notes: str | None = None,
     unresolved: list[str] | None = None,
+    listening_reps: int | None = None,
+    listening_source: str | None = None,
+    listening_ts: str | None = None,
 ) -> dict[str, Any]:
     logger.debug("log_lesson called")
     with _db() as conn:
-        return redact(
+        result = redact(
             session_tools.log_lesson(
                 conn,
                 topic=topic,
@@ -952,6 +959,19 @@ def log_lesson(
                 unresolved=tuple(unresolved or ()),
             )
         )
+        if listening_reps is not None or listening_source is not None:
+            result["listening"] = redact(
+                session_tools.log_listening(
+                    conn,
+                    source=listening_source,
+                    reps=listening_reps,
+                    session_id=session_id,
+                    ts=listening_ts,
+                )
+            )
+        else:
+            result["listening"] = None
+        return result
 
 
 @server.tool(

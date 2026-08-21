@@ -869,6 +869,55 @@ def test_log_lesson_and_lessons_round_trip_through_the_tools(db):
     assert mcp_server.lessons(unresolved_only=True)[0]["id"] == written["lesson_id"]
 
 
+def test_log_lesson_can_additionally_log_a_listening_block(db):
+    """006 T021: D-37 rides log_lesson additively — listening_reps/source/ts
+
+    are optional args that, when both reps and source are given, also drive
+    session_tools.log_listening. Logging the same listening_ts twice surfaces
+    duplicate=True under the additive 'listening' output key.
+    """
+    session = mcp_server.start_session()["session_id"]
+    ts = f"2026-08-05{TS}"
+
+    written = mcp_server.log_lesson(
+        topic="listening drill",
+        objective="catch known vocabulary at speed",
+        session_id=session,
+        listening_reps=3,
+        listening_source="Irodori L3 dialogue",
+        listening_ts=ts,
+    )
+    assert written["ok"] is True
+    assert written["listening"]["ok"] is True
+    assert written["listening"]["listening_reps"] == 3
+    assert written["listening"]["duplicate"] is False
+
+    again = mcp_server.log_lesson(
+        topic="listening drill, again",
+        objective="catch known vocabulary at speed",
+        session_id=session,
+        listening_reps=3,
+        listening_source="Irodori L3 dialogue",
+        listening_ts=ts,
+    )
+    assert again["ok"] is True, "a duplicate listening block must not sink the lesson write"
+    assert again["listening"]["duplicate"] is True
+    assert again["listening"]["event_id"] == written["listening"]["event_id"]
+
+
+def test_log_lesson_without_listening_args_leaves_listening_null(db):
+    """006 T021: omitting both listening args is a no-op — the existing
+
+    call shape is unaffected by the additive change (D-24).
+    """
+    session = mcp_server.start_session()["session_id"]
+    written = mcp_server.log_lesson(
+        topic="particles", objective="use は and が", session_id=session
+    )
+    assert written["ok"] is True
+    assert written["listening"] is None
+
+
 def test_log_observations_refuses_a_batch_missing_a_rubric_version(db):
     session = mcp_server.start_session()["session_id"]
     good = {
@@ -957,6 +1006,17 @@ def test_add_vocab_spec_documents_the_cap_refusal():
     assert "cap" in spec.summary.lower()
     assert "new_word_cap_reached" in spec.note
     assert "triage_inbox" in spec.note
+
+
+def test_log_lesson_spec_documents_the_listening_block():
+    """006 T021: the ToolSpec string is the contract a caller reads first."""
+    spec = get_spec("log_lesson")
+    assert "listening" in spec.output
+    assert "listening_reps" in spec.arg_names
+    assert "listening_source" in spec.arg_names
+    assert "listening_ts" in spec.arg_names
+    assert "D-37" in spec.note
+    assert "log_listening" in spec.note
 
 
 def test_the_echo_back_ceremony_runs_as_three_tool_calls(db):
