@@ -419,8 +419,14 @@ def test_write_letter_refuses_a_hand_written_note(conn, vault):
     handwritten = "---\nschema: 2\ntype: progress\nweek: 2026-W34\n---\n\nMy own notes.\n"
     target.write_text(handwritten, encoding="utf-8")
 
-    with pytest.raises(sl.SenseiLetterError, match="hand-written"):
+    with pytest.raises(sl.SenseiLetterError, match="hand-written") as exc:
         sl.write_letter(conn, vault, iso_year=2026, iso_week=34)
+
+    # The refusal locates the file the way progress_dir does: vault-relative,
+    # never the resolved absolute path, which carries the 'vault_path' value.
+    message = str(exc.value)
+    assert "80-progress/2026-W34-sensei-letter.md" in message
+    assert str(vault) not in message and vault.as_posix() not in message
 
     assert target.read_text(encoding="utf-8") == handwritten
     assert events.recent_events(conn, limit=5, type=sl.LETTER_EVENT_TYPE) == []
@@ -456,6 +462,80 @@ def test_write_letter_replaces_its_own_output(conn, vault):
 def test_write_letter_without_a_vault_needs_config(conn):
     with pytest.raises(config_mod.ConfigError, match="vault_path"):
         sl.write_letter(conn, iso_year=2026, iso_week=34)
+
+
+def test_write_letter_refuses_an_unreadable_file(conn, vault, monkeypatch):
+    target = vault / "80-progress" / "2026-W34-sensei-letter.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("---\ngenerated: true\n---\n", encoding="utf-8")
+
+    def boom(*args, **kwargs):
+        raise OSError("no read for you")
+
+    monkeypatch.setattr(sl.Path, "read_text", boom)
+    with pytest.raises(sl.SenseiLetterError) as exc:
+        sl.write_letter(conn, vault, iso_year=2026, iso_week=34)
+
+    message = str(exc.value)
+    assert "no read for you" in message, "the reason the read failed is the point"
+    assert str(vault) not in message and vault.as_posix() not in message
+
+
+def test_an_os_failure_detail_never_carries_the_path_it_failed_on(vault):
+    """``_os_detail``: the diagnosis without the filename the platform appends.
+
+    A real ``PermissionError`` stringifies as ``[Errno 13] Permission denied:
+    '<absolute path>'``, so interpolating ``exc`` is the other way the vault root
+    reaches a message. ``strerror`` says the same thing about *why* without saying
+    *where*, and an OSError raised without one has no path in it to lose.
+    """
+    platform_shaped = PermissionError(13, "Permission denied", str(vault / "x.md"))
+    detail = sl._os_detail(platform_shaped)
+    assert detail == "Permission denied"
+    assert str(vault) not in detail
+
+    assert sl._os_detail(OSError("no read for you")) == "no read for you"
+
+
+@pytest.mark.parametrize("failing_step", ["replace", "fsync"])
+def test_a_failed_write_leaves_the_previous_letter_and_no_litter(
+    conn, vault, monkeypatch, failing_step
+):
+    """The reason the write goes through a temp file plus :func:`os.replace`.
+
+    Mirrors :mod:`katagiri.today_export`'s identical hazard test. Writing in
+    place would truncate the old letter first, so a failure anywhere between
+    that truncation and the last byte leaves a half-written letter — and one
+    with no frontmatter is a file the refusal rule then reads as hand-written,
+    locking the learner out of every future letter here until they delete it by
+    hand. So: the old letter survives byte for byte, header included, the
+    scratch file is not left behind in ``80-progress``, and the failure message
+    does not carry the vault root.
+    """
+    target = sl.write_letter(conn, vault, iso_year=2026, iso_week=34)
+    before = target.read_text(encoding="utf-8")
+    assert sl.is_generated_letter(before)
+
+    def boom(*args, **kwargs):
+        raise OSError("the disk gave up mid-write")
+
+    monkeypatch.setattr(sl.os, failing_step, boom)
+    seed(conn, day=week_days()[0], type="review_batch", payload={"reviews": 42})
+    with pytest.raises(sl.SenseiLetterError) as exc:
+        sl.write_letter(conn, vault, iso_year=2026, iso_week=34)
+    assert str(vault) not in str(exc.value), "a write failure names the key, not the root"
+
+    after = target.read_text(encoding="utf-8")
+    assert after == before
+    assert "| Reviews | 42 |" not in after
+    # Stated as its own assertion: the header is what keeps the next letter legal.
+    assert sl.is_generated_letter(after)
+    assert sorted(p.name for p in (vault / "80-progress").iterdir()) == [
+        "2026-W34-sensei-letter.md"
+    ]
+    assert list((vault / "80-progress").glob("*.tmp")) == []
+    # A write that did not land must not be logged as a letter.
+    assert len(events.recent_events(conn, limit=5, type=sl.LETTER_EVENT_TYPE)) == 1
 
 
 def test_letter_filename_accepts_label_or_stats(conn):
