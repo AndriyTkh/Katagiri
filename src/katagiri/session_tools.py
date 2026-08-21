@@ -2191,6 +2191,7 @@ def add_vocab(
     session_id: str | None = None,
     confirmations: Mapping[str, Confirmation] | None = None,
     gate: EchoGate | None = None,
+    today: str | None = None,
     tz: str | None = None,
 ) -> dict[str, Any]:
     """Mine one word: an ``item`` row plus a ``mining`` event.
@@ -2212,6 +2213,13 @@ def add_vocab(
     naming the cap and how many were already mined today. This is never a
     silent success at a smaller size — the overflow route is the inbox
     (``triage_inbox``), not a word mined anyway.
+
+    ``today`` names the day the cap is counted against, matching the
+    convention in :func:`prescribe`/:func:`start_session`: a ``YYYY-MM-DD``
+    day key, defaulting to the real wall-clock date when omitted. Passing the
+    same explicit ``today`` to both keeps ``prescribe``'s reported
+    ``caps.new_words_left`` and this refusal in agreement — otherwise a caller
+    who fixes the clock for one but not the other can see them disagree.
     """
     answer = _base(
         {
@@ -2271,7 +2279,7 @@ def add_vocab(
         # nothing (FR-015).
         mined_today = conn.execute(
             "SELECT COUNT(*) FROM event WHERE type = ? AND day_key = ?",
-            (MINING_EVENT, date.today().isoformat()),
+            (MINING_EVENT, _today(today).isoformat()),
         ).fetchone()[0]
         if int(mined_today) >= MAX_NEW_WORDS_PER_DAY:
             raise SessionToolError(

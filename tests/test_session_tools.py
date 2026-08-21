@@ -253,10 +253,9 @@ def seed_mining_events_now(conn: sqlite3.Connection, n: int) -> None:
     Unlike :func:`seed_mining_events`, this never names a ``day_key``: it
     leaves ``ts_device``/``tz`` at their defaults so :func:`append_event`
     stamps "now" and derives the day from the system's real local clock —
-    exactly what :func:`katagiri.session_tools.add_vocab`'s own cap check
-    (hardcoded to ``date.today()``, not the ``today`` parameter the rest of
-    this module accepts) also reads. Existing to sidestep any UTC-vs-local
-    mismatch a fixed day string could introduce.
+    exactly what :func:`katagiri.session_tools.add_vocab`'s cap check reads
+    when its own ``today`` argument is left at its default. Existing to
+    sidestep any UTC-vs-local mismatch a fixed day string could introduce.
     """
     for index in range(n):
         st.append_event(
@@ -816,10 +815,10 @@ def test_start_session_carries_the_same_caps_block_as_prescribe(conn):
 # add_vocab's daily new-word cap refusal (T015)
 # ---------------------------------------------------------------------------
 #
-# add_vocab's own cap check counts today's mining events against the real wall
-# clock (``date.today()``), not the ``today`` string ``prescribe``/
-# ``start_session`` accept for testing — it takes no ``today`` parameter at
-# all. So these events are seeded against the actual local date, not TODAY.
+# add_vocab accepts the same optional ``today`` string as ``prescribe``/
+# ``start_session`` and defaults to the real wall clock when it is omitted —
+# the tests below that call it with no ``today`` therefore seed against the
+# actual local date (via ``seed_mining_events_now``), not TODAY.
 
 
 def test_add_vocab_refuses_past_the_daily_new_word_cap(conn):
@@ -857,6 +856,23 @@ def test_add_vocab_still_succeeds_one_short_of_the_cap(conn):
     assert answer["ok"] is True, answer
     assert answer["item_id"] is not None
     assert count(conn, "event") == st.MAX_NEW_WORDS_PER_DAY
+
+
+def test_add_vocab_and_prescribe_agree_on_the_cap_for_the_same_explicit_today(conn):
+    """One clock, not two: passing the same explicit ``today`` to both must
+    make ``prescribe``'s ``caps.new_words_left`` and ``add_vocab``'s own
+    enforcement agree — at a fixed date arbitrarily far from the real wall
+    clock, so this fails if either reader falls back to ``date.today()``.
+    """
+    fixed_day = "2030-05-01"
+    seed_mining_events(conn, st.MAX_NEW_WORDS_PER_DAY, day=fixed_day)
+
+    prescribed = st.prescribe(conn, today=fixed_day)
+    answer = st.add_vocab(conn, word="走る", today=fixed_day)
+
+    assert prescribed["caps"]["new_words_left"] == 0
+    assert answer["ok"] is False
+    assert answer["error"] == st.NEW_WORD_CAP_REACHED
 
 
 # ---------------------------------------------------------------------------
