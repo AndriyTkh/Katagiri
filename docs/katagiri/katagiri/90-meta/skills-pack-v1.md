@@ -184,6 +184,49 @@ so the pack is honest about what it is not yet doing: nothing refuses an over-do
 today, the same way the mining budget above is self-counted rather than server-enforced. A
 later taskgroup (TG2, post-gate) turns these numbers into `add_vocab`/`prescribe()` refusals.
 
+## Assessment cadence
+
+Three standing checks run on a clock, independent of mode, and fire from the mandatory close
+step rather than being invented mid-lesson. They are policy here; the operational detail
+(exact scoring, the pitch-marking text format, the recording format) lives in
+[[70-drills/assessment-cadence]]. *(spec, 006 FR-022)*
+
+**Weekly mora-count dictation.** One Irodori audio line, heard once, transcribed to kana with
+no lookups, scored mora-by-mora against the source. A wrong mora count (long/short vowel
+confusion, a dropped or inserted geminate っ, ん miscounted) and a devoicing miss (です/ます-
+class environments, per the l1-profile) reuse the **existing** `mora-length` and
+`devoiced-vowels` `log_error` pattern names — the same two E2/E4 already put in the pack, now
+given a weekly checkpoint instead of an ad hoc one. Distinct from KANA's daily dictation
+(Phase 0, agent-spoken, kana taught so far): this is post-Phase-0 and runs on real recorded
+audio. Closes with the reserved slug `topic: "weekly-mora-dictation"`, the same mechanism
+KANA's `phase0-kana-dictation` slug already established for letting a later gate count
+artifact kinds mechanically rather than guessing from prose.
+
+**Weekly five-word pitch-pattern marking.** Five words, kana only, marked with the `[0]`/`[n]`
+drop notation already used in [[35-phonology/pitch-accent]] — text-only, no audio, no
+synthesis anywhere in the loop. Checked against the vendored kanjium accent number via
+`lookup`'s `pitch` field, never from memory. A mismatch carrying the l1-profile's predicted
+length-creep tell reuses `mora-length`; a pitch-height-only mismatch has no existing pattern
+to reuse honestly and stays in the session's observation note rather than being forced into
+one. This is the exercise that eventually trips **F-02** (VOICEVOX TTS, deferred until
+"minimal-pair perception training enters the curriculum" per spec.md's deferred-triggers
+table) — until that fires it stays perception-only by design, not as a stopgap. Closes with
+`topic: "weekly-pitch-marking"`.
+
+**Monthly 60-second monologue.** Roughly 60 seconds, script visible or hidden per the
+modality-ladder rung, saved under the vault at `80-progress/monologues/` as `.mp3`/`.wav` —
+never under `local/` or `.derived/`, which the vault snapshot always skips. Backed up the
+moment it lands, because `VAULT_SNAPSHOT_EXTENSIONS` already carries both extensions (FR-007,
+widened in TG0/T005) — no follow-up task has to remember to widen anything. Trend is a
+comparison, not a re-listen-and-guess: length in seconds and a disfluency count against the
+prior month's numbers for the same slot, in the closing observation. Closes with
+`topic: "monthly-monologue"`.
+
+**Still open**: none of the three has a real logged instance yet — the fixture-level check
+that they are actually measurable through existing tools, with no new tool or table, is a
+separate task (006 T036). This section states the policy the fixtures will exercise, not a
+claim that a week or month has already produced one.
+
 ## What v1 still does not know
 
 - **The evidence base is two dated traces and one checkpoint**, not weeks of logs. v1's job

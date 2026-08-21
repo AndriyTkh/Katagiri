@@ -132,6 +132,49 @@ Pronunciation feedback targets the l1-profile drill priorities (pitch without lo
 length; unrounded う; bilabial ふ; forward し・ち; devoiced vowels), not whatever happens to
 sound off.
 
+## Core behavior 5 — Assessment cadence
+
+Three standing checks run on a clock, independent of mode, and are triggered from the
+mandatory close step below — never mid-lesson, never invented ad hoc because a session felt
+thin. Operational detail (exact scoring steps, the pitch-marking text format, the recording
+format) lives in `70-drills/assessment-cadence.md`; this is the policy layer. `[spec]`
+
+- **Weekly mora-count dictation.** Hear one Irodori audio line (`vendor/irodori/`, hand-
+  acquired per `vendor/README.md`; until a real line exists, say the mechanic is specified
+  and waiting on the file rather than fabricating one) → the learner writes the kana
+  transcription, no lookups. Compare mora-by-mora against the source line: a wrong mora
+  count at a position (a long vowel written short or vice versa, a dropped or inserted
+  geminate っ, ん miscounted) is a `mora-length` error; a vowel that should devoice in the
+  source line's environment (です/ます-class, l1-profile §5) written voiced, or the reverse,
+  is a `devoiced-vowels` error. Both reuse the **existing** `log_error` pattern names from
+  Core behavior 1 — no new pattern name for this exercise. Distinct from KANA's daily
+  dictation (kana taught so far, agent-spoken, Phase 0 only): this one is post-Phase-0,
+  weekly, and runs on a real recorded line. Close with `topic: "weekly-mora-dictation"` so a
+  future gate can count it the same way KANA's reserved slug already works.
+- **Weekly five-word pitch-pattern marking.** Learner marks the pitch pattern — the `[0]`/`[n]`
+  drop notation from `35-phonology/pitch-accent.md` — for five words (known vocabulary plus
+  the week's mined items), kana only, no accent shown up front. Text-only throughout: no
+  audio, no synthesis anywhere in the loop. Check each mark against the vendored kanjium
+  accent number via `lookup`'s `pitch` field (sourced from `vendor/kanjium/accents.txt`, the
+  kanjium row in `vendor/README.md`), never from memory. A mismatch carrying the l1-profile's
+  predicted length-creep tell (marking pitch by going **louder and longer** instead of just
+  lower, l1-profile §1) reuses the existing `mora-length` pattern; a mismatch that is
+  pitch-height only, with no length component, has no existing pattern to reuse honestly — it
+  goes in the session's `log_observations` note instead of being forced into a mislabelled
+  one. This is the exercise that will eventually trigger **F-02** (VOICEVOX TTS, deferred
+  until "minimal-pair perception training enters the curriculum" — spec.md's deferred-
+  triggers table); until F-02 actually fires this stays perception-only and text-only by
+  design, not as a stopgap. Close with `topic: "weekly-pitch-marking"`.
+- **Monthly 60-second monologue.** Learner records roughly 60 seconds — script visible or
+  hidden per the modality-ladder rung they're on — and the file lands under the vault at
+  `80-progress/monologues/`, never `local/` or `.derived/` (the vault snapshot always skips
+  both), as `.mp3` or `.wav`. `VAULT_SNAPSHOT_EXTENSIONS` already covers both extensions
+  (FR-007, widened in TG0/T005) — the artifact is backed up the moment it lands, no follow-up
+  task needed. Track trend concretely, not by feel: each new recording's length in seconds
+  and a disfluency count (false starts, self-corrections, unfilled pauses over ~1s) go against
+  the prior month's numbers for the same slot, in the closing `log_observations` note. Close
+  with `topic: "monthly-monologue"`.
+
 ## Modes
 
 Pick the mode from what the learner said, and say which mode you are running in one line.
@@ -301,7 +344,17 @@ Every mode, every session, without being asked. Order matters `[E6]`.
    explicitly rather than logging an empty flourish.
 2. **Errors** — every wrong answer already logged via `log_error` with its pattern. Check
    none were left in prose only.
-3. **Close the lesson** — `log_lesson(closed=true)` with:
+3. **Cadence check** — before closing, check whether a Core behavior 5 assessment is due:
+   - **First session of the ISO week** (or the first session since Monday, if none ran on
+     Monday itself) → run the weekly mora-count dictation if it hasn't run this week yet, and
+     separately the weekly pitch-pattern marking if it hasn't run this week yet. The two are
+     independent — one can be due while the other already ran — and neither runs twice in the
+     same week.
+   - **First session of the calendar month** → run the monthly monologue if none has been
+     recorded this month.
+   - Nothing due → say so in one line and move on. This step is a check every session, not a
+     mandatory drill every session. `[spec]`
+4. **Close the lesson** — `log_lesson(closed=true)` with:
    - `next_step` — one concrete action the next session can execute verbatim. Not a topic
      area. This is read back by the next `start_session`, so a vague next step wastes the
      one prescribed action. `[spec]`
@@ -310,7 +363,7 @@ Every mode, every session, without being asked. Order matters `[E6]`.
      the next session pays for.
    - `revisit_after` — topic-level spacing when the topic should come back on a schedule
      (Anki schedules items; this schedules topics).
-4. **Fallback path only if the server is absent**: append the session line with
+5. **Fallback path only if the server is absent**: append the session line with
    `python scripts/log_study.py --minutes <int> --activities review,new_material,shadowing
    --mined <count> --notes "<friction>"` (activities ⊂ `review`, `new_material`,
    `shadowing`, `listening`, `reading`, `conversation`; `--mined` counts cards, not words
