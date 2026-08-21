@@ -1167,3 +1167,74 @@ gate removal and continued implementation.
    begins; it was never a build blocker enforced in code.
 
 ACCEPTED — user override 2026-08-21; source D-35, constitution Sync Impact Report 1.3.0.
+
+## 006 TG2 — dose contract-diff justification (2026-08-21)
+
+Session date: 2026-08-21. Filed as ledger D-36, per spec.md FR-025's governance-first rule and
+`tool_registry.py`'s additive-only contract (D-24): a contract-touching taskgroup gets its
+ledger row and reasoning committed *before* the code task that implements it — here, T012 lands
+before T013–T017. This filing sits inside the D-35 waiver context: D-35b lifted the 006 entry
+gate's *blocking effect* on TG2–TG8 so implementation can proceed pre-study, but it left FR-025's
+governance-first requirement untouched — the waiver relaxes when contract work may start, not
+whether it still needs a diff justification first. The two rules are independent: one is about
+evidence timing, the other is about review discipline, and only the first was ever in question.
+
+**Why additive-on-existing-tools beats new tools here.** TG2's job is to make the dose — 20–30
+min core/day, ≤8 new words/day, ≤2 new grammar/week — a property of the server rather than a
+prose promise the learner self-counts (research.md §Post-gate decisions: "prose caps are
+self-counted and the count is the first thing a good session breaks"). That job needs exactly
+two things read out to a caller: how much room is left, and a hard stop when a specific cap is
+crossed. Both already have a natural home. `start_session` is the single entry point every
+frontend already calls to learn what happens next (spec.md §Governing principles: "`start_session`
+/`prescribe()` owns what happens next"), so room-left is an additive field on the payload it
+already returns, not a second call a caller could forget to make. `add_vocab` is the one write
+path that adds a new word, so the refusal that stops the ninth word belongs at the point of the
+write, not in a side-channel a caller could bypass by calling `add_vocab` directly and skipping a
+check. Standing up new tools for either — say, a `get_caps` or `check_cap` — would create exactly
+the second-planner problem FR-014 explicitly rules out for topic selection: a second place that
+decides something, callable out of order, driftable from the first. Reusing the two existing
+touchpoints means the cap cannot be circumvented by a caller that only knows the old contract,
+because the old contract still works exactly as before and the new behavior rides along.
+
+**The additive argument, spelled out per FR-016/D-24:**
+- `caps{new_words_left, grammar_left, listening_reps_left}` is a **new optional key** appended to
+  an existing payload. No existing key is removed, renamed, or reinterpreted; a caller reading
+  only the old keys sees no change. Because it is new, no caller can have depended on its
+  *absence* in a way this breaks — the additive-only rule's actual guarantee (old callers keep
+  working) holds by construction.
+- `add_vocab`'s cap refusal is a **new outcome on an existing call**, not a new argument or a new
+  required field. It reuses the module's existing refusal shape (structured error naming what was
+  refused and why — the same shape `tool_registry.py`'s stub/refusal conventions already use
+  elsewhere), so this is not a new error dialect a caller has to learn; it is the same shape
+  firing for a new reason. The call's success path, arguments, and successful-add payload are all
+  unchanged.
+- Neither change touches an argument's optionality (nothing goes optional→required), and neither
+  changes what an existing key *means* — `new_words_left` etc. are net-new names, not repurposed
+  ones. Net ToolSpec count: **zero** — both changes land inside the two `ToolSpec` entries that
+  already exist for `start_session` and `add_vocab`.
+
+**Why each cut tool is cut for cause, not deferred:**
+- `next_topic`, `plan_revision`, `mark_topic_progress` — these would each be a second place that
+  decides what the learner does next, alongside `prescribe()`. Spec.md's single-prescriber
+  property (§Governing principles, FR-014) is stated as the thing that keeps `start_session` from
+  becoming a dashboard; research.md's own rationale for cutting them is direct: "five tools that
+  each decide something are five prescribers." Topic selection instead becomes one more rung
+  *inside* `prescribe()`'s existing ladder, reading curriculum reachability and sitting above the
+  generic "open a lesson" fallback (FR-014) — the decision moves into the one function that
+  already owns deciding, rather than gaining siblings.
+- `run_drill`, `check_answer` — the post-gate design's drill and grading flow rides the session
+  tools that already exist (`start_session`'s prescribed action, `log_observations`,
+  `log_lesson`) rather than a parallel drill-and-check API. Standing these up would duplicate
+  machinery the session tools already provide (an action to perform, a place to record what
+  happened) behind a second, narrower vocabulary — the same "second planner" problem in miniature,
+  scoped to one exercise instead of one session.
+- All five are stated as **CUT** in spec.md FR-014 itself, not left open with a revisit trigger
+  the way `docs/decisions-ledger.md`'s "Deferred options" table works for genuinely-later work —
+  there is no condition under which they come back; the ladder-rung and existing-tool designs are
+  the permanent replacement, not a placeholder for them.
+
+**Net effect**: no code changes from this filing. This entry and ledger row D-36 are the
+governance step FR-025 requires before T013 (the `prescribe()` topic rung + caps block) and the
+later T014–T017 tasks touch `start_session`/`add_vocab`; `tests/test_mcp_tools.py`'s congruence
+check stays the enforcement backstop that the additive claims above are not just argued but true
+once the code lands.
