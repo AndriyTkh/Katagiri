@@ -1,8 +1,12 @@
 # Database schema
 
 One SQLite database, at `db_path` from `config.toml` (default
-`%LOCALAPPDATA%\Katagiri\katagiri.db`). All DDL lives in
-`src/katagiri/migrations/0001_init.sql`; the runner is `src/katagiri/db.py`.
+`%LOCALAPPDATA%\Katagiri\katagiri.db`). The whole schema was one migration
+through D-12/D-27; D-38 scoped a narrow, additive-only exception for
+`src/katagiri/migrations/0002_audio_anchors.sql` once the database held live,
+non-reconstructible learner history. DDL lives in
+`src/katagiri/migrations/0001_init.sql` and `0002_audio_anchors.sql`; the
+runner is `src/katagiri/db.py`.
 
 Schema version is `PRAGMA user_version`. `db.migrate()` discovers packaged
 `NNNN_*.sql` files, applies each pending one inside its own transaction, stamps
@@ -372,6 +376,24 @@ is a separate task (T010) that this one does not decide.
   tables. An item is studiable before the dictionary side is imported or matched,
   and a JMdict re-import must not need to touch `item`.
 - No frequency, comprehension-debt, or strength columns: `item_stat_cache`.
+- **`audio_source` / `audio_offset_ms` / `text_only`** arrive in migration
+  0002 under D-38 — additive columns only, the scoped exception to the
+  whole-schema-in-one-migration rule (D-12/D-27). Source-of-truth, like the
+  rest of `item`. `audio_source` is a reference to the recording an audio
+  anchor points into (e.g. an Irodori unit's MP3 track), nullable because most
+  items have none. `audio_offset_ms` is the position within it in
+  milliseconds, following the same unit and naming pattern as
+  `sub_lines.start_ms`/`end_ms` and `media_heartbeat.anchor_ms` (chosen over an
+  ISO-8601 `_ts` name so it is not mistaken for one of the GLOB-checked
+  timestamp columns); nullable and meaningless without `audio_source`.
+  `text_only` (`NOT NULL DEFAULT 0`) marks an item as not eligible for A0
+  production drills because it has no production-worthy audio anchor at that
+  level — distinct from `production_eligible`, which is about the register of
+  the item itself (receptive-only material such as archaic or role-language
+  forms), not about whether it has a spoken anchor. Because `item.kind`
+  includes `'sentence'`, these same three columns are how a sentence item
+  gets an audio anchor; there is no separate source-of-truth `sentence` table
+  (see `sentence_text` above, which is derived).
 
 ### Others
 
