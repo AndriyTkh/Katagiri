@@ -179,9 +179,9 @@ def test_fresh_migrate_stamps_version_and_creates_every_object(conn):
     result = db.migrate(conn)
 
     assert result.from_version == 0
-    assert result.to_version == 1
-    assert result.applied == (1,)
-    assert db.user_version(conn) == 1
+    assert result.to_version == 2
+    assert result.applied == (1, 2)
+    assert db.user_version(conn) == 2
     assert db.user_version(conn) == db.latest_version()
 
     tables = _names(conn, "table")
@@ -325,7 +325,7 @@ def test_undo_is_an_event_not_a_delete(conn):
 
 def test_second_migrate_run_is_a_noop(conn, local_app_data):
     first = db.migrate(conn)
-    assert first.applied == (1,)
+    assert first.applied == (1, 2)
 
     second = db.migrate(conn)
 
@@ -333,7 +333,7 @@ def test_second_migrate_run_is_a_noop(conn, local_app_data):
     assert second.from_version == second.to_version == first.to_version
     assert second.backup is None
     assert not second.changed
-    assert db.user_version(conn) == 1
+    assert db.user_version(conn) == 2
     # A no-op must not snapshot either.
     assert not (local_app_data / "Katagiri" / "backups").exists()
 
@@ -342,25 +342,27 @@ def test_backup_written_before_migrating_a_non_fresh_db(conn, local_app_data, tm
     db.migrate(conn)
     conn.execute(_EVENT_INSERT, _EVENT_ROW)
 
+    # `directory=` replaces the packaged migration set entirely rather than
+    # extending it, so this only needs one migration versioned past the
+    # packaged baseline (currently 2) to exercise "migrate a non-fresh DB".
     pending = _write_migrations(
         tmp_path / "migs",
-        ("0001_init.sql", "SELECT 1;\n"),
-        ("0002_later.sql", "CREATE TABLE later_addition (a TEXT);\n"),
+        ("0003_later.sql", "CREATE TABLE later_addition (a TEXT);\n"),
     )
     result = db.migrate(conn, directory=pending)
 
-    assert result.applied == (2,)
-    assert db.user_version(conn) == 2
+    assert result.applied == (3,)
+    assert db.user_version(conn) == 3
     assert result.backup is not None
     # Named for the version we migrated *away* from, kept beside the config.
-    assert result.backup.name == "katagiri.pre-migrate-1.bak"
+    assert result.backup.name == "katagiri.pre-migrate-2.bak"
     assert result.backup.parent == local_app_data / "Katagiri" / "backups"
     assert result.backup.is_file() and result.backup.stat().st_size > 0
 
     # The snapshot is a real database holding the pre-migration state.
     snapshot = sqlite3.connect(str(result.backup))
     try:
-        assert snapshot.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert snapshot.execute("PRAGMA user_version").fetchone()[0] == 2
         assert snapshot.execute("SELECT COUNT(*) FROM event").fetchone()[0] == 1
         with pytest.raises(sqlite3.OperationalError):
             snapshot.execute("SELECT * FROM later_addition")
@@ -372,14 +374,13 @@ def test_repeated_backup_does_not_overwrite_an_existing_snapshot(
     conn, local_app_data, tmp_path
 ):
     db.migrate(conn)
-    existing = local_app_data / "Katagiri" / "backups" / "katagiri.pre-migrate-1.bak"
+    existing = local_app_data / "Katagiri" / "backups" / "katagiri.pre-migrate-2.bak"
     existing.parent.mkdir(parents=True, exist_ok=True)
     existing.write_bytes(b"older snapshot")
 
     pending = _write_migrations(
         tmp_path / "migs",
-        ("0001_init.sql", "SELECT 1;\n"),
-        ("0002_later.sql", "CREATE TABLE later_addition (a TEXT);\n"),
+        ("0003_later.sql", "CREATE TABLE later_addition (a TEXT);\n"),
     )
     result = db.migrate(conn, directory=pending)
 
@@ -415,8 +416,7 @@ def test_failed_migration_names_the_backup_to_restore_from(conn, tmp_path):
     db.migrate(conn)
     broken = _write_migrations(
         tmp_path / "broken2",
-        ("0001_init.sql", "SELECT 1;\n"),
-        ("0002_broken.sql", "CREATE TABLE dup (a TEXT);\nCREATE TABLE dup (a TEXT);\n"),
+        ("0003_broken.sql", "CREATE TABLE dup (a TEXT);\nCREATE TABLE dup (a TEXT);\n"),
     )
     with pytest.raises(db.MigrationError) as exc:
         db.migrate(conn, directory=broken)
@@ -424,8 +424,8 @@ def test_failed_migration_names_the_backup_to_restore_from(conn, tmp_path):
     backup = exc.value.backup
     assert backup is not None and backup.is_file()
     assert str(backup) in str(exc.value)
-    assert "still at version 1" in str(exc.value)
-    assert db.user_version(conn) == 1
+    assert "still at version 2" in str(exc.value)
+    assert db.user_version(conn) == 2
 
 
 def test_migrate_refuses_to_downgrade(conn, tmp_path):
@@ -502,8 +502,9 @@ def test_discover_migrations_orders_by_version(tmp_path):
 
 def test_packaged_migrations_are_discoverable():
     packaged = db.discover_migrations()
-    assert [m.version for m in packaged] == [1]
+    assert [m.version for m in packaged] == [1, 2]
     assert packaged[0].name == "init"
+    assert packaged[1].name == "audio_anchors"
 
 
 # ---------------------------------------------------------------------------

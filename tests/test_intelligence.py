@@ -64,6 +64,7 @@ from katagiri.intelligence import (
     EMPTY_TEXT,
     GATE_COVERAGE_TOO_LOW,
     GATE_GRAMMAR_UNKNOWN,
+    GATE_NOT_AUDIO_ANCHORED,
     GATE_SEALED,
     GATE_TOO_MANY_UNKNOWN,
     GATE_TOO_MUCH_NEW_GRAMMAR,
@@ -1374,6 +1375,224 @@ def test_the_builtin_loader_reads_stored_sentence_items(gate_world):
     assert [candidate.id for candidate in loaded] == ["s-a"]
     result = find_i_plus_one(gate_world, score_difficulty=False)
     assert [entry["id"] for entry in result["candidates"]] == ["s-a"]
+
+
+# ---------------------------------------------------------------------------
+# A0 production pool (D-38 / FR-018): the audio-anchor gate
+# ---------------------------------------------------------------------------
+#
+# This worktree has no vendored UniDic dictionary (vendor/unidic/unidic is a
+# 775MB gitignored directory not copied into a git worktree), so the real
+# tokenizer raises TokenizerError unconditionally here — a environment gap,
+# not a claim about this feature's code (confirmed by `git stash`: the same
+# tokenizer failures exist before and after the audio-anchor commits). These
+# tests are about the audio-anchor gate in find_i_plus_one, not about
+# tokenization, so `intelligence.get_tagger`/`intelligence.tokenize` are
+# monkeypatched to a tiny deterministic stand-in that isolates the gate logic
+# from the vendored dictionary entirely.
+
+
+@pytest.fixture
+def stub_tokenizer(monkeypatch):
+    """Replace the real UniDic tokenizer with a caller-fed text -> Morph map.
+
+    ``get_tagger`` is patched so it never raises TOKENIZER_UNAVAILABLE, and
+    ``tokenize`` is patched to look a candidate's exact text up in the returned
+    dict. Each test seeds one entry per candidate text; a single content
+    :func:`morph` whose lemma *is* the seeded item's id is enough to make
+    ``KnownLookup`` resolve it directly by item id (see ``known.known_word``),
+    with no dependency on real tokenization or on kanji/reading columns.
+    """
+    morph_map: dict[str, list[Any]] = {}
+    monkeypatch.setattr(intelligence, "get_tagger", lambda: object())
+    monkeypatch.setattr(
+        intelligence,
+        "tokenize",
+        lambda text, *, tagger=None: morph_map.get(text, [morph(text, text)]),
+    )
+    return morph_map
+
+
+def _set_audio_anchor(
+    conn: sqlite3.Connection,
+    item_id: str,
+    *,
+    audio_source: str | None = None,
+    audio_offset_ms: int | None = None,
+    text_only: int = 0,
+) -> None:
+    """Fill in migration 0002's item columns on an already-seeded item.
+
+    A separate helper rather than new ``seed_sentence``/``seed_item`` keyword
+    arguments: this keeps every pre-existing seeding call in this file exactly
+    as it was, and makes the three audio-anchor columns opt-in only where a
+    test is actually about them.
+    """
+    conn.execute(
+        "UPDATE item SET audio_source = ?, audio_offset_ms = ?, text_only = ? "
+        "WHERE id = ?",
+        (audio_source, audio_offset_ms, text_only, item_id),
+    )
+
+
+def test_production_pool_accepts_an_audio_anchored_item(db, stub_tokenizer):
+    seed_word(db, "w-neko", "cat-word", known=True)
+    seed_sentence(db, "s-anchored", "TEXT-ANCHORED")
+    _set_audio_anchor(
+        db, "s-anchored", audio_source="irodori-u1.mp3", audio_offset_ms=1200
+    )
+    stub_tokenizer["TEXT-ANCHORED"] = [morph("w-neko", "w-neko")]
+
+    result = find_i_plus_one(
+        db,
+        [{"id": "s-anchored", "text": "TEXT-ANCHORED", "grammar_ids": []}],
+        production=True,
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        score_difficulty=False,
+    )
+    assert result["ok"] is True
+    assert result["gates"]["production"] is True
+    assert [entry["id"] for entry in result["candidates"]] == ["s-anchored"]
+    assert result["candidates"][0]["gated_by"] == []
+    assert result["counts"] == {
+        "offered": 1,
+        "accepted": 1,
+        "returned": 1,
+        "gated": 0,
+        "by_reason": {},
+        "unannotated": 1,
+    }
+
+
+def test_production_pool_withholds_an_unanchored_item(db, stub_tokenizer):
+    seed_word(db, "w-neko", "cat-word", known=True)
+    seed_sentence(db, "s-unanchored", "TEXT-UNANCHORED")
+    # audio_source stays NULL — never anchored at all.
+    stub_tokenizer["TEXT-UNANCHORED"] = [morph("w-neko", "w-neko")]
+
+    result = find_i_plus_one(
+        db,
+        [{"id": "s-unanchored", "text": "TEXT-UNANCHORED", "grammar_ids": []}],
+        production=True,
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        include_gated=True,
+        score_difficulty=False,
+    )
+    assert result["candidates"] == []
+    assert result["gated"][0]["gated_by"] == [GATE_NOT_AUDIO_ANCHORED]
+    assert result["counts"]["by_reason"][GATE_NOT_AUDIO_ANCHORED] == 1
+
+
+def test_production_pool_withholds_a_text_only_item_even_when_anchored(
+    db, stub_tokenizer
+):
+    """'was recorded' and 'is fit to produce from' are different claims."""
+    seed_word(db, "w-neko", "cat-word", known=True)
+    seed_sentence(db, "s-textonly", "TEXT-TEXTONLY")
+    _set_audio_anchor(db, "s-textonly", audio_source="irodori-u1.mp3", text_only=1)
+    stub_tokenizer["TEXT-TEXTONLY"] = [morph("w-neko", "w-neko")]
+
+    result = find_i_plus_one(
+        db,
+        [{"id": "s-textonly", "text": "TEXT-TEXTONLY", "grammar_ids": []}],
+        production=True,
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        include_gated=True,
+        score_difficulty=False,
+    )
+    assert result["candidates"] == []
+    assert result["gated"][0]["gated_by"] == [GATE_NOT_AUDIO_ANCHORED]
+
+
+def test_gate_not_audio_anchored_is_the_spec_wording(db, stub_tokenizer):
+    """The reason string is spec.md FR-018's own wording, kept verbatim.
+
+    Also covers the "no stored item row" case: an ad hoc candidate offered with
+    no ``id`` has no anchor metadata to check at all, and is withheld the same
+    way as a genuinely unanchored one — absence of anchoring information is not
+    evidence of anchoring.
+    """
+    assert GATE_NOT_AUDIO_ANCHORED == "text-only-not-for-A0-production"
+    seed_word(db, "w-neko", "cat-word", known=True)
+    stub_tokenizer["AD-HOC-TEXT"] = [morph("w-neko", "w-neko")]
+
+    result = find_i_plus_one(
+        db,
+        [{"text": "AD-HOC-TEXT", "grammar_ids": []}],  # no id -> no stored row
+        production=True,
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        include_gated=True,
+        score_difficulty=False,
+    )
+    assert result["gated"][0]["gated_by"] == ["text-only-not-for-A0-production"]
+    assert result["counts"]["by_reason"] == {"text-only-not-for-A0-production": 1}
+
+
+def test_default_production_false_ignores_audio_anchor_columns(db, stub_tokenizer):
+    """production defaults to False: reading selection is unaffected, exactly
+    as before migration 0002 added the audio-anchor columns."""
+    seed_word(db, "w-neko", "cat-word", known=True)
+    seed_sentence(db, "s-unanchored", "TEXT-UNANCHORED")
+    stub_tokenizer["TEXT-UNANCHORED"] = [morph("w-neko", "w-neko")]
+
+    result = find_i_plus_one(
+        db,
+        [{"id": "s-unanchored", "text": "TEXT-UNANCHORED", "grammar_ids": []}],
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        score_difficulty=False,
+    )
+    assert result["gates"]["production"] is False
+    assert [entry["id"] for entry in result["candidates"]] == ["s-unanchored"]
+    assert result["candidates"][0]["gated_by"] == []
+
+
+def test_production_pool_withheld_items_are_never_substituted_or_reappear(
+    db, stub_tokenizer
+):
+    """No substitution and no synthesis: a withheld candidate never reappears
+    as a different accepted one, and 'accepted' counts only true anchors."""
+    seed_word(db, "w-neko", "cat-word", known=True)
+
+    seed_sentence(db, "s-anchor-a", "TEXT-A")
+    _set_audio_anchor(db, "s-anchor-a", audio_source="irodori-u1.mp3")
+    stub_tokenizer["TEXT-A"] = [morph("w-neko", "w-neko")]
+
+    seed_sentence(db, "s-unanchored-b", "TEXT-B")
+    stub_tokenizer["TEXT-B"] = [morph("w-neko", "w-neko")]
+
+    seed_sentence(db, "s-textonly-c", "TEXT-C")
+    _set_audio_anchor(db, "s-textonly-c", audio_source="irodori-u2.mp3", text_only=1)
+    stub_tokenizer["TEXT-C"] = [morph("w-neko", "w-neko")]
+
+    candidates = [
+        {"id": "s-anchor-a", "text": "TEXT-A", "grammar_ids": []},
+        {"id": "s-unanchored-b", "text": "TEXT-B", "grammar_ids": []},
+        {"id": "s-textonly-c", "text": "TEXT-C", "grammar_ids": []},
+    ]
+    result = find_i_plus_one(
+        db,
+        candidates,
+        production=True,
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        include_gated=True,
+        score_difficulty=False,
+    )
+    assert result["counts"]["accepted"] == 1
+    assert [entry["id"] for entry in result["candidates"]] == ["s-anchor-a"]
+    accepted_texts = {entry["text"] for entry in result["candidates"]}
+    assert accepted_texts == {"TEXT-A"}
+
+    gated_ids = {entry["id"] for entry in result["gated"]}
+    assert gated_ids == {"s-unanchored-b", "s-textonly-c"}
+    for entry in result["gated"]:
+        assert entry["gated_by"] == [GATE_NOT_AUDIO_ANCHORED]
+    assert result["counts"]["by_reason"][GATE_NOT_AUDIO_ANCHORED] == 2
 
 
 def test_selection_writes_nothing(gate_world):
