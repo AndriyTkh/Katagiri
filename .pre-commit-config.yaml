@@ -15,3 +15,16 @@ repos:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
         exclude: ^(uv\.lock|vendor/CHECKSUMS\.sha256)$
+
+  # This repo has no CI: pre-commit (running serially on master) plus pytest
+  # are the only enforcement points. scripts/gen_tool_contracts.py lands with
+  # the wt/005-docs merge; until then this hook is a no-op for everyone
+  # (it only triggers on files that don't exist yet).
+  - repo: local
+    hooks:
+      - id: tool-contracts-drift
+        name: tool-contracts-drift
+        entry: uv run python scripts/gen_tool_contracts.py --check
+        language: system
+        pass_filenames: false
+        files: src/katagiri/tool_registry\.py|docs/assignment/tool-contracts\.md|scripts/gen_tool_contracts\.py
