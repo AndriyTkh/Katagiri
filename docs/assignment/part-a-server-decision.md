@@ -7,11 +7,12 @@ Existing server = **Obsidian Local REST API MCP**
 `specs/005-mcp-assignment/research.md` for the full rationale (one coherent
 narrative with the study vault, Part C, and the failure demo).
 
-## Question that must be sent to the instructor — NOT YET SENT (user-side)
+## Question to the instructor — CLOSED, not sent (T001, 2026-08-21)
 
-**Status: not yet sent — user-side.** This is T001 and is not this agent's
-job to send; it is recorded here so T005's swappable-config choice has a
-traceable open question attached to it.
+**Status: closed without sending — user call.** Judged not important enough
+to gate on: T005 below already pins down which variant this build actually
+targets, empirically, against the real vault. The unsent question (kept for
+the record):
 
 > Which exact Obsidian MCP server / version / commit did the course test
 > against — the Local REST API plugin's **built-in `/mcp/` endpoint**
@@ -19,14 +20,12 @@ traceable open question attached to it.
 > v5.0 as "Local REST API **with MCP**"), or a separate **stdio wrapper**
 > process in front of the REST API?
 
-Why it matters: `langchain-mcp-adapters` supports both transports today
-(`StreamableHttpConnection` with `httpx_client_factory` for the self-signed
-cert; `StdioConnection` for a wrapper), so nothing blocks development either
-way — but the grading environment's actual variant determines which one the
-demo recording must target. `katagiri_agent/config.py`'s
-`obsidian_connection()` keeps this a **config-only** choice (`OBSIDIAN_TRANSPORT`
-env var); no graph code branches on transport. Closed by T001's answer, not
-before.
+Resolution: ship on the observed variant (built-in `/mcp/` endpoint,
+Streamable HTTP) — see T005. `katagiri_agent/config.py`'s
+`obsidian_connection()` keeps this a **config-only** choice
+(`OBSIDIAN_TRANSPORT` env var); no graph code branches on transport, so if
+the grading environment ever turns out to use a stdio wrapper instead, it's
+a one-var flip, not a rebuild.
 
 ## OpenWeather contingency (documented, not built)
 
