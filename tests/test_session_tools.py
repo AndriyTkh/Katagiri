@@ -220,6 +220,74 @@ def observation_row(record: dict[str, Any] | None = None, **overrides: Any) -> d
     return base
 
 
+def seed_item(
+    conn: sqlite3.Connection,
+    item_id: str,
+    *,
+    kind: str = "grammar",
+    understanding: int | None = None,
+    sealed: int = 0,
+    ts: str = "2026-08-01T00:00:00Z",
+) -> None:
+    """A bare ``item`` row — just enough for the curriculum rung's reachability
+    walk (:func:`katagiri.intelligence.grammar_reachability`)."""
+    conn.execute(
+        """
+        INSERT INTO item (id, kind, understanding, sealed, created_ts)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (item_id, kind, understanding, sealed, ts),
+    )
+
+
+def seed_edge(conn: sqlite3.Connection, from_id: str, to_id: str, edge_type: str = "prereq") -> None:
+    conn.execute(
+        "INSERT INTO item_edge (from_id, to_id, edge_type) VALUES (?, ?, ?)",
+        (from_id, to_id, edge_type),
+    )
+
+
+def seed_mining_events_now(conn: sqlite3.Connection, n: int) -> None:
+    """``n`` bare mining events stamped at the real current instant.
+
+    Unlike :func:`seed_mining_events`, this never names a ``day_key``: it
+    leaves ``ts_device``/``tz`` at their defaults so :func:`append_event`
+    stamps "now" and derives the day from the system's real local clock —
+    exactly what :func:`katagiri.session_tools.add_vocab`'s own cap check
+    (hardcoded to ``date.today()``, not the ``today`` parameter the rest of
+    this module accepts) also reads. Existing to sidestep any UTC-vs-local
+    mismatch a fixed day string could introduce.
+    """
+    for index in range(n):
+        st.append_event(
+            conn,
+            type=st.MINING_EVENT,
+            session_id=f"mining:test-now-{index}",
+            payload={"source": "test-seed"},
+        )
+
+
+def seed_mining_events(
+    conn: sqlite3.Connection, n: int, *, day: str, tz: str = "UTC"
+) -> None:
+    """``n`` bare mining events landing in ``day_key == day`` (in ``tz``).
+
+    Written straight through :func:`katagiri.session_tools.append_event` with a
+    fixed ``ts_device`` rather than through :func:`add_vocab`, so the caller
+    controls the exact ``day_key`` a boundary test needs rather than whatever
+    the real wall clock says.
+    """
+    for index in range(n):
+        st.append_event(
+            conn,
+            type=st.MINING_EVENT,
+            session_id=f"mining:test-{index}",
+            ts_device=f"{day}T09:00:{index:02d}Z",
+            tz=tz,
+            payload={"source": "test-seed"},
+        )
+
+
 def event_types(conn: sqlite3.Connection) -> list[str]:
     return [str(row[0]) for row in conn.execute("SELECT type FROM event ORDER BY id")]
 
@@ -495,6 +563,94 @@ def test_a_resolved_thread_is_not_prescribed(conn):
     assert st.prescribe(conn, today=TODAY)["kind"] == st.ACTION_OPEN_FIRST_LESSON
 
 
+# ---------------------------------------------------------------------------
+# The curriculum rung (T013): a reachable, untaught grammar point between the
+# unresolved-thread rung and the open-first-lesson fallback.
+# ---------------------------------------------------------------------------
+
+
+def test_curriculum_unavailable_falls_back_to_open_first_lesson(conn):
+    # A grammar item exists, but no item_edge row does: the curriculum has
+    # never been imported, so the graph is empty and _curriculum_action must
+    # decline rather than guess at reachability.
+    seed_item(conn, "g-new", kind="grammar")
+
+    assert st.prescribe(conn, today=TODAY)["kind"] == st.ACTION_OPEN_FIRST_LESSON
+
+
+def test_curriculum_rung_fires_for_a_reachable_untaught_grammar_topic(conn):
+    seed_item(conn, "g-basic", kind="grammar", understanding=5)  # mastered
+    seed_item(conn, "g-new", kind="grammar")  # unmastered, untaught
+    seed_edge(conn, "g-basic", "g-new")
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert action["kind"] == st.ACTION_CURRICULUM_TOPIC
+    assert action["topic"] == "g-new"
+    assert action["source"] == "curriculum_reachability"
+    assert action["rationale"], "an action without a rationale is an opaque verdict"
+    assert action["lesson_id"] is None
+    assert action["unresolved_id"] is None
+    assert action["revisit_after"] is None
+
+
+def test_an_unmastered_prerequisite_makes_the_topic_unreachable(conn):
+    # g-mid's only prerequisite, g-basic, is itself unmastered: g-mid is not
+    # the +1, it is one step further out. g-basic is already taught (so it is
+    # not itself a competing candidate, isolating the effect to g-mid), and
+    # with no reachable untaught point left the fallback covers it instead.
+    seed_item(conn, "g-basic", kind="grammar")
+    seed_item(conn, "g-mid", kind="grammar")
+    seed_edge(conn, "g-basic", "g-mid")
+    seed_lesson(conn, id="L-basic", topic="g-basic")
+
+    assert st.prescribe(conn, today=TODAY)["kind"] == st.ACTION_OPEN_FIRST_LESSON
+
+
+def test_a_grammar_topic_already_carrying_a_lesson_is_not_offered_again(conn):
+    seed_item(conn, "g-basic", kind="grammar", understanding=5)
+    seed_item(conn, "g-new", kind="grammar")
+    seed_edge(conn, "g-basic", "g-new")
+    # The lesson is still open (no next_step, no revisit), so no higher rung
+    # claims it either — it is simply already taught.
+    seed_lesson(conn, id="L-new", topic="g-new")
+
+    assert st.prescribe(conn, today=TODAY)["kind"] == st.ACTION_OPEN_FIRST_LESSON
+
+
+def test_curriculum_rung_prefers_the_smallest_prereq_closure(conn):
+    # g-far has one more mastered prerequisite in its closure than g-near, so
+    # the curriculum's own idea of "next" — smallest closure first — must pick
+    # g-near, never id order and never insertion order.
+    seed_item(conn, "g-root", kind="grammar", understanding=5)
+    seed_item(conn, "g-near", kind="grammar", understanding=5)
+    seed_item(conn, "g-far", kind="grammar")
+    seed_item(conn, "z-near", kind="grammar")
+    seed_edge(conn, "g-root", "z-near")
+    seed_edge(conn, "g-root", "g-far")
+    seed_edge(conn, "g-near", "g-far")
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert action["kind"] == st.ACTION_CURRICULUM_TOPIC
+    assert action["topic"] == "z-near"
+
+
+def test_the_unresolved_thread_rung_still_outranks_the_curriculum_rung(conn):
+    seed_item(conn, "g-basic", kind="grammar", understanding=5)
+    seed_item(conn, "g-new", kind="grammar")
+    seed_edge(conn, "g-basic", "g-new")
+    seed_lesson(conn, id="L-1", topic="particles")
+    seed_thread(
+        conn, lesson_id="L-1", text="why は here?", created_ts="2026-08-02T10:00:00Z"
+    )
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert action["kind"] == st.ACTION_RESOLVE_THREAD
+    assert action["topic"] == "particles"
+
+
 def test_prescribe_appends_nothing(conn):
     seed_lesson(
         conn,
@@ -533,6 +689,174 @@ def test_start_session_mints_a_sortable_session_id(conn):
 def test_a_malformed_today_is_a_caller_mistake_not_a_refusal(conn):
     with pytest.raises(ValueError):
         st.start_session(conn, today="19-08-2026")
+
+
+# ---------------------------------------------------------------------------
+# The caps block (T014): an additive ``caps`` key on every action payload
+# (FR-015), reporting how much of today's/this week's dose budget is left.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mined", "expected_left"),
+    [
+        (0, 8),
+        (1, 7),
+        (8, 0),
+        (10, 0),  # past the cap: clamped at 0, never negative.
+    ],
+)
+def test_new_words_left_counts_todays_mining_events(conn, mined, expected_left):
+    seed_mining_events(conn, mined, day=TODAY)
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert action["caps"]["new_words_left"] == expected_left
+    assert action["caps"]["new_words_left"] >= 0
+
+
+def test_new_words_left_ignores_mining_on_other_days(conn):
+    seed_mining_events(conn, 3, day="2026-08-18")
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert action["caps"]["new_words_left"] == st.MAX_NEW_WORDS_PER_DAY
+
+
+def test_grammar_left_counts_a_topic_once_no_matter_how_many_lessons_touch_it(conn):
+    seed_item(conn, "g-a", kind="grammar")
+    seed_lesson(conn, id="L-1", topic="g-a", opened_ts="2026-08-14T09:00:00Z")
+    # A second lesson revisiting the same topic does not spend the budget again.
+    seed_lesson(conn, id="L-2", topic="g-a", opened_ts="2026-08-16T09:00:00Z")
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert action["caps"]["grammar_left"] == st.MAX_NEW_GRAMMAR_PER_WEEK - 1
+    assert action["caps"]["grammar_left"] == 1
+
+
+def test_grammar_left_reaches_zero_after_two_distinct_topics_in_the_window(conn):
+    seed_item(conn, "g-a", kind="grammar")
+    seed_item(conn, "g-b", kind="grammar")
+    seed_lesson(conn, id="L-1", topic="g-a", opened_ts="2026-08-14T09:00:00Z")
+    seed_lesson(conn, id="L-2", topic="g-b", opened_ts="2026-08-17T09:00:00Z")
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert action["caps"]["grammar_left"] == 0
+
+
+def test_grammar_left_ignores_a_topic_first_opened_outside_the_window(conn):
+    # TODAY is 2026-08-19; the rolling window is the 7 days ending today, i.e.
+    # 2026-08-13..2026-08-19. A lesson first opened one day earlier does not
+    # count.
+    seed_item(conn, "g-a", kind="grammar")
+    seed_lesson(conn, id="L-1", topic="g-a", opened_ts="2026-08-12T23:00:00Z")
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert action["caps"]["grammar_left"] == st.MAX_NEW_GRAMMAR_PER_WEEK
+
+
+def test_caps_is_the_only_addition_to_the_action_payload(conn):
+    """Every pre-caps key keeps its exact prior semantics; ``caps`` is additive."""
+    seed_lesson(
+        conn,
+        id="L-next",
+        topic="て-form",
+        closed_ts="2026-08-18T10:00:00Z",
+        next_step="Drill て-form with three verbs.",
+    )
+
+    action = st.prescribe(conn, today=TODAY)
+
+    assert set(action) == {
+        "kind",
+        "instruction",
+        "rationale",
+        "topic",
+        "lesson_id",
+        "unresolved_id",
+        "revisit_after",
+        "source",
+        "caps",
+    }
+    # The pre-caps fields, unchanged: this is exactly what
+    # test_next_step_outranks_revisit_and_open_thread asserted before T014.
+    assert action["kind"] == st.ACTION_NEXT_STEP
+    assert action["topic"] == "て-form"
+    assert action["lesson_id"] == "L-next"
+    assert action["instruction"] == "Drill て-form with three verbs."
+    assert action["source"] == "lesson.next_step"
+    assert action["unresolved_id"] is None
+    assert action["revisit_after"] is None
+    assert action["rationale"]
+    # And the one addition: a caps dict with exactly these three keys.
+    assert set(action["caps"]) == {
+        "new_words_left",
+        "grammar_left",
+        "listening_reps_left",
+    }
+    assert action["caps"]["new_words_left"] == st.MAX_NEW_WORDS_PER_DAY
+    assert action["caps"]["grammar_left"] == st.MAX_NEW_GRAMMAR_PER_WEEK
+    assert action["caps"]["listening_reps_left"] == st.LISTENING_REPS_DAILY_TARGET
+
+
+def test_start_session_carries_the_same_caps_block_as_prescribe(conn):
+    seed_mining_events(conn, 2, day=TODAY)
+
+    prescribed = st.prescribe(conn, today=TODAY)
+    answer = st.start_session(conn, today=TODAY)
+
+    assert answer["action"]["caps"] == prescribed["caps"]
+    assert answer["action"]["caps"]["new_words_left"] == st.MAX_NEW_WORDS_PER_DAY - 2
+
+
+# ---------------------------------------------------------------------------
+# add_vocab's daily new-word cap refusal (T015)
+# ---------------------------------------------------------------------------
+#
+# add_vocab's own cap check counts today's mining events against the real wall
+# clock (``date.today()``), not the ``today`` string ``prescribe``/
+# ``start_session`` accept for testing — it takes no ``today`` parameter at
+# all. So these events are seeded against the actual local date, not TODAY.
+
+
+def test_add_vocab_refuses_past_the_daily_new_word_cap(conn):
+    seed_mining_events_now(conn, st.MAX_NEW_WORDS_PER_DAY)
+
+    answer = st.add_vocab(conn, word="走る")
+
+    assert answer["ok"] is False
+    assert answer["error"] == st.NEW_WORD_CAP_REACHED
+    assert answer["field"] == "word"
+    assert str(st.MAX_NEW_WORDS_PER_DAY) in answer["note"]
+    assert "triage_inbox" in answer["note"]
+    # A refusal is a structured value, never a silent success at a smaller size.
+    assert answer["item_id"] is None
+    assert answer["event_id"] is None
+    assert count(conn, "item") == 0
+    # Only the eight seeded mining events; add_vocab itself wrote nothing.
+    assert count(conn, "event") == st.MAX_NEW_WORDS_PER_DAY
+
+
+def test_add_vocab_names_the_count_already_mined_when_refusing(conn):
+    seed_mining_events_now(conn, st.MAX_NEW_WORDS_PER_DAY)
+
+    answer = st.add_vocab(conn, word="走る")
+
+    # The refusal names how many were already mined today, not just the cap.
+    assert f"{st.MAX_NEW_WORDS_PER_DAY} of {st.MAX_NEW_WORDS_PER_DAY}" in answer["note"]
+
+
+def test_add_vocab_still_succeeds_one_short_of_the_cap(conn):
+    seed_mining_events_now(conn, st.MAX_NEW_WORDS_PER_DAY - 1)
+
+    answer = st.add_vocab(conn, word="走る")
+
+    assert answer["ok"] is True, answer
+    assert answer["item_id"] is not None
+    assert count(conn, "event") == st.MAX_NEW_WORDS_PER_DAY
 
 
 # ---------------------------------------------------------------------------
