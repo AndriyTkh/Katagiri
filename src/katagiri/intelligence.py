@@ -231,6 +231,36 @@ reported per item (``source``). ``strength`` / ``review_count`` are reported
 alongside but never folded into the number — nothing writes them yet, so their
 scale is undefined, and inventing one would put a fabricated unit into a ranking.
 
+Construction trajectory, and why it can never lower a gate
+------------------------------------------------------------
+D-40 is the standing decision that a grammar construction's mastery is never
+*stored*: no new table, no terminal "mastered" state, because a construction is
+never done forever — the next lapse is always a possible next observation.
+:func:`construction_trajectory` answers "how is this construction going" the
+same way :func:`comprehension_debt` answers "how much is owed": entirely from
+``observation`` rows, recomputed on every call. ``event`` rows are excluded for
+the identical reason they are excluded from debt — ``log_error``'s events feed
+the confusion graph, and counting the same mistake once as an event and again
+as the observation that recorded it would inflate whichever items happen to be
+logged both ways.
+
+The result is a **trajectory, not a scalar**: a rolling window of the
+construction's last :data:`TRAJECTORY_WINDOW` attempts, walked across every
+attempt in ``ts`` order, so a construction that was accurate, regressed for a
+stretch (the forgetting curve, or interference from a newly-studied neighbour),
+and recovered shows up as three visibly different numbers in ``points`` — a
+**U-shaped dip** — rather than being averaged into one lifetime rate that would
+erase it.
+
+This is deliberately a dead end for any gate. :func:`grammar_reachability` and
+the reachability half of :func:`find_i_plus_one` read ``known_set`` and
+``item.understanding``/``item_edge`` only — neither calls
+:func:`construction_trajectory` nor consults its output, so a construction
+mid-dip is exactly as reachable as one that never dipped. Reachability gates
+**output/production** tasks (D-40, and the ``production=True`` doctrine two
+sections up); a trajectory dip is comprehension-side information for a caller
+to *show* the learner, never a reason to withhold or re-lock anything.
+
 Difficulty for me: four numbers, one score, and what happens when a file is gone
 -------------------------------------------------------------------------------
 "How hard is this?" has no answer without "for whom", so
@@ -493,6 +523,16 @@ DEBT_FROM_OBSERVATIONS: Final = "observations"
 DEBT_FROM_CACHE: Final = "cache"
 DEBT_FROM_CACHE_TAIL: Final = "cache+observations"
 DEBT_FROM_NOTHING: Final = "none"
+
+# ---------------------------------------------------------------------------
+# Construction trajectory (T029, D-40)
+# ---------------------------------------------------------------------------
+
+#: Rolling-window size, in attempts, for :func:`construction_trajectory`. Small
+#: enough that a temporary regression stays visible in a handful of points
+#: instead of being averaged into the construction's entire history — the same
+#: reason :data:`DEBT_HALF_LIFE_DAYS` is 30 days and not a year.
+TRAJECTORY_WINDOW: Final = 5
 
 # ---------------------------------------------------------------------------
 # The i+1 gate
@@ -2219,6 +2259,138 @@ def comprehension_debt(
                 "computed_ts": cache_row["computed_ts"],
                 "last_event_ts": cache_row["last_event_ts"],
             },
+        }
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Construction trajectory (T029, D-40)
+# ---------------------------------------------------------------------------
+
+
+def _is_clean_observation(row: Mapping[str, Any] | sqlite3.Row) -> bool:
+    """Whether one observation counts as accurate, for :func:`construction_trajectory`.
+
+    Mirrors the assisted/miss/clean split :func:`_observation_weight` folds into
+    comprehension debt (see the module docstring), without the decay or
+    attribution weighting debt applies: a trajectory point is a plain hit rate,
+    not a weighted score, so a U-dip is arithmetic anyone can check by hand.
+    """
+    if not bool(row["unassisted"]):
+        return False
+    return not _is_miss(row["expected"], row["produced"])
+
+
+def construction_trajectory(
+    conn: sqlite3.Connection,
+    grammar_ids: Iterable[str],
+    *,
+    window: int = TRAJECTORY_WINDOW,
+) -> dict[str, dict[str, Any]]:
+    """Accuracy-over-attempts per grammar construction, derived on read (D-40).
+
+    Reads ``observation`` rows keyed by ``item_id`` — the same soft reference
+    and the same source table :func:`comprehension_debt` folds, and for the
+    same reason ``event`` rows never enter this: ``log_error``'s events feed the
+    confusion graph, and counting one mistake twice (once as an event, once as
+    the observation that recorded it) would inflate whichever items happen to
+    be logged both ways. No new table, no new column, and no terminal
+    "mastered" state — a construction is re-evaluated from the event log every
+    time this is called, exactly as D-40 requires.
+
+    Each observation is a hit or a miss (:func:`_is_clean_observation`): an
+    *assisted* attempt is a miss outright; an unassisted one is a hit unless it
+    contradicts ``expected`` (:func:`_is_miss` — the same shallow, deliberately
+    generous comparison :func:`comprehension_debt` uses, for the same reason a
+    strict string match over free-text answers punishes phrasing, not
+    understanding).
+
+    The return is a **trajectory, not a single scalar**: ``points`` walks the
+    construction's observations in ``ts`` order and reports the accuracy of the
+    trailing ``window`` attempts ending at each one (fewer than ``window`` at
+    the start, while history is still filling in). A construction that was
+    doing well, regressed for a stretch — the forgetting curve, or interference
+    from a newly-studied neighbour — and recovered shows three visibly
+    different numbers in ``points``, a **U-shaped dip**, instead of being
+    averaged into one lifetime rate that would hide it. ``accuracy`` at the top
+    level is that lifetime rate, reported alongside for convenience; it is
+    never what a caller should read to notice a dip.
+
+    Nothing here lowers or is consulted by any gate: :func:`grammar_reachability`
+    and the reachability half of :func:`find_i_plus_one` read ``known_set`` and
+    ``item.understanding``/``item_edge`` only, never this function's output —
+    reachability gates **output/production** tasks (D-40); this is a
+    comprehension-side report with no gate wired to it at all.
+
+    Reads only. Returns an entry for **every** requested id, including ids with
+    no evidence at all (``attempts`` 0, ``points`` ``[]``, ``accuracy`` ``None``)
+    — a missing key would make a caller silently skip a construction, exactly
+    the reason :func:`comprehension_debt` does the same.
+
+    ``window`` must be a positive int; anything else is a programmer error and
+    raises, matching ``half_life_days`` in :func:`comprehension_debt`.
+    """
+    if not isinstance(window, int) or isinstance(window, bool):
+        raise TypeError("window must be an int.")
+    if window < 1:
+        raise ValueError("window must be positive.")
+
+    wanted: list[str] = []
+    seen: set[str] = set()
+    for raw in grammar_ids:
+        value = str(raw).strip()
+        if value and value not in seen:
+            seen.add(value)
+            wanted.append(value)
+    if not wanted:
+        return {}
+
+    observations = _observations_for(conn, wanted)
+
+    out: dict[str, dict[str, Any]] = {}
+    for item_id in wanted:
+        rows = observations.get(item_id, [])
+        outcomes: list[bool] = []
+        stamps: list[str] = []
+        skipped = 0
+        for row in rows:
+            # Same defensive re-parse comprehension_debt applies via
+            # _observation_weight: a row whose timestamp is not the schema's
+            # shape is skipped rather than folded at a guessed position.
+            if _parse_stamp(row["ts"]) is None:
+                skipped += 1
+                continue
+            outcomes.append(_is_clean_observation(row))
+            stamps.append(row["ts"])
+
+        points: list[dict[str, Any]] = []
+        for index, _outcome in enumerate(outcomes, start=1):
+            window_slice = outcomes[max(0, index - window) : index]
+            window_clean = sum(1 for value in window_slice if value)
+            points.append(
+                {
+                    "attempt_index": index,
+                    "ts": stamps[index - 1],
+                    "window_attempts": len(window_slice),
+                    "window_clean": window_clean,
+                    "accuracy": round(window_clean / len(window_slice), 4),
+                }
+            )
+
+        attempts = len(outcomes)
+        clean_total = sum(1 for value in outcomes if value)
+        out[item_id] = {
+            "item_id": item_id,
+            "window": window,
+            "attempts": attempts,
+            "clean": clean_total,
+            # Lifetime rate, reported for convenience only — see docstring: a
+            # caller looking for a U-dip must read `points`, not this.
+            "accuracy": round(clean_total / attempts, 4) if attempts else None,
+            "points": points,
+            "skipped_observations": skipped,
+            "first_observation_ts": stamps[0] if stamps else None,
+            "last_observation_ts": stamps[-1] if stamps else None,
         }
     return out
 
@@ -4470,6 +4642,7 @@ __all__ = [
     "TEXT_TOO_LARGE",
     "TOKENIZER_UNAVAILABLE",
     "TOO_MANY_CANDIDATES",
+    "TRAJECTORY_WINDOW",
     "VERB_EXCLUDED_POS2",
     "VERB_POS1",
     "Candidate",
@@ -4493,6 +4666,7 @@ __all__ = [
     "candidates_from_items",
     "combine_difficulty",
     "comprehension_debt",
+    "construction_trajectory",
     "coverage",
     "coverage_band",
     "coverage_from_morphs",
