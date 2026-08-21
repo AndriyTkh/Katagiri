@@ -1238,3 +1238,75 @@ governance step FR-025 requires before T013 (the `prescribe()` topic rung + caps
 later T014–T017 tasks touch `start_session`/`add_vocab`; `tests/test_mcp_tools.py`'s congruence
 check stays the enforcement backstop that the additive claims above are not just argued but true
 once the code lands.
+
+## 006 TG3 — input-strand logging justification (2026-08-21)
+
+Session date: 2026-08-21. Filed as ledger D-37, per spec.md FR-025's governance-first rule: T018
+(this filing) lands before T019–T021 (the code that writes and reads listening-block entries).
+FR-017 sets the requirement directly: input logging must write into the same `study_session`
+event series with a deterministic dedupe key in its own namespace — no second unread channel, no
+double-count against `events.import_study_log`'s `study:<ts>` keys — and the metric is
+narrow-listening reps of known audio, not raw minutes.
+
+**Why the existing `study_session` series, not a second channel.** `events.py:428-505`
+(`import_study_log`) already owns one event series for study activity: every record it appends
+carries `type=STUDY_LOG_TYPE` (`"study_session"`), and every downstream reader of study
+history — day-qualification counts, `stop_gate_status`'s D-19/D-33 tallies, any future dashboard —
+reads that one series. Standing up a second `type` (e.g. `"listening_block"`) for input-strand
+data would mean every one of those readers now has two places to check, and a reader that only
+knows the old contract silently under-counts a day that had real input work but no import-log
+line. Appending to `study_session` means the existing readers already see the new writes without
+being touched — the additive-only property research.md's rationale (`events.import_study_log`
+for the existing key shape) leans on for the whole 006 post-gate strand.
+
+**The dedupe-key namespace: `listen:<normalised ts>`.** The importer's convention
+(`events.py:481-482`) is `stamp = normalize_stamp(raw_ts); dedupe_key = f"study:{stamp}"` —
+deterministic per logical record (the same input timestamp always normalizes to the same stamp
+and therefore the same key), checked against `event.dedupe_key` by exact string match
+(`events.py:484-486`) before the row is appended, so a re-run only ever adds genuinely-new lines.
+The input strand reuses the same `normalize_stamp` shape but a different literal prefix —
+`listen:<normalised ts>` — keyed off the listening block's own timestamp (block start, or
+whatever timestamp T019/T020 treat as that block's identity) rather than the study-log line's
+`ts`. Determinism carries over unchanged: the same logical listening block, logged twice, collapses
+to one row, same as the importer's own idempotency guarantee.
+
+**Collision analysis against `import_study_log` re-run over the same day.** The check at
+`event.dedupe_key = ?` (events.py:485) is an exact-string lookup, not a prefix-insensitive or
+per-day scan — so collision is possible only if a `listen:X` value is byte-identical to a
+`study:X` value for some `X`, which cannot happen: the two prefixes differ (`"listen:"` vs.
+`"study:"`) before the shared `<normalised ts>` suffix even enters the comparison, so no
+listening-block key can ever equal an importer key regardless of what timestamp either carries.
+Re-running `import_study_log` over a JSONL file that spans a day already carrying listening-block
+rows therefore imports exactly the `study_session` lines it always would have — new `study:` keys
+land, already-seen `study:` keys dedupe against themselves — and touches zero `listen:` rows,
+because the importer only ever constructs `study:`-prefixed keys and only ever selects on the key
+it just built. There is no shared counter, index, or lookup between the two namespaces for a
+re-run to disturb.
+
+**Reps, not minutes — and why that changes no arithmetic.** The listening-block payload carries a
+reps count (e.g. "10 replays of one 40-second Irodori dialogue," research.md §Post-gate decisions)
+against a known audio-anchored item; it does not carry a `minutes` field, and T019–T021 must not
+synthesize one (no estimated-minutes-from-reps conversion, no zero-fill of an absent field) —
+absence of a minutes claim is the whole point, not an accident to paper over. Every
+day-qualification and dose computation that reads `study_session` for minutes (the D6 stop-gate's
+14-in-18 count under D-19, the D-33 entry-gate criteria surfaced on `stop_gate_status`, TG2's
+`caps` block under D-36) reads the `minutes` key specifically; a listening-block row that never
+populates `minutes` is invisible to that arithmetic by construction, not filtered out by a special
+case. The row still counts wherever a reader means "did a `study_session` event happen this day"
+(if any such reader exists) but contributes zero minutes and zero new-word/grammar cap consumption
+to anything that sums `minutes` or the caps fields — the reps number lives in the payload for
+input-strand-specific readers (future listening-volume tracking, F-10's channel-mix decision) to
+pick up on their own terms, not to be silently coerced into the minutes arithmetic other strands
+already own.
+
+**ToolSpec expectation.** No new tool is implied by any of the above: the write path is
+`append_event` against the existing `study_session` series (already used by
+`import_study_log`), and read-side exposure (if any is needed for T021) is expected to ride an
+existing tool's payload additively, the same pattern D-36 used for `start_session`'s `caps`
+block. If T021 finds no existing tool can carry the reps field additively without redefining an
+existing key's meaning, the correct move is to stop and file a ledger row before inventing a new
+ToolSpec — not to add one under time pressure. Zero new ToolSpecs are expected from T019–T021.
+
+**Net effect**: no code changes from this filing. This entry and ledger row D-37 are the
+governance step FR-025 requires before T019–T021 (the listening-block writer and any read-side
+exposure) land.
