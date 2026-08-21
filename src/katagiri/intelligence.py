@@ -106,6 +106,28 @@ additive: an edge deleted from ``curriculum.md`` is *reported* as an orphan and
 left alone. Drop-and-rebuild is the derived-table rule and applying it here would
 delete the learner's hand-made edges along with the file's.
 
+Three more per-node tags (T028, D-39) — ``jf_can_do``, ``irodori_lesson`` and
+``tae_kim_section``, free-text external references to the JF can-do catalogue,
+an Irodori lesson, and a Tae Kim's Guide section — land on the same node ids
+without a schema change: no new table, and no new column on ``item`` either.
+A migration adding columns was considered and rejected: this project's whole-
+schema-in-one-migration rule (D-12/D-27) only carries a scoped exception for
+migration 0002 (D-38), ``tests/test_db.py::test_packaged_migrations_are_discoverable``
+pins the packaged set to versions ``[1, 2]``, and every other free-looking
+``item`` column (``home_topic``, ``lexeme_ref``, ``jmdict_seq``, ...) is
+already load-bearing elsewhere (grammar reachability, the dictionary linker) —
+so writing a tag into one would risk exactly the gate-corruption D-39 rules
+out. Instead these three tags are rows in ``settings`` (``scope`` = the node
+id, ``key`` = ``curriculum_<tag>``) — a table the schema already describes as
+"global with per-topic overrides", which is exactly what a grammar node's id
+is, and one no gate or reachability computation reads. Unlike ``level``,
+curriculum.md is the *only* author of these three tags, so a re-import
+overwrites the stored value rather than protecting it with ``COALESCE`` —
+there is no hand-curated value elsewhere to lose. Removal keeps the same
+shape as the edge doctrine above: a tag present in ``settings`` but absent
+from a re-import is reported as an orphan attribute and left in place, never
+deleted.
+
 A cycle is refused, whole. The union of parsed edges and the edges already in the
 database is topologically sorted first, and a cycle comes back as
 :data:`CURRICULUM_CYCLE` with the cycle named — reachability over a cyclic
@@ -383,6 +405,20 @@ GRAMMAR_KIND: Final = "grammar"
 #: Headings whose fenced blocks document the node format instead of declaring
 #: nodes. Skipped, and the skip is reported.
 FORMAT_ONLY_HEADINGS: Final[frozenset[str]] = frozenset({"node format"})
+
+#: T028 (D-39): three free-text external-reference tags a node block may carry
+#: alongside ``id``/``level``/``prereqs``/``unlocks``. Keys here are the
+#: curriculum.md YAML keys; values are the ``settings`` key each is stored
+#: under (``scope`` is the node id) — see ``_upsert_curriculum_attrs`` for why
+#: ``settings`` and not a new column.
+CURRICULUM_ATTR_SETTINGS_KEYS: Final[dict[str, str]] = {
+    "jf_can_do": "curriculum_jf_can_do",
+    "irodori_lesson": "curriculum_irodori_lesson",
+    "tae_kim_section": "curriculum_tae_kim_section",
+}
+_SETTINGS_KEY_TO_ATTR: Final[dict[str, str]] = {
+    value: key for key, value in CURRICULUM_ATTR_SETTINGS_KEYS.items()
+}
 
 #: Sources an edge can come from, reported on every edge.
 SOURCE_NODE_BLOCK: Final = "node_block"
@@ -933,13 +969,23 @@ def coverage(
 
 @dataclass(frozen=True, slots=True)
 class DagNode:
-    """One grammar node declared by a node block."""
+    """One grammar node declared by a node block.
+
+    ``jf_can_do``, ``irodori_lesson`` and ``tae_kim_section`` (T028, D-39) are
+    optional free-text external-reference tags — a JF can-do id, an Irodori
+    lesson reference, a Tae Kim's Guide section — each sharing ``line`` with
+    the rest of the block, same as ``prereqs``/``unlocks`` already do: the
+    block is one source-line reference, not one per key.
+    """
 
     id: str
     level: str | None
     prereqs: tuple[str, ...]
     unlocks: tuple[str, ...]
     line: int
+    jf_can_do: str | None = None
+    irodori_lesson: str | None = None
+    tae_kim_section: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -969,11 +1015,19 @@ class Curriculum:
     nodes: tuple[DagNode, ...]
     edges: tuple[DagEdge, ...]
     skipped: tuple[str, ...]
+    attribute_only: tuple[DagNode, ...] = ()
+    """Tag-only blocks (T028): ``id`` plus external-reference tags, no DAG
+    structure of their own. Excluded from :attr:`nodes` so a tag-only block
+    never inflates the node count of an id already declared elsewhere (e.g. by
+    a diagram edge) — see :func:`_parse_node_block`."""
 
     @property
     def ids(self) -> tuple[str, ...]:
         seen: list[str] = []
         for node in self.nodes:
+            if node.id not in seen:
+                seen.append(node.id)
+        for node in self.attribute_only:
             if node.id not in seen:
                 seen.append(node.id)
         for edge in self.edges:
@@ -986,6 +1040,25 @@ class Curriculum:
     def levels(self) -> dict[str, str]:
         """id → declared level, for the nodes that declared one."""
         return {node.id: node.level for node in self.nodes if node.level}
+
+    @property
+    def attributes(self) -> dict[tuple[str, str], tuple[str, int]]:
+        """``(id, attr key) -> (value, line)`` for every declared external tag.
+
+        ``attr key`` is one of :data:`CURRICULUM_ATTR_SETTINGS_KEYS`'s keys
+        (``jf_can_do``, ``irodori_lesson``, ``tae_kim_section``), not the
+        ``settings`` key it is stored under — importers translate.
+        """
+        out: dict[tuple[str, str], tuple[str, int]] = {}
+        for node in (*self.nodes, *self.attribute_only):
+            for attr, value in (
+                ("jf_can_do", node.jf_can_do),
+                ("irodori_lesson", node.irodori_lesson),
+                ("tae_kim_section", node.tae_kim_section),
+            ):
+                if value:
+                    out[(node.id, attr)] = (value, node.line)
+        return out
 
 
 def _is_grammar_id(value: str) -> bool:
@@ -1016,7 +1089,7 @@ def _dedupe_edges(
 
 def _parse_node_block(
     body: str, *, start_line: int, skipped: list[str]
-) -> tuple[list[DagNode], list[DagEdge]]:
+) -> tuple[list[DagNode], list[DagEdge], list[DagNode]]:
     """Parse one fenced block as one or more ``id:``-keyed node declarations.
 
     Documents are split on a bare ``---`` line, and each is handed to
@@ -1024,9 +1097,19 @@ def _parse_node_block(
     the vault's own tolerant key/value parser (scalars, ``[a, b]`` inline lists,
     ``- item`` block lists, ``#`` comments) instead of writing a second one that
     would drift from it.
+
+    Returns ``(nodes, edges, attribute_only)``. A block that declares none of
+    ``level``/``prereqs``/``unlocks`` — only ``id`` plus one or more of the
+    T028 external-reference tags — carries no DAG structure of its own, so it
+    is not a node declaration: it lands in ``attribute_only`` instead of
+    ``nodes``. This is what keeps a tag-only block from inflating the DAG's
+    node count (an id already reachable only through a diagram edge, or
+    through another block's ``prereqs``, stays exactly that; T028 only adds
+    metadata to it, never a second, competing declaration of the node itself).
     """
     nodes: list[DagNode] = []
     edges: list[DagEdge] = []
+    attribute_only: list[DagNode] = []
 
     offset = 0
     for chunk in re.split(r"(?m)^---[ \t]*$", body):
@@ -1063,15 +1146,26 @@ def _parse_node_block(
 
         prereqs = edge_ids("prereqs")
         unlocks = edge_ids("unlocks")
-        nodes.append(
-            DagNode(
-                id=node_id,
-                level=(fields.first("level") or None),
-                prereqs=tuple(prereqs),
-                unlocks=tuple(unlocks),
-                line=chunk_line,
-            )
+        level = fields.first("level") or None
+        node = DagNode(
+            id=node_id,
+            level=level,
+            prereqs=tuple(prereqs),
+            unlocks=tuple(unlocks),
+            line=chunk_line,
+            jf_can_do=(fields.first("jf_can_do") or None),
+            irodori_lesson=(fields.first("irodori_lesson") or None),
+            tae_kim_section=(fields.first("tae_kim_section") or None),
         )
+        has_tag = node.jf_can_do or node.irodori_lesson or node.tae_kim_section
+        if level is None and not prereqs and not unlocks and has_tag:
+            # Tag-only block (T028): see the docstring above. A bare
+            # ``id:``-only block (no level, no edges, no tag either) still
+            # counts as a real node — that is pre-existing behaviour this
+            # change must not disturb.
+            attribute_only.append(node)
+        else:
+            nodes.append(node)
         # Both types point earlier → later, so "what comes before X" is a
         # to_id lookup on the index the schema declares. See the docstring.
         edges.extend(
@@ -1082,7 +1176,7 @@ def _parse_node_block(
             DagEdge(node_id, unlocked, EDGE_UNLOCK, SOURCE_NODE_BLOCK, chunk_line)
             for unlocked in unlocks
         )
-    return nodes, edges
+    return nodes, edges, attribute_only
 
 
 def _line_ids(line: str) -> list[tuple[int, int, str]]:
@@ -1194,6 +1288,7 @@ def parse_curriculum(text: str) -> Curriculum:
     nodes: list[DagNode] = []
     edges: list[DagEdge] = []
     skipped: list[str] = []
+    attribute_only: list[DagNode] = []
 
     heading = ""
     fence: str | None = None
@@ -1214,11 +1309,12 @@ def parse_curriculum(text: str) -> Curriculum:
         if info.strip().lower() not in _YAML_INFO:
             return
         if re.search(r"(?m)^id[ \t]*:", content):
-            found_nodes, found_edges = _parse_node_block(
+            found_nodes, found_edges, found_attribute_only = _parse_node_block(
                 content, start_line=block_start, skipped=skipped
             )
             nodes.extend(found_nodes)
             edges.extend(found_edges)
+            attribute_only.extend(found_attribute_only)
             return
         if _has_arrow(content):
             edges.extend(
@@ -1260,6 +1356,7 @@ def parse_curriculum(text: str) -> Curriculum:
         nodes=tuple(nodes),
         edges=_dedupe_edges(edges, skipped),
         skipped=tuple(skipped),
+        attribute_only=tuple(attribute_only),
     )
 
 
@@ -1400,6 +1497,40 @@ def _upsert_grammar_item(
     )
 
 
+def _existing_curriculum_attrs(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """``(node id, attr key)`` for every T028 tag already stored in ``settings``."""
+    settings_keys = tuple(CURRICULUM_ATTR_SETTINGS_KEYS.values())
+    marks = ",".join("?" * len(settings_keys))
+    return {
+        (row["scope"], _SETTINGS_KEY_TO_ATTR[row["key"]])
+        for row in conn.execute(
+            f"SELECT scope, key FROM settings WHERE key IN ({marks})", settings_keys
+        )
+    }
+
+
+def _upsert_curriculum_attr(
+    conn: sqlite3.Connection, *, item_id: str, attr: str, value: str, updated_ts: str
+) -> None:
+    """Write one T028 tag into ``settings``. See the module docstring for why.
+
+    curriculum.md is the only author of these tags (unlike ``level``, nothing
+    else ever curates them), so this overwrites on conflict rather than
+    ``COALESCE``-protecting an existing value: a typo fixed in the file and
+    re-imported should actually update the stored reference.
+    """
+    conn.execute(
+        """
+        INSERT INTO settings (scope, key, value, updated_ts)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(scope, key) DO UPDATE SET
+            value = excluded.value,
+            updated_ts = excluded.updated_ts
+        """,
+        (item_id, CURRICULUM_ATTR_SETTINGS_KEYS[attr], value, updated_ts),
+    )
+
+
 def import_curriculum(
     conn: sqlite3.Connection,
     *,
@@ -1417,7 +1548,10 @@ def import_curriculum(
     honest way to ask "what would this change?" of a source-of-truth table.
 
     Returns ``{"ok": True, "path", "dry_run", "nodes", "edges", "orphan_edges",
-    "skipped", "note"}``. Failure values: :data:`CURRICULUM_UNAVAILABLE`,
+    "attributes", "orphan_attributes", "skipped", "note"}``. ``attributes`` /
+    ``orphan_attributes`` are T028 (D-39): the ``jf_can_do``/``irodori_lesson``/
+    ``tae_kim_section`` tags, additive in ``settings`` and never deleted, same
+    doctrine as edges. Failure values: :data:`CURRICULUM_UNAVAILABLE`,
     :data:`CURRICULUM_EMPTY`, :data:`CURRICULUM_CYCLE`.
     """
     try:
@@ -1504,6 +1638,22 @@ def import_curriculum(
         if from_id in mentioned or to_id in mentioned
     )
 
+    # T028 (D-39): the three external-reference tags, same additive/orphan shape
+    # as edges above but landing in `settings` (see the module docstring). Tags
+    # on a blocked (wrong-kind) id are dropped along with its edges.
+    parsed_attrs = {
+        key: value_line
+        for key, value_line in parsed.attributes.items()
+        if key[0] not in blocked
+    }
+    existing_attrs = _existing_curriculum_attrs(conn)
+    new_attrs = [key for key in parsed_attrs if key not in existing_attrs]
+    orphan_attrs = sorted(
+        (item_id, attr)
+        for item_id, attr in existing_attrs - set(parsed_attrs)
+        if item_id in mentioned
+    )
+
     if not dry_run:
         now = _utc_now()
         owns = not conn.in_transaction
@@ -1519,6 +1669,10 @@ def import_curriculum(
                 "ON CONFLICT DO NOTHING",
                 [(edge.from_id, edge.to_id, edge.edge_type) for edge in edges],
             )
+            for (item_id, attr), (value, _line) in parsed_attrs.items():
+                _upsert_curriculum_attr(
+                    conn, item_id=item_id, attr=attr, value=value, updated_ts=now
+                )
         except Exception:
             if owns:
                 try:
@@ -1566,13 +1720,32 @@ def import_curriculum(
             {"from_id": from_id, "to_id": to_id, "edge_type": edge_type}
             for from_id, to_id, edge_type in orphans
         ],
+        "attributes": {
+            "parsed": len(parsed_attrs),
+            "created": len(new_attrs),
+            "already_present": len(parsed_attrs) - len(new_attrs),
+            "by_attr": dict(Counter(attr for _item_id, attr in parsed_attrs)),
+        },
+        "orphan_attributes": [
+            {"id": item_id, "attribute": attr} for item_id, attr in orphan_attrs
+        ],
         "skipped": skipped,
-        "note": (
-            "edges in the database but not in the file are reported, never "
-            "deleted: item_edge is source-of-truth."
-            if orphans
-            else None
-        ),
+        "note": " ".join(
+            note
+            for note in (
+                "edges in the database but not in the file are reported, never "
+                "deleted: item_edge is source-of-truth."
+                if orphans
+                else None,
+                "attribute tags (jf_can_do/irodori_lesson/tae_kim_section) in the "
+                "database but not in the file are reported, never deleted: "
+                "curriculum.md is source-of-truth for these tags."
+                if orphan_attrs
+                else None,
+            )
+            if note is not None
+        )
+        or None,
     }
 
 

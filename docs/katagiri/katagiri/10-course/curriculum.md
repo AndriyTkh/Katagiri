@@ -78,6 +78,48 @@ g-desu-copula ──> g-wa-topic ──> g-o-object ──> g-masu-form
 
 Vocabulary: `people/family`, `food`, `numbers 1–10`, `time/days`, `transport`, `body`, core 50 verbs.
 
+External references (T028): the most defensible mapping evident from each
+node's own grammar point, not verified against the JF Standard's official
+can-do numbering, Irodori's official lesson index, or Tae Kim's exact section
+titles — say so plainly rather than citing a precise-looking id nobody checked.
+
+```yaml
+id: g-desu-copula
+jf_can_do: A1 Interpersonal - self-introduction (name, nationality) via です/だ
+irodori_lesson: Irodori I (Beginner 1), opening lessons - self-introduction
+tae_kim_section: Tae Kim, Essential Grammar - だ and です
+---
+id: g-wa-topic
+jf_can_do: A1 Interpersonal - introducing a topic (Xは...) in self-intro exchanges
+irodori_lesson: Irodori I (Beginner 1), opening lessons - topic marker は
+tae_kim_section: Tae Kim, Essential Grammar - Particles, は
+---
+id: g-o-object
+jf_can_do: A1 Interpersonal - stating what one does or wants using a direct object (Xを...)
+irodori_lesson: Irodori I (Beginner 1), early lessons - verbs with を objects
+tae_kim_section: Tae Kim, Essential Grammar - Particles, を
+---
+id: g-masu-form
+jf_can_do: A1 Interpersonal/Informational - describing routine actions politely (-ます form)
+irodori_lesson: Irodori I (Beginner 1), daily-routine lessons - ます form
+tae_kim_section: Tae Kim, Essential Grammar - Verb Basics, polite form (-ます)
+---
+id: g-no-possessive
+jf_can_do: A1 Interpersonal - describing belonging or relations (XのY)
+irodori_lesson: Irodori I (Beginner 1), early lessons - の for possession and description
+tae_kim_section: Tae Kim, Essential Grammar - Particles, の
+---
+id: g-negation
+jf_can_do: A1 Interpersonal/Informational - saying what is not the case (negative です/-ません)
+irodori_lesson: Irodori I (Beginner 1) - negative forms introduced alongside affirmative ones
+tae_kim_section: Tae Kim, Essential Grammar - Negative Verbs and negation
+---
+id: g-question-ka
+jf_can_do: A1 Interpersonal - asking simple yes/no questions (...か)
+irodori_lesson: Irodori I (Beginner 1), opening lessons - question marker か
+tae_kim_section: Tae Kim, Essential Grammar - Question marker か
+```
+
 ## Phase 2 — Media entry (weeks 4–12)
 
 Target: a 3–5 minute YouTube clip at 80%+ coverage, pre-taught.
@@ -104,4 +146,13 @@ id: g-0003
 prereqs: [g-0001, g-0002]
 level: A0
 unlocks: [g-0004]
+jf_can_do: A1 Interpersonal - free text, JF Standard can-do reference
+irodori_lesson: free text, Irodori lesson reference
+tae_kim_section: free text, Tae Kim's Guide section reference
 ```
+
+`jf_can_do`, `irodori_lesson` and `tae_kim_section` (T028, D-39) are optional,
+free-text external references — none required, any subset may be given. They
+land on the same node id, additively: re-importing after editing a tag updates
+it, and re-importing after *removing* a tag reports it as an orphan (logged,
+never deleted from where it was stored) rather than silently forgetting it.
