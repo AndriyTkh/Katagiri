@@ -200,9 +200,23 @@ Checkpoint result 2026-08-21: full suite **1706 passed / 5 skipped** (up from TG
 ## Taskgroup 8: Gate — 006-verify + close (P0)
 
 - [x] T041 [Gate] **006-verify**: cold-subagent scenarios against frozen fixtures — KANA session closing with a dictation artifact under the reserved slug; the daily new-word cap refusing and being *reported* rather than worked around; an A0 production drill offering only anchored items; a worksheet round-trip treating read-back as data; cumulative A..D still green. Max two fail→fix→rerun cycles (D-23); residual findings go to the ledger. Write: tests/test_006verify.py. Read: quickstart.md §4, tests/test_dverify.py (the cumulative cold-scenario pattern), tests/conftest.py (test-group placement: `compile` → general → `mcp`).
-- [ ] T042 [Gate] [in-progress: master-land] Close: learner metric read from the real event log (dictation and pitch-marking records per week, monologue per month, zero days over the new-word cap — an honest zero is reported as a zero); **deferral register updated** — F-02 trigger revised to "minimal-pair perception training enters the curriculum" with its two prerequisites noted, F-03 restated as Realtime-API voice over our own agent, new rows for STT (kotoba-whisper, pinned checkpoint → unscripted production assessment) and the restore-CLI process-list nicety (→ backlog); review-coverage row appended; weekly status line. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: the real event log, docs/decisions-ledger.md §Deferred options + §Review coverage, spec.md §Deferred + quickstart.md §Learner metric.
+- [x] T042 [Gate] Close: learner metric read from the real event log (dictation and pitch-marking records per week, monologue per month, zero days over the new-word cap — an honest zero is reported as a zero); **deferral register updated** — F-02 trigger revised to "minimal-pair perception training enters the curriculum" with its two prerequisites noted, F-03 restated as Realtime-API voice over our own agent, new rows for STT (kotoba-whisper, pinned checkpoint → unscripted production assessment) and the restore-CLI process-list nicety (→ backlog); review-coverage row appended; weekly status line. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: the real event log, docs/decisions-ledger.md §Deferred options + §Review coverage, spec.md §Deferred + quickstart.md §Learner metric.
 
 **Checkpoint TG8**: 006-verify green, learner metric recorded (pass or honest fail), deferral register and coverage table updated.
+
+> **Checkpoint result (2026-08-21)**: TG8 complete — 006 fully closed, every checkbox in this
+> file checked. T041 (006-verify) green on frozen fixtures; cumulative A..D green modulo the
+> two pre-existing Phase-E-caused failures filed under D-43 (out of 006's scope). T042 learner
+> metric read read-only from the real event log (`recent_events`, 15 total events since the
+> 2026-08-20 reset): dictation records this week 0, pitch-marking records this week 0,
+> monologue records this month 0, days over the new-word cap 0 (out of 1 day with any mining
+> activity — genuinely under cap, not merely unmeasured). Honest zero across the board — no
+> lesson has ever been closed, so the reserved `phase0-kana-dictation` slug has never fired;
+> matches `stop_gate_status`'s entry-gate sub-dict (1/10 study days) and every prior TG
+> checkpoint's "learner has not studied yet" note. Deferral register revised in
+> decisions-ledger.md (F-02/F-03 restated with prerequisites, F-11/F-12 added for STT and the
+> restore-CLI nicety) and a review-coverage row appended for the whole 006 scope. Weekly status
+> line appended to dev-plan.md.
 
 ---
 

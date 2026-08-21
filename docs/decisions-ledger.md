@@ -4,7 +4,7 @@ Running record: decisions made, options deferred (revisit conditions noted), and
 excluded from the current dev plan. Update whenever a decision lands or scope moves.
 Detailed reasoning lives in [audit-log.md](audit-log.md); this file is the index.
 
-Last updated: 2026-08-21 (D-41).
+Last updated: 2026-08-21 (006 T042 close: deferral register revised, review coverage appended).
 
 ## Review coverage (what has already been audited — don't re-review)
 
@@ -18,6 +18,7 @@ Last updated: 2026-08-21 (D-41).
 | Beads DAG (38 beads, created 2026-08-19) | nobody | — | unreviewed; per-phase estimates/workfiles/parallel lanes computed at implementation time |
 | Phase C scope (src/katagiri/md_search.py + search_notes registration) | nobody | shipped 2026-08-19, C-verify green | unreviewed — gate-verified only, not panel-audited |
 | Phase D scope (envelope, session tools, exercises, lesson memory + skills pack v1, full sensei letter, intelligence; 14 new MCP tools) | nobody | shipped 2026-08-20, D-verify green (T018: 7/7 quickstart outcomes, suite 1480) | unreviewed — gate-verified only, not panel-audited; learner metric 0 real-usage events (agent/fixture-only) |
+| 006-teaching-method scope (KANA mode + Phase-0 prose/data, entry gate, dose contract, input strand, audio anchors + migration 0002, curriculum tags + construction trajectory + vendor scripts, assessment cadence + kanji policy, worksheet loop; zero new ToolSpecs across TG0–TG7) | nobody | shipped 2026-08-21, 006-verify green (T041: cold-subagent scenarios A..D, cumulative still green modulo the two pre-existing Phase-E-caused failures filed under D-43); feature fully closed T042 | unreviewed — gate-verified only, not panel-audited; learner metric is an honest zero across all four figures (0 dictation/pitch-marking/monologue records, 0 days over the new-word cap out of 1 day with any mining activity) because the learner has still not had a first real session post-reset |
 
 Rule: a new review round scopes only the delta since the last one. Re-reviewing a settled row
 is waste unless new external facts invalidate it (note the invalidation here first).
@@ -76,8 +77,9 @@ is waste unless new external facts invalidate it (note the invalidation here fir
 | # | Option | Deferred to | Revisit when |
 |---|---|---|---|
 | F-01 | Progressive substitution engine (the novel piece) | post-loop | Usage data exists; prerequisites (aligned text + known_set) done by Phases A–D |
-| F-02 | VOICEVOX TTS + per-word WAV cache | post-loop | Yomitan word audio stops being enough (sentence TTS needed) |
-| F-03 | ASR / speaking scored aloud; conversation with vocab ceiling | post-loop | Teacher loop stable; speaking becomes the bottleneck |
+| F-02 | VOICEVOX TTS + per-word WAV cache | **F-02, revised (006 T042)** | "minimal-pair perception training enters the curriculum" — prerequisites at fire time: backup allowlist already widened (FR-007, done in TG0); an injectable-transport test seam designed **before** the first test is written |
+| F-03 | Voice interaction, option A: ChatGPT desktop Voice → Codex → katagiri over local stdio (zero build, covered by Plus subscription) | **F-03, revised (006 T042)** | empirical test **PASSED 2026-08-20** (learner's live test: voice-directed Codex called katagiri stdio tools); remaining gate: Phase 0 kana complete (modality ladder: zero free conversation at A0) |
+| F-03b | Voice interaction, option B: Realtime-API voice over our own agent (fallback) | **F-03 fallback (006 T042)** | option A's empirical test fails, or OpenAI restricts arbitrary MCP servers in voice-directed Codex — metered ~$0.05–0.20/min, needs API credits |
 | F-04 | jpdb / WaniKani seed importers | post-loop | Actually holding jpdb/WK history worth importing |
 | F-05 | asbplayer playhead upstream PR (issue #1087) | opportunistic | Manual anchors prove annoying in practice |
 | F-06 | Advanced difficulty modeling beyond jreadability+coverage | post-loop | D2 baseline proves too coarse |
@@ -85,6 +87,8 @@ is waste unless new external facts invalidate it (note the invalidation here fir
 | F-08 | Overlay-on-Google/browser-wide OCR (original "option 1" idea) | superseded | Only if a surface appears that asbplayer+mokuro+Yomitan can't cover |
 | F-09 | Event-log per-event hash chain (tamper evidence) | post-loop | Append-only triggers prove insufficient (round 5: overkill for personal tool today) |
 | F-10 | Phase E channel order (E1/E2/E3) | decision-at-gate | Fixed by measured consumption mix during the D6 window |
+| F-11 | STT (kotoba-whisper, pinned checkpoint) | **new row (006 T042)** | unscripted production assessment actually needs it — i.e. the monologue artifact stops being scoreable by hand. Prerequisite at fire time: pinned checkpoint + checksum under the vendor policy |
+| F-12 | Restore-CLI process-list nicety | **backlog (006 T042)** | never a blocker; pure operator comfort — no fire condition, just picked up opportunistically |
 
 ## Moonshots — status vs current plan
 
