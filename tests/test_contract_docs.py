@@ -15,6 +15,7 @@ general test group (see tests/conftest.py) rather than ``mcp`` or ``compile``.
 from __future__ import annotations
 
 import importlib.util
+import uuid
 from pathlib import Path
 from types import ModuleType
 
@@ -80,24 +81,55 @@ def test_render_preserves_hand_blocks_byte_for_byte(gen: ModuleType) -> None:
     This is the T020 contract: hand-written prose survives regeneration
     because the generator reads the existing file and copies HAND blocks
     forward unchanged rather than rebuilding them.
+
+    Content-agnostic by construction: it does not assume any particular
+    HAND block content (e.g. a placeholder) still exists in the committed
+    doc. Instead it extracts each tool's CURRENT hand block via the
+    generator's own extraction helper (``_existing_hand_blocks``, built on
+    the same ``_HAND_BLOCK_RE`` pattern ``render`` uses), swaps in a
+    distinctive sentinel, and asserts the sentinel -- not any specific
+    prior wording -- survives regeneration untouched.
     """
     original = DOC_PATH.read_text(encoding="utf-8")
-    hand_written = "- **Purpose**: Checks the server is alive and reports versions."
-    perturbed = original.replace(
-        "<!-- BEGIN HAND: ping -->\n- **Purpose**: _TODO (T020)_",
-        f"<!-- BEGIN HAND: ping -->\n{hand_written}",
-        1,
+    existing_blocks = gen._existing_hand_blocks(original)
+
+    covered_tools = ("ping", "known_word", "known_set_stats", "lookup")
+    assert all(name in existing_blocks for name in covered_tools), (
+        "fixture assumption broke: not all covered tools have a HAND block"
     )
+
+    perturbed = original
+    sentinels: dict[str, str] = {}
+    for name in covered_tools:
+        sentinel = f"SENTINEL-HAND-CONTENT-{name}-{uuid.uuid4().hex}"
+        old_block = existing_blocks[name]
+        new_block = f"<!-- BEGIN HAND: {name} -->\n{sentinel}\n<!-- END HAND: {name} -->"
+        assert old_block in perturbed, (
+            f"fixture assumption broke: extracted HAND block for {name!r} "
+            "not found verbatim in the document"
+        )
+        perturbed = perturbed.replace(old_block, new_block, 1)
+        sentinels[name] = sentinel
+
     assert perturbed != original, "fixture assumption broke: replacement did not match"
 
     rerendered = gen.render(perturbed)
 
-    assert hand_written in rerendered
-    # Every other tool's still-placeholder HAND block is untouched.
-    for other in ("known_word", "known_set_stats", "lookup"):
+    for name, sentinel in sentinels.items():
         assert (
-            f"<!-- BEGIN HAND: {other} -->\n- **Purpose**: _TODO (T020)_"
+            f"<!-- BEGIN HAND: {name} -->\n{sentinel}\n<!-- END HAND: {name} -->"
             in rerendered
+        ), f"sentinel HAND content for {name!r} did not survive regeneration"
+
+    # Every tool NOT perturbed above keeps its own pre-existing HAND block
+    # byte-for-byte too, whatever that content happens to be -- the
+    # generator must only ever rebuild GENERATED blocks.
+    untouched_blocks = gen._existing_hand_blocks(perturbed)
+    for name, block in untouched_blocks.items():
+        if name in covered_tools:
+            continue
+        assert block in rerendered, (
+            f"unperturbed HAND block for {name!r} was clobbered by render()"
         )
 
 
