@@ -42,6 +42,8 @@ from typing import Annotated, Any, Final, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from katagiri_agent import goal_note as goal_note_module
+
 # ---------------------------------------------------------------------------
 # Read-only mirror of src/katagiri/session_tools.py's prescribed-action kinds
 # ---------------------------------------------------------------------------
@@ -146,9 +148,21 @@ class GraphState(TypedDict, total=False):
     goal_theme: str | None
     """The frontmatter field value T014 passes through as a literal
     argument (``find_i_plus_one``'s ``topic`` / ``gen_exercise``'s
-    ``topic``). ``None`` here means "no goal note wired yet" -- T013's
-    nodes must run correctly either way, which is exactly what lets this
-    graph compile and be tested before T014 lands.
+    ``topic``). ``None`` here means either "no goal note wired for this
+    run" (``goal_note_path`` unset) or "a goal note was fetched but its
+    steering field could not be read" (``goal_note_status`` is one of
+    :data:`katagiri_agent.goal_note.GOAL_NOTE_STATUSES` other than
+    ``"ok"``) -- :data:`goal_note_status` is what tells the two cases
+    apart, so nothing downstream has to guess which one produced ``None``.
+    """
+    goal_note_status: str | None
+    """T014's explicit, reported outcome of parsing the goal note's
+    frontmatter: one of :data:`katagiri_agent.goal_note.GOAL_NOTE_STATUSES`
+    (``"ok"``, ``"no_content"``, ``"malformed_frontmatter"``,
+    ``"missing_field"``), or ``None`` when ``read_goal_note`` never ran a
+    fetch at all (no ``goal_note_path`` set). A missing or malformed
+    steering field is never a silent default -- it always lands here and in
+    the transcript, per research.md "§4 decorative-read fix".
     """
 
     # read_goal_note node output.
@@ -176,6 +190,14 @@ class GraphState(TypedDict, total=False):
     # Bookkeeping: append-only, so every node can add lines without
     # clobbering what earlier nodes wrote.
     transcript: Annotated[list[str], _append]
+
+    # T014: provenance entries recorded the moment goal_theme is placed into
+    # a katagiri tool-call argument (see make_exercise_path/make_review_path
+    # below). Append-only for the same reason as transcript -- at most one
+    # entry is ever added per run (exactly one of exercise/review path
+    # executes), but the reducer stays append-only so this never silently
+    # overwrites a prior entry if that assumption ever changes.
+    provenance: Annotated[list[dict[str, Any]], _append]
 
 
 # ---------------------------------------------------------------------------
@@ -297,8 +319,16 @@ def make_read_goal_note(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dic
     ``OBSIDIAN_FEATURED_TOOLS``. When ``goal_note_path`` is unset (no goal
     note wired for this run, e.g. a graph-structure-only test), the node is
     a documented no-op: it still emits a transcript line saying so, rather
-    than silently skipping. T014 is the task that turns the returned
-    content's frontmatter into ``goal_theme``; this node only fetches it.
+    than silently skipping, and ``goal_note_status`` stays ``None`` because
+    no fetch -- successful or not -- was ever attempted.
+
+    When a path *is* set, T014's :func:`katagiri_agent.goal_note.parse_goal_note`
+    turns the fetched content's frontmatter into ``goal_theme``. A missing or
+    malformed steering field is never a silent default: ``goal_note_status``
+    always records the exact outcome (one of
+    :data:`katagiri_agent.goal_note.GOAL_NOTE_STATUSES`) and the transcript
+    always gets a line naming it, so a run that could not read the field
+    still shows that plainly instead of quietly falling back.
     """
 
     async def read_goal_note(state: GraphState) -> dict[str, Any]:
@@ -306,11 +336,19 @@ def make_read_goal_note(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dic
         if not path:
             line = f"[read_goal_note] skipped: no goal_note_path set (state={state!r})"
             print(line)
-            return {"goal_note": None, "transcript": [line]}
+            return {"goal_note": None, "goal_note_status": None, "transcript": [line]}
         result, line = await _call_tool(
             deps, "read_goal_note", "vault_read", {VAULT_READ_PATH_ARG: path}
         )
-        return {"goal_note": result, "transcript": [line]}
+        parsed = goal_note_module.parse_goal_note(result, note_path=path)
+        status_line = f"[read_goal_note] frontmatter status={parsed.status!r}: {parsed.detail}"
+        print(status_line)
+        return {
+            "goal_note": result,
+            "goal_theme": parsed.value,
+            "goal_note_status": parsed.status,
+            "transcript": [line, status_line],
+        }
 
     return read_goal_note
 
@@ -374,18 +412,32 @@ def route_on_action_kind(state: GraphState) -> str:
 def make_exercise_path(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dict[str, Any]]]:
     """Exercise path: new/continuing material -> ``gen_exercise``.
 
-    ``topic`` is ``goal_theme`` when T014 has wired the passthrough
-    (US1's literal-argument trace); it falls back to the prescribed
+    ``topic`` is ``goal_theme`` (T014's frontmatter-literal-arg passthrough,
+    US1) when ``read_goal_note`` parsed one; it falls back to the prescribed
     action's own ``topic`` field, and to ``None`` (whole pool) when neither
-    is set -- never a decorative default that hides which source won.
+    is set -- never a decorative default that hides which source won. When
+    ``goal_theme`` is the value actually used, a provenance entry is
+    appended to ``state["provenance"]`` recording exactly where that value
+    came from and where it landed (``exercise_result``).
     """
 
     async def exercise_path(state: GraphState) -> dict[str, Any]:
         action = state.get("action") or {}
-        topic = state.get("goal_theme") or action.get("topic")
+        goal_theme = state.get("goal_theme")
+        topic = goal_theme or action.get("topic")
         args = {"topic": topic, "count": 5}
         result, line = await _call_tool(deps, "exercise_path", "gen_exercise", args)
-        return {"exercise_result": result, "transcript": [line]}
+        update: dict[str, Any] = {"exercise_result": result, "transcript": [line]}
+        if goal_theme:
+            entry = goal_note_module.build_provenance_entry(
+                note_path=str(state.get("goal_note_path")),
+                value=goal_theme,
+                katagiri_tool="gen_exercise",
+                katagiri_argument="topic",
+                output_field="exercise_result",
+            )
+            update["provenance"] = [entry.as_dict()]
+        return update
 
     return exercise_path
 
@@ -394,15 +446,27 @@ def make_review_path(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dict[s
     """Review path: due revisit / tired-mode reviews -> ``find_i_plus_one``.
 
     Same passthrough precedence as the exercise path: ``goal_theme`` first,
-    then the prescribed action's own ``topic``.
+    then the prescribed action's own ``topic``, with the same provenance
+    entry (output field ``review_result``) appended when ``goal_theme`` wins.
     """
 
     async def review_path(state: GraphState) -> dict[str, Any]:
         action = state.get("action") or {}
-        topic = state.get("goal_theme") or action.get("topic")
+        goal_theme = state.get("goal_theme")
+        topic = goal_theme or action.get("topic")
         args = {"topic": topic, "top": 5}
         result, line = await _call_tool(deps, "review_path", "find_i_plus_one", args)
-        return {"review_result": result, "transcript": [line]}
+        update: dict[str, Any] = {"review_result": result, "transcript": [line]}
+        if goal_theme:
+            entry = goal_note_module.build_provenance_entry(
+                note_path=str(state.get("goal_note_path")),
+                value=goal_theme,
+                katagiri_tool="find_i_plus_one",
+                katagiri_argument="topic",
+                output_field="review_result",
+            )
+            update["provenance"] = [entry.as_dict()]
+        return update
 
     return review_path
 
