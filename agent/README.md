@@ -199,3 +199,86 @@ OpenWeather contingency terms, is in
 and point `OBSIDIAN_STDIO_COMMAND`/`OBSIDIAN_STDIO_ARGS` at a stdio
 wrapper — `config.py`'s `obsidian_connection()` is the only branch point,
 so no graph code changes either way.
+
+## Client + model layer (T012)
+
+`src/katagiri_agent/clients.py` is the one place that builds the single
+`MultiServerMCPClient` (wiring both servers via `config.mcp_connections()`),
+applies the **client-side featured-subset allowlist**, and builds the one
+pinned OpenRouter chat model.
+
+**Discovery is never narrowed.** `client.get_tools(server_name=...)` calls
+each server's real `list_tools()` and sees its whole surface — katagiri's
+full 26 registered tools (per `src/katagiri/tool_registry.py`, unedited —
+`git diff --stat src/katagiri/` stays clean for this task) and the existing
+server's full tool list. Narrowing to the featured subset happens once,
+client-side, in `clients.load_featured_tools()` — no registry edit, no
+server-side profile, per research.md's decision.
+
+**Featured subset (fixed here; mirrored, not re-decided, into T021's
+`docs/assignment/tool-triage.md`):**
+
+katagiri (11 of 26 registered tools) —
+
+| Tool | Why it's featured |
+|---|---|
+| `coverage` | substantive — known-word coverage measurement |
+| `find_i_plus_one` | substantive — i+1 material selection (grammar DAG + vocab gate) |
+| `gen_exercise` | substantive — drill generation, canary-screened |
+| `build_sentences` | substantive — practice-sentence construction, canary-screened |
+| `triage_inbox` | substantive — inbox classification/filing |
+| `lookup` | primary data source over vendored JMdict |
+| `start_session` | opens the session and returns the single prescribed action the graph branches on (T013) |
+| `log_lesson` | records the lesson at the end of the flow |
+| `log_observations` | records the graded, rubric-scored performance |
+| `stage_untrusted` / `confirm_untrusted` | required before `triage_inbox` can be called at all — its `note_envelope_id` argument is untrusted-only |
+
+obsidian (2 of the plugin's tools, all that the flow needs to read the
+demo vault's goal note) —
+
+| Tool | Why it's featured |
+|---|---|
+| `vault_list` | locate the goal note |
+| `vault_read` | read its frontmatter/body — the value later passed as a literal argument into a katagiri call |
+
+Every other tool on either server (katagiri's `ping`, `known_word`,
+`known_set_stats`, `recent_events`, `search_db`, `stop_gate_status`,
+`security_status`, `vault_file`, `vault_list`, `obsidian_active_note`,
+`search_notes`, `lessons`, `lesson_memory`, `log_error`, `add_vocab`; the
+existing server's write-shaped tools — `vault_write`, `vault_append`,
+`vault_patch`, `vault_move`, `vault_delete`, `vault_copy`,
+`command_execute`, ...) stays discoverable at the protocol level but is
+never bound to the model. T021's triage table gives the one-line reason
+each katagiri helper doesn't claim substantive status.
+
+**Pinned model**: `openai/gpt-4o-mini`, reached through
+`ChatOpenAI(base_url="https://openrouter.ai/api/v1")` (`clients.build_model`).
+Recorded in `OPENROUTER_MODEL` in `agent/.env` (real value, gitignored) and
+`agent/.env.example` (this id, as a documented default — not a secret).
+Chosen because it is OpenAI's own tool-calling schema, which is exactly the
+schema `ChatOpenAI`/`langchain-openai` targets and OpenRouter proxies
+byte-for-byte, so there is no cross-provider translation layer between the
+model and the tool-call format the graph parses; it is on OpenRouter's
+`tool_use` capability list; and it is inexpensive enough to rehearse
+repeatedly against the $10 top-up (T027) without burning the budget before
+the recording. Pinned explicitly rather than left to OpenRouter's
+default/auto model routing, per spec.md FR-007 — an unpinned model that
+silently stops emitting tool calls mid-defence is an unrecoverable failure,
+not a recoverable one. Reachability on the funded account is verified for
+real only at T027 (user-side); building the model object here (or importing
+this module) makes no network call.
+
+Building both layers together:
+
+```python
+import asyncio
+from katagiri_agent.clients import build_bound_model
+
+async def main() -> None:
+    model, tools = await build_bound_model()
+    # model is a ChatOpenAI pinned to OPENROUTER_MODEL with the featured
+    # tools bound; tools is the same list, for the graph (T013) to dispatch
+    # tool calls against.
+
+asyncio.run(main())
+```
