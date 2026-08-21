@@ -266,6 +266,8 @@ INVALID_SEVERITY: Final = "invalid_severity"
 INVALID_PITCH: Final = "invalid_pitch"
 INBOX_TOO_LARGE: Final = "inbox_too_large"
 NOTHING_TO_TRIAGE: Final = "nothing_to_triage"
+#: FR-015's daily new-word dose cap (:data:`MAX_NEW_WORDS_PER_DAY`), reached.
+NEW_WORD_CAP_REACHED: Final = "new_word_cap_reached"
 
 _STAMP_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _DAY_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -2204,6 +2206,12 @@ def add_vocab(
 
     Nothing is written to the vault: the Obsidian bridge is read-only in this
     build, so the topic file gets this word when the derived exporters next run.
+
+    Refuses past the day's new-word cap (FR-015, :data:`MAX_NEW_WORDS_PER_DAY`,
+    counted from today's ``mining`` events) with :data:`NEW_WORD_CAP_REACHED`,
+    naming the cap and how many were already mined today. This is never a
+    silent success at a smaller size — the overflow route is the inbox
+    (``triage_inbox``), not a word mined anyway.
     """
     answer = _base(
         {
@@ -2256,6 +2264,24 @@ def add_vocab(
                     code=INVALID_PITCH,
                     field="pitch",
                 )
+
+        # Also before any envelope is unwrapped, and before the DB write
+        # below: past the daily cap this is a refusal, not a smaller mining,
+        # and a refusal after spending a confirmation would burn it for
+        # nothing (FR-015).
+        mined_today = conn.execute(
+            "SELECT COUNT(*) FROM event WHERE type = ? AND day_key = ?",
+            (MINING_EVENT, date.today().isoformat()),
+        ).fetchone()[0]
+        if int(mined_today) >= MAX_NEW_WORDS_PER_DAY:
+            raise SessionToolError(
+                f"Daily new-word cap reached: {mined_today} of "
+                f"{MAX_NEW_WORDS_PER_DAY} words already mined today. Put it "
+                "in the inbox instead (triage_inbox) — it keeps until "
+                "tomorrow's cap resets; this is a deferral, not a loss.",
+                code=NEW_WORD_CAP_REACHED,
+                field="word",
+            )
 
         word_text = str(field("word", word, required=True))
         reading_text = field("reading", reading)
@@ -2687,6 +2713,7 @@ __all__ = [
     "MISSING_SESSION_ID",
     "MISSING_TASK_TYPE",
     "MISSING_UNASSISTED",
+    "NEW_WORD_CAP_REACHED",
     "NEXT_STEP_BEFORE_CLOSE",
     "NOTHING_TO_TRIAGE",
     "NO_OBSERVATIONS",
