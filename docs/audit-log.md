@@ -1384,3 +1384,62 @@ original rule's wording, so the rule stands, unweakened, for every migration tha
 open by this entry and ledger row D-38). This entry, D-38, and the constitution's Technology
 Constraints amendment (1.3.0 → 1.4.0) are the governance step FR-018 and FR-025 require before
 T023 is written.
+
+## 006 TG5 — curriculum attributes + construction-state derivation (2026-08-21)
+
+Session date: 2026-08-21. Filed as ledger D-39 and D-40, per spec.md FR-025's governance-first
+rule: T027 (this filing) is a gate that lands before T028/T029 (the code that actually parses the
+new curriculum tags and derives construction state) are written. This is a ledger/audit-log-only
+task — no code file is touched here; T028/T029 implement what this entry authorizes.
+
+**D-39 — why curriculum node attributes are additive metadata, not a new table.** FR-019 requires
+`curriculum.md` node attributes to be extended to carry a JF can-do id, an Irodori lesson ref, and
+a Tae Kim section ref, "with removal/orphan semantics defined in the same change. No new table, no
+new tool." The existing importer already has exactly the mechanism this needs, documented at
+`intelligence.py:104-107`: `item` and `item_edge` are **source-of-truth** tables, so the import is
+additive — item rows upsert with `COALESCE(existing, new)` so a curated field is never clobbered
+by a stub, edges insert `ON CONFLICT DO NOTHING`, and "`item` and `item_edge` are source-of-truth
+tables, so this import is additive: an edge deleted from `curriculum.md` is *reported* as an orphan
+and left alone. Drop-and-rebuild is the derived-table rule and applying it here would delete the
+learner's hand-made edges along with the file's." The three new attribute tags are columns/fields
+on the same `item` node rows that edges already live beside — they carry exactly the same
+provenance risk an edge does (a human can delete the line in `curriculum.md` without meaning to
+delete the underlying fact), so they get exactly the same treatment: additive on import, and if a
+tag disappears from a re-parsed `curriculum.md`, the importer reports it as an **orphan** (logged,
+surfaced to the learner/operator) and the row's existing tag value is **left alone**, never
+deleted. No new table is needed because the tags are attributes of a node that already has a row;
+no new tool is needed because the existing curriculum-import path is what walks `curriculum.md` in
+the first place. This is not a new doctrine — it is the same doctrine at `intelligence.py:95-114`
+applied to a second kind of node-level fact (an attribute tag) instead of the first kind
+(an edge), for the same reason: source-of-truth data must never be destroyed by an edit to the
+document that merely *describes* it.
+
+**D-40 — why construction state is derived on read, never stored.** FR-021 separates two different
+kinds of progress: vocabulary keeps Anki's SRS decay (Anki owns scheduling, untouched by this
+row), but grammar **constructions** must be "an accuracy-over-attempts trajectory derived from
+existing observation events — no new table, no terminal state, U-shaped dips logged and never
+penalised. Reachability gates output tasks only." A construction is not an item with a due date; it
+is a claim about a learner's trajectory over time, and that trajectory already exists, in full, as
+the sequence of observation events already logged for every attempt at that construction. Storing
+a second, separately-updated "mastery" or "progress" value for the same construction would create
+exactly the failure mode `intelligence.py:104-107`'s additive/no-derived-rebuild split was written
+to prevent for edges: two places claiming to know the same fact, with no mechanical guarantee they
+agree, and no way to tell which one is right when they drift. Deriving accuracy-over-attempts on
+read from the event log keeps the event log the **only** ledger of what happened — the same
+principle the event log's append-only triggers already enforce structurally (Principle III, cited
+in D-38). Concretely: (a) no new table — a construction's state is a query over existing
+observation-event rows, not a row of its own; (b) no terminal state — there is no "mastered" or
+"complete" value ever written anywhere, because a stored terminal state is exactly the kind of
+self-assessment shortcut the project's doctrine bans elsewhere (learner-graded mastery is never
+trusted over mechanically observed behavior); (c) a U-shaped dip — a temporary drop in accuracy
+that is a well-documented interlanguage phenomenon, not regression — is visible in the derived
+trajectory and may be logged/surfaced, but **never** lowers or penalises any gate, because
+penalising a dip would penalise the exact process (restructuring an interim grammar) that produces
+real acquisition; and (d) reachability — the existing i+1 grammar-DAG gate from D-28, walked over
+`prereq` edges only — keeps gating **output/production** tasks only, exactly as it already does,
+and this row does not extend it to comprehension/input tasks: an unreached construction can still
+be heard and read, it simply cannot yet be asked for in a production drill.
+
+**Net effect**: no code changes from this filing. This entry and ledger rows D-39/D-40 are the
+governance step FR-025 requires before T028/T029 (the curriculum-attribute parser and the
+construction-state read-path) are written.
