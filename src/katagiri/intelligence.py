@@ -1549,6 +1549,37 @@ def _existing_curriculum_attrs(conn: sqlite3.Connection) -> set[tuple[str, str]]
     }
 
 
+def _curriculum_tags_for(
+    conn: sqlite3.Connection, ids: Iterable[str]
+) -> dict[str, dict[str, str | None]]:
+    """T028's three external-reference tags, per node id (T032, D-39/D-40).
+
+    Reads the exact ``settings`` rows :func:`import_curriculum` writes (see
+    :data:`CURRICULUM_ATTR_SETTINGS_KEYS`). Every requested id gets an entry —
+    ``None`` for a tag it does not carry — the same "never a missing key" rule
+    :func:`comprehension_debt` and :func:`construction_trajectory` follow, so a
+    caller iterating tags never has to special-case an untagged id.
+    """
+    wanted = sorted({str(raw).strip() for raw in ids if str(raw).strip()})
+    out: dict[str, dict[str, str | None]] = {
+        node_id: dict.fromkeys(CURRICULUM_ATTR_SETTINGS_KEYS, None)
+        for node_id in wanted
+    }
+    if not wanted:
+        return out
+    settings_keys = tuple(CURRICULUM_ATTR_SETTINGS_KEYS.values())
+    id_marks = ",".join("?" * len(wanted))
+    key_marks = ",".join("?" * len(settings_keys))
+    rows = conn.execute(
+        "SELECT scope, key, value FROM settings "
+        f"WHERE scope IN ({id_marks}) AND key IN ({key_marks})",
+        (*wanted, *settings_keys),
+    )
+    for row in rows:
+        out[row["scope"]][_SETTINGS_KEY_TO_ATTR[row["key"]]] = row["value"]
+    return out
+
+
 def _upsert_curriculum_attr(
     conn: sqlite3.Connection, *, item_id: str, attr: str, value: str, updated_ts: str
 ) -> None:
@@ -4104,6 +4135,9 @@ def find_i_plus_one(
     lookup: KnownLookup | None = None,
     score_difficulty: bool = True,
     weights: Mapping[str, float] | None = None,
+    include_curriculum_tags: bool = False,
+    include_trajectory: bool = False,
+    trajectory_window: int = TRAJECTORY_WINDOW,
 ) -> dict[str, Any]:
     """Material that is i+1 on **both** axes, ranked by comprehension debt.
 
@@ -4136,6 +4170,17 @@ def find_i_plus_one(
 
     Reads only — nothing here writes a row or logs an event, not even a record of
     what was considered.
+
+    Two more reports, both additive and both off by default (T032, D-39/D-40):
+    ``include_curriculum_tags=True`` adds ``grammar.tags`` — the T028
+    ``jf_can_do``/``irodori_lesson``/``tae_kim_section`` external-reference tags
+    for the candidate's grammar ids, ``None`` for a tag an id does not carry.
+    ``include_trajectory=True`` adds ``grammar.trajectory`` — per grammar id,
+    :func:`construction_trajectory`'s windowed accuracy sequence
+    (``trajectory_window`` picks the window, default :data:`TRAJECTORY_WINDOW`).
+    Neither is consulted by any gate or by the debt ranking: D-28's two axes and
+    D-40's "no gate reads this" rule are unchanged either way, so a caller that
+    never passes these flags sees byte-for-byte the same result as before T032.
 
     Returns ``{"ok": True, "candidates", "gated", "counts", "gates",
     "ranked_by", "difficulty_datasets", "note"}``. Failure values: :data:`NO_CANDIDATES`,
@@ -4366,6 +4411,24 @@ def find_i_plus_one(
 
     debts = comprehension_debt(conn, sorted(debt_wanted), now=moment)
 
+    # T032: computed once for the whole batch, over the union of every
+    # candidate's canonical grammar ids — same batching reason as
+    # `readability_model`/`frequency_list` above, and both are no-ops (empty
+    # dicts) unless a caller opts in.
+    all_grammar_ids = sorted(
+        {gid for analysis in analysed for gid in analysis["grammar_item_ids"]}
+    )
+    curriculum_tags = (
+        _curriculum_tags_for(conn, all_grammar_ids)
+        if include_curriculum_tags
+        else {}
+    )
+    trajectories = (
+        construction_trajectory(conn, all_grammar_ids, window=trajectory_window)
+        if include_trajectory
+        else {}
+    )
+
     entries: list[dict[str, Any]] = []
     for analysis in analysed:
         candidate: Candidate = analysis["candidate"]
@@ -4421,6 +4484,28 @@ def find_i_plus_one(
                         for entry in analysis["unreachable"]
                     ],
                     "points": list(analysis["reachability"].values()),
+                    **(
+                        {
+                            "tags": {
+                                item_id: curriculum_tags[item_id]
+                                for item_id in analysis["grammar_item_ids"]
+                                if item_id in curriculum_tags
+                            }
+                        }
+                        if include_curriculum_tags
+                        else {}
+                    ),
+                    **(
+                        {
+                            "trajectory": {
+                                item_id: trajectories[item_id]
+                                for item_id in analysis["grammar_item_ids"]
+                                if item_id in trajectories
+                            }
+                        }
+                        if include_trajectory
+                        else {}
+                    ),
                 },
                 "debt": {
                     "total": total_debt,
@@ -4526,6 +4611,8 @@ def find_i_plus_one(
         },
         "ranked_by": RANKED_BY_DEBT,
         "scored_difficulty": bool(score_difficulty),
+        "curriculum_tags_included": bool(include_curriculum_tags),
+        "trajectory_included": bool(include_trajectory),
         "difficulty_datasets": datasets,
         "as_of": moment.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "known_queries": resolver.queries,

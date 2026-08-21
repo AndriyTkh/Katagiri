@@ -1218,6 +1218,9 @@ D_US2_US4_CONTRACT: dict[str, tuple[frozenset[str], frozenset[str]]] = {
                 "candidate_limit",
                 "topic",
                 "score_difficulty",
+                "include_curriculum_tags",
+                "include_trajectory",
+                "trajectory_window",
             }
         ),
     ),
@@ -1404,6 +1407,157 @@ def test_find_i_plus_one_says_so_when_there_is_nothing_to_choose_from(db):
 
     assert result["ok"] is False
     assert result["error"] == "no_candidates"
+
+
+def test_find_i_plus_one_include_curriculum_tags_adds_grammar_tags(db):
+    """006 T032, D-39: an additive report, off by default.
+
+    'g-tagged' carries all three T028 external-reference tags in `settings`;
+    'g-untagged' carries none. include_curriculum_tags=True must surface both
+    — tagged values for the first, None for the second — without touching
+    gating, debt or coverage.
+    """
+    seed_item(db, "g-tagged", kind="grammar")
+    seed_item(db, "g-untagged", kind="grammar")
+    now = f"2026-01-01{TS}"
+    for attr, value in (
+        ("curriculum_jf_can_do", "A1.1"),
+        ("curriculum_irodori_lesson", "L3-1"),
+        ("curriculum_tae_kim_section", "3.2"),
+    ):
+        db.execute(
+            "INSERT INTO settings (scope, key, value, updated_ts) VALUES (?,?,?,?)",
+            ("g-tagged", attr, value, now),
+        )
+
+    result = mcp_server.find_i_plus_one(
+        candidates=[
+            {
+                "text": "猫が好きです。",
+                "id": "s-1",
+                "grammar_ids": ["g-tagged", "g-untagged"],
+            }
+        ],
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        max_unknown_types=None,
+        include_gated=True,
+        include_curriculum_tags=True,
+        score_difficulty=False,
+    )
+
+    assert result["ok"] is True
+    assert result["curriculum_tags_included"] is True
+    entry = (result["candidates"] + result["gated"])[0]
+    assert entry["grammar"]["tags"] == {
+        "g-tagged": {
+            "jf_can_do": "A1.1",
+            "irodori_lesson": "L3-1",
+            "tae_kim_section": "3.2",
+        },
+        "g-untagged": {
+            "jf_can_do": None,
+            "irodori_lesson": None,
+            "tae_kim_section": None,
+        },
+    }
+
+
+def test_find_i_plus_one_include_trajectory_adds_grammar_trajectory(db):
+    """006 T032, D-40: construction_trajectory surfaced through the same knob shape.
+
+    Two clean, unassisted observations against 'g-focus' must show up as
+    attempts=2/clean=2/accuracy=1.0 in grammar.trajectory once
+    include_trajectory=True is passed, and must not appear at all when it is
+    omitted.
+    """
+    seed_item(db, "g-focus", kind="grammar")
+    for i in range(2):
+        db.execute(
+            """
+            INSERT INTO observation (id, ts, session_id, item_id, task_type,
+                                      expected, produced, unassisted,
+                                      coverage_band, rubric_version)
+            VALUES (?, ?, 'test-session', 'g-focus', 'produce', 'X', 'X', 1,
+                    '>=95', 'r1')
+            """,
+            (events.new_ulid(), f"2026-01-0{i + 1}{TS}"),
+        )
+
+    common_kwargs = dict(
+        candidates=[
+            {"text": "猫が好きです。", "id": "s-1", "grammar_ids": ["g-focus"]}
+        ],
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        max_unknown_types=None,
+        include_gated=True,
+        score_difficulty=False,
+    )
+
+    without = mcp_server.find_i_plus_one(**common_kwargs)
+    with_trajectory = mcp_server.find_i_plus_one(
+        include_trajectory=True, **common_kwargs
+    )
+
+    assert without["trajectory_included"] is False
+    without_entry = (without["candidates"] + without["gated"])[0]
+    assert "trajectory" not in without_entry["grammar"]
+
+    assert with_trajectory["trajectory_included"] is True
+    entry = (with_trajectory["candidates"] + with_trajectory["gated"])[0]
+    trajectory = entry["grammar"]["trajectory"]["g-focus"]
+    assert trajectory["attempts"] == 2
+    assert trajectory["clean"] == 2
+    assert trajectory["accuracy"] == 1.0
+
+
+def test_find_i_plus_one_omitting_both_t032_flags_is_unchanged(db):
+    """The additive-only guarantee: default False on both new knobs must not
+    change a single key that existed before T032."""
+    candidates = [
+        {"text": "猫が好きです。", "id": "s-1", "grammar_ids": ["g-plain"]}
+    ]
+    common_kwargs = dict(
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        max_unknown_types=None,
+        include_gated=True,
+        score_difficulty=False,
+    )
+
+    baseline = mcp_server.find_i_plus_one(candidates=candidates, **common_kwargs)
+    explicit_false = mcp_server.find_i_plus_one(
+        candidates=candidates,
+        include_curriculum_tags=False,
+        include_trajectory=False,
+        **common_kwargs,
+    )
+
+    assert baseline == explicit_false
+    entry = (baseline["candidates"] + baseline["gated"])[0]
+    assert "tags" not in entry["grammar"]
+    assert "trajectory" not in entry["grammar"]
+
+
+def test_find_i_plus_one_spec_documents_the_t032_additions():
+    """006 T032: the ToolSpec strings are the contract a caller reads first.
+
+    Mirrors T026's precedent (test_find_i_plus_one_spec_documents_the_
+    production_pool): a new argument and output key must be visible in the
+    registry strings, not only in the code.
+    """
+    spec = get_spec("find_i_plus_one")
+    for name in ("include_curriculum_tags", "include_trajectory", "trajectory_window"):
+        assert name in spec.arg_names
+    assert "tags?" in spec.output
+    assert "trajectory?" in spec.output
+    assert "curriculum_tags_included" in spec.output
+    assert "trajectory_included" in spec.output
+
+    registered = registered_tools()["find_i_plus_one"]
+    assert "include_curriculum_tags" in registered.description
+    assert "include_trajectory" in registered.description
 
 
 def test_find_i_plus_one_production_pool_withholds_the_unanchored_candidate(db):

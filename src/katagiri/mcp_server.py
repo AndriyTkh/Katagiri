@@ -1302,7 +1302,14 @@ def coverage(
         "restricts the pool to A0 production drills: a candidate lacking an "
         "audio anchor, or marked text_only, is withheld with gate reason "
         "'text-only-not-for-A0-production' rather than substituted or "
-        "synthesised; default False leaves the pool unaffected. Reads only."
+        "synthesised; default False leaves the pool unaffected. "
+        "include_curriculum_tags=True (T032, D-39) adds each candidate's "
+        "grammar.tags — the jf_can_do/irodori_lesson/tae_kim_section "
+        "external-reference tags per grammar id, None where untagged. "
+        "include_trajectory=True (T032, D-40) adds grammar.trajectory — per "
+        "grammar id, the windowed accuracy sequence over trajectory_window "
+        "attempts (default 5). Both default False and change nothing about "
+        "gating or ranking. Reads only."
     ),
 )
 def find_i_plus_one(
@@ -1319,6 +1326,9 @@ def find_i_plus_one(
     candidate_limit: int = intelligence.DEFAULT_CANDIDATE_LIMIT,
     topic: str | None = None,
     score_difficulty: bool = True,
+    include_curriculum_tags: bool = False,
+    include_trajectory: bool = False,
+    trajectory_window: int = intelligence.TRAJECTORY_WINDOW,
 ) -> dict[str, Any]:
     logger.debug("find_i_plus_one called")
     with _db() as conn:
@@ -1338,6 +1348,9 @@ def find_i_plus_one(
                 candidate_limit=candidate_limit,
                 topic=topic,
                 score_difficulty=score_difficulty,
+                include_curriculum_tags=include_curriculum_tags,
+                include_trajectory=include_trajectory,
+                trajectory_window=trajectory_window,
             )
         )
 

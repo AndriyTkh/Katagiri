@@ -1190,17 +1190,48 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
                 "every entry. It costs an extra tokenization pass and is "
                 "reported only; False skips it.",
             ),
+            ArgSpec(
+                "include_curriculum_tags",
+                "bool",
+                False,
+                "False (the default) leaves 'grammar' exactly as before. True "
+                "(T032, D-39) adds 'grammar.tags': the jf_can_do/"
+                "irodori_lesson/tae_kim_section external-reference tags per "
+                "grammar id, None for a tag that id does not carry. Reported "
+                "only — never consulted by any gate.",
+            ),
+            ArgSpec(
+                "include_trajectory",
+                "bool",
+                False,
+                "False (the default) leaves 'grammar' exactly as before. True "
+                "(T032, D-40) adds 'grammar.trajectory': per grammar id, the "
+                "windowed accuracy sequence construction_trajectory computes "
+                "over 'trajectory_window' attempts. Reported only — D-40 wires "
+                "no gate to it.",
+            ),
+            ArgSpec(
+                "trajectory_window",
+                "int",
+                False,
+                "Trailing-attempts window construction_trajectory uses when "
+                "include_trajectory=True; positive int, defaults to 5. "
+                "Ignored when include_trajectory is False.",
+            ),
         ),
         output=(
             "{ok, error, note, candidates[{order, id, text, source, accepted, "
             "gated_by, coverage{known_pct, known_ratio, band, counted_tokens, "
             "unknown_types, unknown}, grammar{ids, resolved_from, reachable, "
-            "new, unresolved, unreachable[{id, missing_prereqs}], points}, "
+            "new, unresolved, unreachable[{id, missing_prereqs}], points, "
+            "tags?{id: {jf_can_do, irodori_lesson, tae_kim_section}}, "
+            "trajectory?{id: {attempts, clean, accuracy, points}}}, "
             "debt{total, grammar, vocab, by_item}, difficulty}], gated[...], "
             "counts{offered, accepted, returned, gated, by_reason, "
             "unannotated}, gates{min_coverage_pct, max_unknown_types, "
             "max_new_grammar, min_understanding, require_grammar, "
             "production, reachability_edge_type}, ranked_by, scored_difficulty, "
+            "curriculum_tags_included, trajectory_included, "
             "difficulty_datasets, as_of, known_queries, mastery_queries, "
             "mastered_nodes}"
         ),
@@ -1219,9 +1250,14 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
             "reason 'text-only-not-for-A0-production' in 'gated_by' and "
             "'counts.by_reason' — reported, not substituted or synthesised; "
             "'gates.production' echoes the flag. Default False leaves the pool "
-            "unaffected by audio_source/text_only. Reads only: nothing records "
-            "what was considered. Refuses with 'grammar_dag_cycle' naming the "
-            "cycle rather than answering from a graph that has no answer."
+            "unaffected by audio_source/text_only. include_curriculum_tags and "
+            "include_trajectory (T032) are the same shape of addition: each "
+            "adds one 'grammar' sub-key per candidate, both default False, and "
+            "neither is read by any gate or by the debt ranking — omitting "
+            "both reproduces the pre-T032 output byte for byte. Reads only: "
+            "nothing records what was considered. Refuses with "
+            "'grammar_dag_cycle' naming the cycle rather than answering from a "
+            "graph that has no answer."
         ),
     ),
 )
