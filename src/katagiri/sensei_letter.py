@@ -50,9 +50,11 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import re
 import sqlite3
 import sys
+import tempfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -1172,6 +1174,21 @@ def progress_dir(vault_path: Path | str | None = None) -> Path:
     return base / PROGRESS_DIR_NAME
 
 
+def _os_detail(exc: OSError) -> str:
+    """Why an OS call failed, without the path it failed on.
+
+    Mirrors :func:`katagiri.today_export._os_detail`. A platform ``OSError``
+    stringifies as ``"[Errno 13] Permission denied:
+    'C:\\\\Users\\\\me\\\\Vault\\\\80-progress\\\\...md'"`` — the message carries
+    the filename, which is how the vault root (never logged, see
+    :mod:`katagiri.config`) would reach an error string this module otherwise
+    goes out of its way not to build. ``strerror`` is the same diagnosis with the
+    path left off. An ``OSError`` raised without one — a wrapper's, or a test's —
+    has no path in it either, so falling back to its ``str`` leaks nothing.
+    """
+    return exc.strerror or str(exc) or type(exc).__name__
+
+
 def write_letter(
     conn: sqlite3.Connection,
     vault_path: Path | str | None = None,
@@ -1187,34 +1204,71 @@ def write_letter(
     ``generated: true``. A hand-written progress note is the learner's, and no
     regeneration is worth losing one — the refusal names the file and what to do.
 
+    The write itself goes to a temporary file in the same directory and is moved
+    into place with :func:`os.replace`, which is atomic on every platform this
+    runs on (mirrors :func:`katagiri.today_export.write_today`). Writing in place
+    would truncate first, so a crash mid-write would leave a file with no
+    frontmatter — which the refusal rule above would then read as hand-written,
+    locking the learner out of every future letter here until they deleted it by
+    hand. The safety rule must not be able to trigger on Katagiri's own
+    half-finished output.
+
+    Every refusal below names the file the way :func:`progress_dir` builds it —
+    the vault-relative ``80-progress/<name>``, never the resolved absolute
+    path, which would carry the ``vault_path`` config value into a message that
+    is printed and logged (:mod:`katagiri.config` states that config values are
+    never logged).
+
     On success a ``sensei_letter`` event is appended carrying only the week label
     and the file's basename.
     """
     stats = compute_week_stats(conn, iso_year, iso_week, today=today)
     directory = progress_dir(vault_path)
     target = directory / letter_filename(stats)
+    where = f"{PROGRESS_DIR_NAME}/{target.name}"
 
     if target.exists():
         try:
             existing = target.read_text(encoding="utf-8")
         except OSError as exc:
             raise SenseiLetterError(
-                f"{target} exists but could not be read, so Katagiri cannot tell "
-                f"whether it was generated: {exc}. Move or delete it by hand."
+                f"{where} exists but could not be read, so Katagiri cannot tell "
+                f"whether it was generated ({_os_detail(exc)}). Move or delete "
+                "it by hand."
             ) from exc
         if not is_generated_letter(existing):
             raise SenseiLetterError(
-                f"{target} already exists and does not carry 'generated: true' in "
+                f"{where} already exists and does not carry 'generated: true' in "
                 "its frontmatter, so it is treated as hand-written and left "
                 "alone. Rename or move it if you want a fresh letter here."
             )
 
     body = render_letter(stats)
+    scratch: Path | None = None
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        target.write_text(body, encoding="utf-8", newline="\n")
+        handle, scratch_name = tempfile.mkstemp(
+            dir=directory, prefix=f".{target.name}.", suffix=".tmp"
+        )
+        scratch = Path(scratch_name)
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Atomic on POSIX and on Windows (ReplaceFile semantics): either the old
+        # letter or the whole new one is on disk, never a truncated hybrid.
+        os.replace(scratch, target)
+        scratch = None
     except OSError as exc:
-        raise SenseiLetterError(f"Could not write the letter to {target}: {exc}") from exc
+        raise SenseiLetterError(
+            f"Could not write the letter to {where}: {_os_detail(exc)}"
+        ) from exc
+    finally:
+        if scratch is not None:
+            # The move never happened; leaving a .tmp behind in 80-progress would
+            # be litter the next run has no way to recognise as its own.
+            with contextlib.suppress(OSError):
+                scratch.unlink()
 
     events.append_event(
         conn,
