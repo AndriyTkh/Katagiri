@@ -173,16 +173,28 @@ is a second checkpoint measured separately, never a wall: a katakana gap cannot 
 hiragana-level work.
 
 **The modality ladder** names three rungs and the pack states which one the learner is on
-rather than assuming: **A0** is kana + audio-with-script + shadowing + dictation with zero
-free conversation; **A0→A1** adds listening volume and scripted voice tasks with the text
-still visible; **A1+** is unscripted with the script hidden. Advancing a rung is a gate
-condition, never a reward for a good session.
+rather than assuming. **A0** is kana + audio-with-script + shadowing + dictation with zero
+free conversation. **A0→A1** adds listening volume — more `listen_to_meaning` reps per
+session, longer subtitle-first passes once WATCH unlocks — plus scripted voice tasks with the
+text still visible: anchor sentences read aloud (`meaning_to_speech`/`shadow` items, target in
+view), a line shadowed while looking at its transcript, a cloze item answered aloud with the
+cloze text on screen. **A1+** keeps the same task types and removes the script: the same
+`meaning_to_speech`/`shadow` items answered from the prompt with no transcript shown, and the
+monthly monologue (see Assessment cadence below) recorded with its script hidden rather than
+visible — free recall, not readback. Advancing a rung is a gate condition, never a reward for
+a good session.
 
-**The dose numbers are named as policy, not yet enforced.** ≤8 new words/day, ≤2 new grammar
-points/week, 20–30 minutes of core practice describe the target shape of a day, stated here
-so the pack is honest about what it is not yet doing: nothing refuses an over-dose session
-today, the same way the mining budget above is self-counted rather than server-enforced. A
-later taskgroup (TG2, post-gate) turns these numbers into `add_vocab`/`prescribe()` refusals.
+**The dose numbers are enforced by refusal for new words, and reported for the rest.** ≤8
+new words/day, ≤2 new grammar points/week, 20–30 minutes of core practice describe the target
+shape of a day. `prescribe()` now puts an additive `caps` block on every action
+(`caps.new_words_left`, `caps.grammar_left`, `caps.listening_reps_left`, FR-015), and
+`add_vocab` refuses once `new_words_left` has hit zero — error code `new_word_cap_reached`,
+message "Daily new-word cap reached: `{mined_today}` of 8 words already mined today. Put it
+in the inbox instead (`triage_inbox`) — it keeps until tomorrow's cap resets; this is a
+deferral, not a loss." That is TG2's caps contract and refusal path landing (FR-016).
+`grammar_left` and `listening_reps_left` are computed and shown the same way but carry no
+refusal yet — say so if the learner tests either, rather than treating them as already
+blocked like the word cap.
 
 ## Assessment cadence
 

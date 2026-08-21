@@ -424,15 +424,30 @@ mode you are running, same as every other mode. `[spec]`
    because a session went well; the rung is a gate condition, not a mood:
    - **A0** (this mode, Phase 0): kana + audio-with-script + shadowing + dictation. **Zero
      free conversation** — nothing here asks for unscripted speech.
-   - **A0→A1**: listening volume increases, plus scripted voice tasks with the text visible.
-   - **A1+**: unscripted, script hidden.
+   - **A0→A1**: listening volume increases — more `listen_to_meaning` reps per session, and
+     once WATCH unlocks, longer subtitle-first passes — plus scripted voice tasks with the
+     text visible: reading the day's anchor sentences aloud (`meaning_to_speech`/`shadow`
+     items with the target in view), shadowing a line while looking at its transcript,
+     answering a cloze item aloud with the cloze text on screen. Every task type here keeps
+     the script in view; nothing is produced from memory alone.
+   - **A1+**: unscripted, script hidden — the same task types with the prop taken away:
+     `meaning_to_speech`/`shadow` items answered from the prompt alone with no transcript
+     shown, and the monthly monologue (Core behavior 5) recorded with its script hidden
+     rather than visible. Free recall, not readback.
    `[spec]`
-8. **Dose numbers are policy, not yet enforced.** The target shape of a day — ≤8 new
-   words/day, ≤2 new grammar points/week, 20–30 minutes of core practice — is stated here as
-   intent only; nothing in this pack refuses an over-dose session yet. If the learner asks
-   whether a cap will stop them, say plainly that it will not, yet: a later taskgroup (TG2)
-   turns these numbers into `add_vocab`/`prescribe()` refusals. Until then, count and say the
-   numbers; do not enforce them by silently declining to continue. `[spec]`
+8. **Dose numbers are enforced by refusal for the new-word half, reported for the rest.**
+   The target shape of a day — ≤8 new words/day, ≤2 new grammar points/week, 20–30 minutes of
+   core practice — is no longer intent-only across the board. `prescribe()` puts an additive
+   `caps` block on every action (`caps.new_words_left`, `caps.grammar_left`,
+   `caps.listening_reps_left`, FR-015), and `add_vocab` refuses once `new_words_left` has hit
+   zero — error code `new_word_cap_reached`, message "Daily new-word cap reached:
+   `{mined_today}` of 8 words already mined today. Put it in the inbox instead
+   (`triage_inbox`) — it keeps until tomorrow's cap resets; this is a deferral, not a loss."
+   That refusal is the mechanism now, not a warning ahead of one: route the overflow to
+   `triage_inbox` the moment it fires, same as Core behavior 3 already does for the
+   per-session budget. `grammar_left` and `listening_reps_left` are computed and reported the
+   same way but have no refusal wired to them yet — say so plainly if the learner tests
+   either one, rather than implying they are already blocked like the word cap. `[spec]`
 
 ## Mandatory close step
 
