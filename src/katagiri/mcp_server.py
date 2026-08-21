@@ -1298,7 +1298,11 @@ def coverage(
         "unmastered prerequisite is still refused. Ranked by comprehension "
         "debt; the difficulty-for-me score is reported and never gates. Pass "
         "'candidates' (each with 'text', optionally 'id' and 'grammar_ids') or "
-        "omit it to use the stored sentence items. Reads only."
+        "omit it to use the stored sentence items. production=True (D-38) "
+        "restricts the pool to A0 production drills: a candidate lacking an "
+        "audio anchor, or marked text_only, is withheld with gate reason "
+        "'text-only-not-for-A0-production' rather than substituted or "
+        "synthesised; default False leaves the pool unaffected. Reads only."
     ),
 )
 def find_i_plus_one(
@@ -1309,6 +1313,7 @@ def find_i_plus_one(
     max_new_grammar: int | None = intelligence.DEFAULT_MAX_NEW_GRAMMAR,
     min_understanding: int = intelligence.DEFAULT_MIN_UNDERSTANDING,
     require_grammar: bool = True,
+    production: bool = False,
     include_gated: bool = False,
     top_unknown: int = intelligence.DEFAULT_CANDIDATE_TOP_UNKNOWN,
     candidate_limit: int = intelligence.DEFAULT_CANDIDATE_LIMIT,
@@ -1327,6 +1332,7 @@ def find_i_plus_one(
                 max_new_grammar=max_new_grammar,
                 min_understanding=min_understanding,
                 require_grammar=require_grammar,
+                production=production,
                 include_gated=include_gated,
                 top_unknown=top_unknown,
                 candidate_limit=candidate_limit,

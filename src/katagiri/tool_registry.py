@@ -1145,6 +1145,16 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
                 "its note.",
             ),
             ArgSpec(
+                "production",
+                "bool",
+                False,
+                "False (the default) leaves the pool exactly as before. True "
+                "restricts it to A0 production drills (D-38): a stored item "
+                "without an audio anchor, or one marked text_only, is withheld "
+                "with gate reason 'text-only-not-for-A0-production' rather than "
+                "substituted or synthesised.",
+            ),
+            ArgSpec(
                 "include_gated",
                 "bool",
                 False,
@@ -1190,7 +1200,7 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
             "counts{offered, accepted, returned, gated, by_reason, "
             "unannotated}, gates{min_coverage_pct, max_unknown_types, "
             "max_new_grammar, min_understanding, require_grammar, "
-            "reachability_edge_type}, ranked_by, scored_difficulty, "
+            "production, reachability_edge_type}, ranked_by, scored_difficulty, "
             "difficulty_datasets, as_of, known_queries, mastery_queries, "
             "mastered_nodes}"
         ),
@@ -1204,9 +1214,14 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
             "disappearing changes how material is described, never which "
             "material is offered, and 'difficulty_datasets' says which were "
             "readable. Sealed canary items are never offered and there is no "
-            "override flag (D-26). Reads only: nothing records what was "
-            "considered. Refuses with 'grammar_dag_cycle' naming the cycle "
-            "rather than answering from a graph that has no answer."
+            "override flag (D-26). production=True (D-38) withholds a "
+            "candidate lacking an audio anchor, or marked text_only, with gate "
+            "reason 'text-only-not-for-A0-production' in 'gated_by' and "
+            "'counts.by_reason' — reported, not substituted or synthesised; "
+            "'gates.production' echoes the flag. Default False leaves the pool "
+            "unaffected by audio_source/text_only. Reads only: nothing records "
+            "what was considered. Refuses with 'grammar_dag_cycle' naming the "
+            "cycle rather than answering from a graph that has no answer."
         ),
     ),
 )

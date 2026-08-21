@@ -1212,6 +1212,7 @@ D_US2_US4_CONTRACT: dict[str, tuple[frozenset[str], frozenset[str]]] = {
                 "max_new_grammar",
                 "min_understanding",
                 "require_grammar",
+                "production",
                 "include_gated",
                 "top_unknown",
                 "candidate_limit",
@@ -1403,6 +1404,90 @@ def test_find_i_plus_one_says_so_when_there_is_nothing_to_choose_from(db):
 
     assert result["ok"] is False
     assert result["error"] == "no_candidates"
+
+
+def test_find_i_plus_one_production_pool_withholds_the_unanchored_candidate(db):
+    """006 T026: D-38 through the wire, on top of T024's intelligence.py gate.
+
+    'i-anchored' carries an audio anchor (item.audio_source set, text_only=0);
+    'i-unanchored' has no stored item row at all, which the gate treats the
+    same as a genuinely unanchored one. production=True must accept the first
+    and withhold the second with GATE_NOT_AUDIO_ANCHORED, never substituting
+    or synthesising material for it.
+    """
+    seed_item(db, "i-anchored", kind="sentence")
+    db.execute(
+        "UPDATE item SET audio_source = ?, text_only = 0 WHERE id = ?",
+        ("irodori-u1.mp3", "i-anchored"),
+    )
+
+    result = mcp_server.find_i_plus_one(
+        candidates=[
+            {"text": "猫が好きです。", "id": "i-anchored", "grammar_ids": []},
+            {"text": "犬も好きです。", "id": "i-unanchored", "grammar_ids": []},
+        ],
+        production=True,
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        max_unknown_types=None,
+        include_gated=True,
+        score_difficulty=False,
+    )
+
+    assert result["ok"] is True
+    assert result["gates"]["production"] is True
+    assert [entry["id"] for entry in result["candidates"]] == ["i-anchored"]
+    assert [entry["id"] for entry in result["gated"]] == ["i-unanchored"]
+    assert result["gated"][0]["gated_by"] == ["text-only-not-for-A0-production"]
+    assert result["counts"]["by_reason"]["text-only-not-for-A0-production"] == 1
+
+
+def test_find_i_plus_one_without_production_is_unchanged(db):
+    """Omitting 'production' (or passing False) must match pre-T024 behaviour.
+
+    The same unanchored candidate that gets withheld under production=True is
+    accepted when production is left at its default — the new gate must never
+    fire unless a caller opts in.
+    """
+    candidates = [{"text": "犬も好きです。", "id": "i-unanchored", "grammar_ids": []}]
+    common_kwargs = dict(
+        require_grammar=False,
+        min_coverage_pct=0.0,
+        max_unknown_types=None,
+        include_gated=True,
+        score_difficulty=False,
+    )
+
+    omitted = mcp_server.find_i_plus_one(candidates=candidates, **common_kwargs)
+    explicit_false = mcp_server.find_i_plus_one(
+        candidates=candidates, production=False, **common_kwargs
+    )
+
+    for result in (omitted, explicit_false):
+        assert result["ok"] is True
+        assert result["gates"]["production"] is False
+        assert [entry["id"] for entry in result["candidates"]] == ["i-unanchored"]
+        assert result["gated"] == []
+        assert "text-only-not-for-A0-production" not in result["counts"]["by_reason"]
+
+
+def test_find_i_plus_one_spec_documents_the_production_pool():
+    """006 T026: the ToolSpec string is the contract a caller reads first.
+
+    Mirrors 006 T017/T021's precedent (test_start_session_spec_documents_the_
+    caps_block, test_log_lesson_spec_documents_the_listening_block): a new
+    argument and output key must be visible in the registry strings, not only
+    in the code.
+    """
+    spec = get_spec("find_i_plus_one")
+    assert "production" in spec.arg_names
+    assert "production" in spec.output, "output string is missing gates.production"
+    assert "text-only-not-for-A0-production" in spec.note
+    assert "D-38" in spec.note
+
+    registered = registered_tools()["find_i_plus_one"]
+    assert "production" in registered.description
+    assert "text-only-not-for-A0-production" in registered.description
 
 
 # ---------------------------------------------------------------------------
