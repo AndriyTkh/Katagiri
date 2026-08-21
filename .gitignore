@@ -16,6 +16,16 @@ vendor/*
 !vendor/README.md
 !vendor/CHECKSUMS.sha256
 
+# Tae Kim's Guide to Japanese Grammar (CC BY-NC-SA, committable with
+# attribution -- see vendor/README.md): unlike everything else under vendor/,
+# these extracts are allowed to be tracked, so un-ignore the directory.
+!vendor/taekim/
+!vendor/taekim/**
+
+# Irodori (Japan Foundation) intentionally has no matching negation: custom
+# terms forbid redistribution, so its PDF/MP3 files must stay covered by the
+# vendor/* rule above and never be committed, under any circumstance.
+
 # Test-suite JMdict template cache
 tests/.cache/
 

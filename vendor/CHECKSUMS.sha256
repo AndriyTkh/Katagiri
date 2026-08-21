@@ -15,3 +15,13 @@ c01efb431a7d3d248f16a5162168fd00e9ebf3de82896b5aa8fc9b31ff572eac  vendor/jlpt/n2
 7f14fa7b2e7db45be36480847d61757a2c38bcf66c536d35d7b4bf7f63fc5d3e  vendor/jlpt/n4-vocab-kanji-eng.anki
 d3e3482de309122119b289c9f8b87cbef288e48fbfef800d7a354757fa756b9d  vendor/jlpt/n5-vocab-kanji-eng.anki
 173341dd9a9b6dac16b901757629762237733b7f1823824f92d20b26bd1a40e5  vendor/jreadability/jreadability-1.1.5.tar.gz
+#
+# Irodori (Japan Foundation): no entries here by design. Files are
+# hand-acquired and never committed; scripts/fetch_irodori.py computes and
+# verifies digests locally on request but never writes into this file --
+# do not fabricate an entry for a file that isn't actually present.
+#
+# Tae Kim's Guide to Japanese Grammar (CC BY-NC-SA, committable with
+# attribution): scripts/fetch_taekim.py appended the entry below from a real
+# fetch of https://guidetojapanese.org/learn/grammar.
+c4d26e12b02adbf8c16313bd248a71cc694ff7106ed1d2e0493d19c5d8647717  vendor/taekim/grammar-index.html
