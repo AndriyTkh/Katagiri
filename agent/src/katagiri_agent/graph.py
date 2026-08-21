@@ -43,6 +43,7 @@ from typing import Annotated, Any, Final, Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from katagiri_agent import goal_note as goal_note_module
+from katagiri_agent import resilience
 
 # ---------------------------------------------------------------------------
 # Read-only mirror of src/katagiri/session_tools.py's prescribed-action kinds
@@ -199,6 +200,14 @@ class GraphState(TypedDict, total=False):
     # overwrites a prior entry if that assumption ever changes.
     provenance: Annotated[list[dict[str, Any]], _append]
 
+    # T027b: append-only record of every obsidian-side degradation this run
+    # hit -- spec.md US4 acceptance 3's "states its degradation" applies to
+    # *state*, not only the printed transcript, so a caller inspecting the
+    # final state (not just stdout) can still see it happened. At most one
+    # entry today (only ``read_goal_note`` calls an obsidian tool), but
+    # append-only for the same future-proofing reason as ``provenance``.
+    degraded: Annotated[list[dict[str, Any]], _append]
+
 
 # ---------------------------------------------------------------------------
 # Dependencies: tools (and, only for grading, a model) injected by the caller
@@ -257,20 +266,83 @@ async def _default_grader(state: GraphState) -> dict[str, Any]:
     }
 
 
+def _model_text(response: Any) -> str:
+    """Pull plain text out of whatever a bound chat model's ``ainvoke`` returns.
+
+    Real ``BaseChatModel.ainvoke`` answers with an ``AIMessage`` (a
+    ``.content`` attribute); a test stub is free to just return a plain
+    string. Both shapes are handled without the caller having to care which
+    one it got.
+    """
+    content = getattr(response, "content", response)
+    return content if isinstance(content, str) else str(content)
+
+
+async def _model_grader(model: Any, state: GraphState) -> dict[str, Any]:
+    """T027b: an LLM-backed grade, used when :data:`GraphDeps.model` is set.
+
+    Still guarantees every field :func:`_default_grader` guarantees
+    (``log_observations``' mandatory ``task_type``/``unassisted``/
+    ``coverage_band``/``rubric_version``, never defaulted by that tool) --
+    it starts from :func:`_default_grader`'s deterministic baseline and
+    only *adds* the model's own free-text feedback under
+    ``model_feedback``, rather than trusting the model to reproduce the
+    mandatory shape unassisted. No live network call happens unless the
+    model object handed in actually makes one -- tests inject a stub whose
+    ``ainvoke`` returns a canned response.
+    """
+    baseline = await _default_grader(state)
+    path = state.get("path")
+    result_by_path = {
+        PATH_EXERCISE: state.get("exercise_result"),
+        PATH_REVIEW: state.get("review_result"),
+        PATH_TRIAGE: state.get("triage_result"),
+    }
+    prompt = (
+        "Grade this katagiri study-session result in one short sentence.\n"
+        f"path={path!r}\naction={state.get('action')!r}\n"
+        f"result={result_by_path.get(path)!r}"
+    )
+    response = await model.ainvoke(prompt)
+    grade = dict(baseline)
+    grade["model_feedback"] = _model_text(response)
+    return grade
+
+
 @dataclass(frozen=True, slots=True)
 class GraphDeps:
     """Everything :func:`build_graph` needs beyond the state itself.
 
     ``tools`` is the only required field: a ``name -> tool`` mapping (see
-    :func:`tools_by_name`). ``model`` is accepted for a future LLM-backed
-    grader but is never called by anything T013 wires up. ``grader``
-    overrides :func:`_default_grader` -- inject a stub in tests, or a real
-    rubric grader later, without editing :func:`build_graph`.
+    :func:`tools_by_name`).
+
+    ``grader`` (T013) still overrides grading outright when supplied --
+    inject a stub in tests, or a real rubric grader later, without editing
+    :func:`build_graph`. When ``grader`` is left ``None`` (T027b), the
+    precedence :func:`make_grade_node` / :func:`make_summary_node` follow
+    is: an explicit ``grader`` wins; otherwise a non-``None`` ``model`` is
+    consulted (:func:`_model_grader`, and the model-backed branch of
+    :func:`make_summary_node`); otherwise :func:`_default_grader` and a
+    deterministic summary line -- the same network-free path every
+    pre-T027b test already exercises, unchanged.
+
+    ``reconnect`` (T027b), when supplied, is awaited with the server name
+    (``"katagiri"`` or ``"obsidian"``) between retry attempts inside the
+    resilience layer -- real session re-establishment is the caller's job
+    (this graph has no ``MultiServerMCPClient`` handle of its own); left
+    ``None`` here, retries still back off, they just do not attempt to
+    reconnect a session first.
+
+    ``retry_policy`` (T027b) overrides :data:`resilience.RetryPolicy`'s
+    defaults for every tool call this graph makes -- mainly so tests can
+    use a fast policy instead of sleeping through the real backoff delays.
     """
 
     tools: Mapping[str, Any]
     model: Any | None = None
-    grader: GraderFn = field(default=_default_grader)
+    grader: GraderFn | None = None
+    reconnect: Callable[[str], Awaitable[None]] | None = None
+    retry_policy: resilience.RetryPolicy = field(default_factory=resilience.RetryPolicy)
 
 
 def _require_tool(deps: GraphDeps, name: str) -> Any:
@@ -298,13 +370,114 @@ def _transcript_line(node: str, tool_name: str, args: Mapping[str, Any]) -> str:
     return line
 
 
+def _classify_empty_vault_result(result: Any) -> resilience.EmptyResult | None:
+    """``vault_read``'s "missing note" shape -> a **successful empty** answer.
+
+    Never an exception (spec.md US4 acceptance 3's third injection): a
+    ``None``/blank-string result, or a dict explicitly reporting
+    ``found: False`` (the shape the Obsidian Local REST API plugin's
+    404-for-missing-note response takes, and the exact shape T015's
+    scripted-injection test drives), is classified here so
+    :func:`resilience.resilient_call` returns an
+    :class:`resilience.EmptyResult` instead of raising. Anything else (a
+    real, non-empty result) passes through unclassified.
+    """
+    if result is None:
+        return resilience.EmptyResult(
+            server="obsidian", tool="vault_read", reason="no result returned", payload=result
+        )
+    if isinstance(result, str) and not result.strip():
+        return resilience.EmptyResult(
+            server="obsidian", tool="vault_read", reason="empty note content", payload=result
+        )
+    if isinstance(result, dict) and result.get("found") is False:
+        reason = str(result.get("error") or result.get("path") or "note not found")
+        return resilience.EmptyResult(
+            server="obsidian", tool="vault_read", reason=reason, payload=result
+        )
+    return None
+
+
 async def _call_tool(
     deps: GraphDeps, node: str, name: str, args: Mapping[str, Any]
 ) -> tuple[Any, str]:
+    """Call a **katagiri** tool through the resilience layer. Never degrades.
+
+    Every katagiri call this graph makes (``start_session``,
+    ``gen_exercise``, ``find_i_plus_one``, ``stage_untrusted``,
+    ``confirm_untrusted``, ``triage_inbox``, ``log_lesson``,
+    ``log_observations``) has no "continue without katagiri" fallback --
+    katagiri *is* the custom server this whole flow exists to exercise, so
+    a classified failure here (:class:`resilience.TransportError` /
+    :class:`resilience.AuthError` / :class:`resilience.ToolCallError`)
+    always propagates after :func:`resilience.resilient_call`'s retries are
+    exhausted. Only the existing server's ``vault_read`` call
+    (:func:`_call_obsidian_tool`) can degrade.
+    """
     tool = _require_tool(deps, name)
     line = _transcript_line(node, name, args)
-    result = await tool.ainvoke(dict(args))
+
+    async def do_call() -> Any:
+        return await tool.ainvoke(dict(args))
+
+    async def reconnect() -> None:
+        if deps.reconnect is not None:
+            await deps.reconnect("katagiri")
+
+    result = await resilience.resilient_call(
+        server="katagiri",
+        tool=name,
+        call=do_call,
+        reconnect=reconnect if deps.reconnect is not None else None,
+        policy=deps.retry_policy,
+    )
     return result, line
+
+
+async def _call_obsidian_tool(
+    deps: GraphDeps, node: str, name: str, args: Mapping[str, Any]
+) -> tuple[Any, str, resilience.Degraded | None]:
+    """Call an **obsidian** tool (today: only ``vault_read``) via ``call_or_degrade``.
+
+    Three distinguishable outcomes, by type/shape only, never by
+    string-matching (spec.md US4):
+
+    1. A real result -- returned as-is, ``degraded`` is ``None``.
+    2. A missing note -- :func:`_classify_empty_vault_result` recognises it,
+       so the returned value is a :class:`resilience.EmptyResult`
+       (successful-empty, not an exception), ``degraded`` is still ``None``.
+    3. The existing server never comes back after
+       :data:`GraphDeps.retry_policy`'s retries are exhausted -- the
+       returned value is ``None`` and ``degraded`` is a
+       :class:`resilience.Degraded`, which the caller (:func:`make_read_goal_note`)
+       turns into an explicit ``state["degraded"]`` entry and a katagiri-only
+       continuation, per spec.md US4 acceptance 3. :class:`resilience.AuthError`
+       and any other real failure still propagate -- only transport
+       exhaustion degrades.
+    """
+    tool = _require_tool(deps, name)
+    line = _transcript_line(node, name, args)
+
+    async def do_call() -> Any:
+        return await tool.ainvoke(dict(args))
+
+    async def reconnect() -> None:
+        if deps.reconnect is not None:
+            await deps.reconnect("obsidian")
+
+    result, degraded = await resilience.call_or_degrade(
+        server="obsidian",
+        tool=name,
+        call=do_call,
+        is_empty_result=_classify_empty_vault_result if name == "vault_read" else None,
+        reconnect=reconnect if deps.reconnect is not None else None,
+        policy=deps.retry_policy,
+    )
+    if degraded is not None:
+        degraded_line = f"[{node}] {degraded.message()}"
+        print(degraded_line)
+        return None, f"{line} -- {degraded.message()}", degraded
+    return result, line, None
 
 
 # ---------------------------------------------------------------------------
@@ -337,9 +510,22 @@ def make_read_goal_note(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dic
             line = f"[read_goal_note] skipped: no goal_note_path set (state={state!r})"
             print(line)
             return {"goal_note": None, "goal_note_status": None, "transcript": [line]}
-        result, line = await _call_tool(
+        result, line, degraded = await _call_obsidian_tool(
             deps, "read_goal_note", "vault_read", {VAULT_READ_PATH_ARG: path}
         )
+        if degraded is not None:
+            # spec.md US4 acceptance 3: state the degradation, do not hide
+            # it and do not crash the run -- continue katagiri-only, with
+            # no goal_theme to pass through (there is nothing left to parse).
+            return {
+                "goal_note": None,
+                "goal_theme": None,
+                "goal_note_status": None,
+                "transcript": [line],
+                "degraded": [
+                    {"node": "read_goal_note", "server": degraded.server, "reason": degraded.reason}
+                ],
+            }
         parsed = goal_note_module.parse_goal_note(result, note_path=path)
         status_line = f"[read_goal_note] frontmatter status={parsed.status!r}: {parsed.detail}"
         print(status_line)
@@ -524,15 +710,30 @@ def make_triage_path(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dict[s
 def make_grade_node(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dict[str, Any]]]:
     """Grade node: turn whichever path result exists into a scored observation.
 
-    Calls no tool itself (grading is a judgement about the material a path
-    already fetched, not a katagiri call), so its transcript line names the
+    Calls no katagiri tool itself (grading is a judgement about the
+    material a path already fetched), so its transcript line names the
     grader instead of a tool -- the requirement is "name what happened",
     and here that is the callable, not a wire call.
+
+    Precedence (T027b): an explicit ``deps.grader`` always wins (T013's
+    original override point, e.g. a test stub); otherwise a non-``None``
+    ``deps.model`` is consulted via :func:`_model_grader`, which does make a
+    real model call in production; otherwise :func:`_default_grader`'s
+    deterministic, network-free stand-in -- the exact path every
+    pre-T027b test already exercises, unchanged when no model is supplied.
     """
 
     async def grade_node(state: GraphState) -> dict[str, Any]:
-        grade = await deps.grader(state)
-        grader_name = getattr(deps.grader, "__name__", repr(deps.grader))
+        if deps.grader is not None:
+            grader = deps.grader
+            grade = await grader(state)
+        elif deps.model is not None:
+            grader = _model_grader
+            grade = await _model_grader(deps.model, state)
+        else:
+            grader = _default_grader
+            grade = await _default_grader(state)
+        grader_name = getattr(grader, "__name__", repr(grader))
         line = f"[grade_node] graded via {grader_name}({{'path': {state.get('path')!r}}}) -> {grade!r}"
         print(line)
         return {"grade": grade, "transcript": [line]}
@@ -589,23 +790,42 @@ def make_close_session(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dict
     return close_session
 
 
-def make_summary_node() -> Callable[[GraphState], Awaitable[dict[str, Any]]]:
+def make_summary_node(deps: GraphDeps) -> Callable[[GraphState], Awaitable[dict[str, Any]]]:
     """Final node: one human-readable line, no tool call.
 
     Not a tool call, so its transcript line names what it *did* instead --
     "synthesized summary" -- so the "every node emits a transcript line"
     requirement holds for every node, not only the tool-calling ones.
+
+    T027b: the deterministic baseline is always built first (same fields,
+    same shape as before this task) -- when ``deps.model`` is set, the
+    model is given that baseline plus the grade and asked to phrase the
+    final summary; its text (via :func:`_model_text`) replaces the
+    deterministic string. ``deps.model is None`` reproduces the exact
+    pre-T027b behaviour, unchanged.
     """
 
     async def summary_node(state: GraphState) -> dict[str, Any]:
         action = state.get("action") or {}
-        summary = (
+        baseline = (
             f"session={state.get('session_id')} kind={action.get('kind')} "
             f"path={state.get('path')} lesson_id="
             f"{(state.get('lesson') or {}).get('lesson_id')} "
             f"observations_written={(state.get('observations') or {}).get('written')}"
         )
-        line = f"[summary_node] synthesized summary (no tool called): {summary}"
+        if deps.model is not None:
+            prompt = (
+                "Write one short human-readable summary line for this "
+                "completed katagiri study session.\n"
+                f"baseline={baseline!r}\ngrade={state.get('grade')!r}\n"
+                f"degraded={state.get('degraded')!r}"
+            )
+            response = await deps.model.ainvoke(prompt)
+            summary = _model_text(response)
+            line = f"[summary_node] synthesized summary (model-backed): {summary}"
+        else:
+            summary = baseline
+            line = f"[summary_node] synthesized summary (no tool called): {summary}"
         print(line)
         return {"summary": summary, "transcript": [line]}
 
@@ -622,6 +842,8 @@ def build_graph(
     *,
     model: Any | None = None,
     grader: GraderFn | None = None,
+    reconnect: Callable[[str], Awaitable[None]] | None = None,
+    retry_policy: resilience.RetryPolicy | None = None,
     checkpointer: Any | None = None,
 ) -> Any:
     """Build and compile the diagnostic-branch graph (T013).
@@ -635,8 +857,21 @@ def build_graph(
 
     ``checkpointer`` is accepted (not required) so T015's ``SqliteSaver``
     can be threaded through later without another signature change here.
+
+    ``grader`` is passed through raw (T027b) -- ``None`` is not coerced to
+    :func:`_default_grader` here any more; :func:`make_grade_node` owns the
+    grader/model/default precedence documented on :class:`GraphDeps`.
+    ``reconnect`` and ``retry_policy`` (T027b) are threaded straight into
+    :class:`GraphDeps`; a ``None`` ``retry_policy`` keeps
+    :data:`resilience.RetryPolicy`'s real-world defaults.
     """
-    deps = GraphDeps(tools=tools, model=model, grader=grader or _default_grader)
+    deps = GraphDeps(
+        tools=tools,
+        model=model,
+        grader=grader,
+        reconnect=reconnect,
+        retry_policy=retry_policy or resilience.RetryPolicy(),
+    )
 
     workflow: StateGraph[GraphState] = StateGraph(GraphState)
     workflow.add_node("read_goal_note", make_read_goal_note(deps))
@@ -646,7 +881,7 @@ def build_graph(
     workflow.add_node("triage_path", make_triage_path(deps))
     workflow.add_node("grade_node", make_grade_node(deps))
     workflow.add_node("close_session", make_close_session(deps))
-    workflow.add_node("summary_node", make_summary_node())
+    workflow.add_node("summary_node", make_summary_node(deps))
 
     workflow.add_edge(START, "read_goal_note")
     workflow.add_edge("read_goal_note", "open_session")
