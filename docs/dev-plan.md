@@ -364,3 +364,9 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
 - 2026-08-21 — specs/006 TG7 T040: worksheet read-back confirmed wired through the existing
   GET-only `vault_file` MCP tool (`redact(obsidian_proxy.read_vault_file(path))`) — no new
   ToolSpec, no new parameter, no contract change.
+- 2026-08-21 — specs/004 Phase E T001: `stop_gate_status` D6 confirmed FAIL (0 study days
+  since the 2026-08-20 reset, no probe battery). Started anyway under D-42's isolation-scoped
+  waiver: implementation proceeds on a dedicated `phase-e` branch/worktree set, merges never
+  reach `master` or any `006-*` lane, and TG-E5 (E-verify) stays blocked until D6 truly
+  passes. No consumption-mix evidence exists post-reset; channel order default (mpv-first,
+  US1) unchanged.
