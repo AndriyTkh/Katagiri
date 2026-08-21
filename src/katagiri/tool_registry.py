@@ -1262,8 +1262,74 @@ _PHASE_D_SPECS: Final[tuple[ToolSpec, ...]] = (
     ),
 )
 
+# Phase E — the media overlay: what the learner is currently watching or
+# listening to, reported through the channel interface every backend (mpv,
+# and later asbplayer/mokuro/lyrics) implements identically. Backed by
+# katagiri.media_channel (the envelope-enforcing interface all channels
+# share) and, for this first channel (E-T005/T006), katagiri.media_mpv.
+#
+# Every text field a channel reports — a subtitle line, a title — is text
+# outside Katagiri wrote, so both tools here answer with the full envelope
+# (text, digest, provenance, the untrusted note) instead of a bare string a
+# caller could mistake for an instruction (D-22, FR-006). 'active=false' is
+# the normal "nothing playing / channel unreachable" answer, never an error.
+_PHASE_E_SPECS: Final[tuple[ToolSpec, ...]] = (
+    ToolSpec(
+        name="media_now",
+        summary=(
+            "What is on screen right now on the active media channel: title "
+            "and playhead position, enveloped."
+        ),
+        args=(),
+        output=(
+            "{ok, active, note, channel, media_id, anchor_ms, displayed_text, "
+            "title, updated_ts} — displayed_text/title are null or "
+            "{text, untrusted (always true), note, digest, envelope_id, "
+            "envelope_version, chars, provenance{source, locator, "
+            "retrieved_ts, detail}}; active=false (channel/media_id/"
+            "anchor_ms/displayed_text/title all null) means nothing is "
+            "currently playing or the channel is unreachable, not an error"
+        ),
+        stability="experimental",
+        note=(
+            "E-T007: the channel behind this tool is mpv (katagiri.media_mpv "
+            "over its JSON IPC named pipe); the output shape is the same for "
+            "every later channel (asbplayer, mokuro, lyrics) — they only add "
+            "to which 'channel' value can appear. Every call also persists "
+            "the probe into the single `media_heartbeat` row (media_channel's "
+            "one liveness mechanism), so a caller never has to poll a second "
+            "tool to know this answer's freshness. Reads only: nothing here "
+            "writes to the event log."
+        ),
+    ),
+    ToolSpec(
+        name="media_context",
+        summary=(
+            "The subtitle/lyric window around the current playhead on the "
+            "active media channel, enveloped."
+        ),
+        args=(),
+        output=(
+            "{ok, active, note, channel, media_id, anchor_ms, "
+            "lines[{text, start_ms, end_ms}]} — each line's 'text' is the "
+            "same envelope shape as media_now's displayed_text/title; an "
+            "empty 'lines' means nothing is currently displayed, not an "
+            "error; active=false means the channel is unreachable or "
+            "nothing is playing"
+        ),
+        stability="experimental",
+        note=(
+            "E-T007, same channel as media_now. For mpv this is exactly the "
+            "one subtitle line mpv currently has on screen (media_mpv.py's "
+            "documented MVP scope: mpv exposes no 'N lines around this one' "
+            "property) — a faithful subset of the eventual multi-line "
+            "window, never a fabricated one. Reads only."
+        ),
+    ),
+)
+
 TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
-    _PHASE_A_SPECS + _PHASE_B_SPECS + _PHASE_C_SPECS + _PHASE_D_SPECS
+    _PHASE_A_SPECS + _PHASE_B_SPECS + _PHASE_C_SPECS + _PHASE_D_SPECS + _PHASE_E_SPECS
 )
 
 TOOL_SPECS_BY_NAME: Final[dict[str, ToolSpec]] = {
