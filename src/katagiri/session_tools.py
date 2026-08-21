@@ -7,7 +7,8 @@ teaches. The teaching loop is: open a session and be told **one** thing to do,
 do it, and have what happened land in the log in a shape that can be counted
 later. This module is that loop's write surface: :func:`start_session`,
 :func:`log_lesson`, :func:`lessons`, :func:`log_observations`,
-:func:`log_error`, :func:`add_vocab`, :func:`triage_inbox`.
+:func:`log_error`, :func:`add_vocab`, :func:`log_listening`,
+:func:`triage_inbox`.
 
 Three rules shape every function here.
 
@@ -86,7 +87,13 @@ from katagiri.envelope import (
     make_excerpt,
     wrap,
 )
-from katagiri.events import STUDY_LOG_TYPE, append_event, new_ulid, utc_now_stamp
+from katagiri.events import (
+    STUDY_LOG_TYPE,
+    append_event,
+    new_ulid,
+    normalize_stamp,
+    utc_now_stamp,
+)
 from katagiri.logging_setup import get_logger
 from katagiri.normalizer import is_han_char, is_kana_char
 
@@ -264,6 +271,9 @@ INVALID_COVERAGE_BAND: Final = "invalid_coverage_band"
 MISSING_RUBRIC_VERSION: Final = "missing_rubric_version"
 INVALID_SEVERITY: Final = "invalid_severity"
 INVALID_PITCH: Final = "invalid_pitch"
+#: :func:`log_listening`'s ``reps`` refusal: not a positive int. Reps are never
+#: zero-filled to look measured, so a bad value is refused rather than clamped.
+INVALID_REPS: Final = "invalid_reps"
 INBOX_TOO_LARGE: Final = "inbox_too_large"
 NOTHING_TO_TRIAGE: Final = "nothing_to_triage"
 #: FR-015's daily new-word dose cap (:data:`MAX_NEW_WORDS_PER_DAY`), reached.
@@ -2365,6 +2375,165 @@ def add_vocab(
 
 
 # ---------------------------------------------------------------------------
+# log_listening
+# ---------------------------------------------------------------------------
+
+
+def log_listening(
+    conn: sqlite3.Connection,
+    *,
+    source: str | Envelope,
+    reps: int,
+    session_id: str | None = None,
+    ts: str | None = None,
+    tz: str | None = None,
+) -> dict[str, Any]:
+    """Log one listening block: reps of known audio, not minutes.
+
+    D-37 (docs/decisions-ledger.md) and FR-017 (spec.md): the input strand's
+    listening blocks append to the **existing** ``study_session`` event series
+    — no second unread channel — under a deterministic dedupe-key namespace,
+    ``listen:<normalised ts>``, distinct by construction from the importer's
+    ``study:<normalised ts>`` keys (:func:`katagiri.events.import_study_log`).
+    The two prefixes are different strings compared by exact match on
+    ``dedupe_key``, so a listening-block write and a later re-run of the
+    importer over the same day can never collide or double-count.
+
+    The logged metric is **reps of known audio** — replay count against an
+    audio-anchored item, e.g. 10 replays of one 40-second Irodori dialogue —
+    never minutes: ``minutes`` is not a key in this payload at all, never
+    zero-filled to look measured, so a reps-only log makes no minutes claim
+    and changes no day-qualification arithmetic (the D6 stop-gate, D-19 and
+    D-33 are untouched).
+
+    ``source`` is the identity of the known recording being replayed. Until
+    TG4 lands an audio-anchor reference (FR-018), this is just the source
+    string the learner names (e.g. an Irodori lesson/dialogue label); once an
+    anchor exists, a later lane can extend this additively rather than
+    replacing it. ``source`` is learner-authored, so it is trusted text and
+    takes a plain string — but it also accepts an :class:`Envelope`, in which
+    case the echo-back ceremony is enforced like every other field here.
+
+    ``ts`` is the moment the listening happened, in the loose ISO-8601 shape
+    :func:`katagiri.events.normalize_stamp` accepts (the same shape the
+    importer normalises ``ts`` fields from). It defaults to now. Passing it
+    explicitly is what lets a caller re-log the same block and observe the
+    no-op — the dedupe key is derived from it, not from wall-clock time — and
+    is the testability hook sibling tools expose as ``today``/``opened_ts``.
+
+    Idempotent the way :func:`katagiri.events.import_study_log` is: calling
+    this twice with a ``ts`` that normalises to the same second is a no-op the
+    second time — ``append_event`` absorbs the ``UNIQUE`` violation on
+    ``dedupe_key`` and hands back the first call's event id, and the returned
+    ``duplicate`` flag says so.
+    """
+    answer = _base(
+        {
+            "event_id": None,
+            "session_id": None,
+            "source": None,
+            "listening_reps": None,
+            "ts": None,
+            "duplicate": False,
+            "untrusted": {},
+        }
+    )
+    try:
+        provenance: dict[str, dict[str, Any]] = {}
+
+        def field(
+            name: str,
+            value: str | Envelope | None,
+            *,
+            required: bool = False,
+        ) -> str | None:
+            resolved = _resolve_text(
+                name,
+                value,
+                required=required,
+            )
+            _merge_provenance(provenance, name, resolved)
+            return resolved.value
+
+        # Before any envelope is unwrapped, for the same reason as ``pitch``
+        # in :func:`add_vocab`: this looks at nothing but ``reps`` itself, and
+        # a refusal after the unwrap would burn a confirmation the retry needs.
+        if reps is None:
+            raise MissingRequiredField("reps")
+        if isinstance(reps, bool) or not isinstance(reps, int) or reps <= 0:
+            raise InvalidFieldValue(
+                "reps must be a positive integer replay count. Minutes are "
+                "never recorded here, and reps are never zero-filled or "
+                "guessed to look measured — an unknown count is not logged.",
+                code=INVALID_REPS,
+                field="reps",
+            )
+
+        source_text = str(field("source", source, required=True))
+
+        stamp_input = ts if ts is not None else utc_now_stamp()
+        try:
+            stamp = normalize_stamp(str(stamp_input))
+        except ValueError as exc:
+            raise SessionToolError(
+                str(exc), code=INVALID_TIMESTAMP, field="ts"
+            ) from exc
+    except (SessionToolError, EnvelopeError) as exc:
+        return _refused(answer, exc)
+
+    dedupe_key = f"listen:{stamp}"
+    session = _session_or_synthetic(session_id, "listen", stamp)
+
+    before = conn.execute(
+        "SELECT 1 FROM event WHERE dedupe_key = ?", (dedupe_key,)
+    ).fetchone()
+
+    event_id = append_event(
+        conn,
+        type=STUDY_LOG_TYPE,
+        session_id=session,
+        ts_device=stamp,
+        tz=tz,
+        dedupe_key=dedupe_key,
+        payload={
+            "listening_reps": reps,
+            "source": source_text,
+            "untrusted": provenance or None,
+        },
+    )
+    duplicate = before is not None
+
+    _log.info(
+        "listening logged: session=%s reps=%d source_len=%d duplicate=%s",
+        session,
+        reps,
+        len(source_text),
+        duplicate,
+    )
+
+    notes = []
+    if duplicate:
+        notes.append(
+            "Already logged for this timestamp; nothing new was written."
+        )
+    untrusted_note = _untrusted_note(provenance)
+    if untrusted_note:
+        notes.append(untrusted_note)
+
+    return {
+        **answer,
+        "event_id": event_id,
+        "session_id": session,
+        "source": source_text,
+        "listening_reps": reps,
+        "ts": stamp,
+        "duplicate": duplicate,
+        "untrusted": provenance,
+        "note": " ".join(notes),
+    }
+
+
+# ---------------------------------------------------------------------------
 # triage_inbox
 # ---------------------------------------------------------------------------
 
@@ -2699,6 +2868,7 @@ __all__ = [
     "INVALID_COVERAGE_BAND",
     "INVALID_FIELD",
     "INVALID_PITCH",
+    "INVALID_REPS",
     "INVALID_REVISIT_AFTER",
     "INVALID_SEVERITY",
     "INVALID_TIMESTAMP",
@@ -2753,6 +2923,7 @@ __all__ = [
     "lessons",
     "log_error",
     "log_lesson",
+    "log_listening",
     "log_observations",
     "new_session_id",
     "prescribe",
