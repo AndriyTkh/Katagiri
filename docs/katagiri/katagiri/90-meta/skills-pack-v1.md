@@ -173,16 +173,149 @@ is a second checkpoint measured separately, never a wall: a katakana gap cannot 
 hiragana-level work.
 
 **The modality ladder** names three rungs and the pack states which one the learner is on
-rather than assuming: **A0** is kana + audio-with-script + shadowing + dictation with zero
-free conversation; **A0→A1** adds listening volume and scripted voice tasks with the text
-still visible; **A1+** is unscripted with the script hidden. Advancing a rung is a gate
-condition, never a reward for a good session.
+rather than assuming. **A0** is kana + audio-with-script + shadowing + dictation with zero
+free conversation. **A0→A1** adds listening volume — more `listen_to_meaning` reps per
+session, longer subtitle-first passes once WATCH unlocks — plus scripted voice tasks with the
+text still visible: anchor sentences read aloud (`meaning_to_speech`/`shadow` items, target in
+view), a line shadowed while looking at its transcript, a cloze item answered aloud with the
+cloze text on screen. **A1+** keeps the same task types and removes the script: the same
+`meaning_to_speech`/`shadow` items answered from the prompt with no transcript shown, and the
+monthly monologue (see Assessment cadence below) recorded with its script hidden rather than
+visible — free recall, not readback. Advancing a rung is a gate condition, never a reward for
+a good session.
 
-**The dose numbers are named as policy, not yet enforced.** ≤8 new words/day, ≤2 new grammar
-points/week, 20–30 minutes of core practice describe the target shape of a day, stated here
-so the pack is honest about what it is not yet doing: nothing refuses an over-dose session
-today, the same way the mining budget above is self-counted rather than server-enforced. A
-later taskgroup (TG2, post-gate) turns these numbers into `add_vocab`/`prescribe()` refusals.
+**The dose numbers are enforced by refusal for new words, and reported for the rest.** ≤8
+new words/day, ≤2 new grammar points/week, 20–30 minutes of core practice describe the target
+shape of a day. `prescribe()` now puts an additive `caps` block on every action
+(`caps.new_words_left`, `caps.grammar_left`, `caps.listening_reps_left`, FR-015), and
+`add_vocab` refuses once `new_words_left` has hit zero — error code `new_word_cap_reached`,
+message "Daily new-word cap reached: `{mined_today}` of 8 words already mined today. Put it
+in the inbox instead (`triage_inbox`) — it keeps until tomorrow's cap resets; this is a
+deferral, not a loss." That is TG2's caps contract and refusal path landing (FR-016).
+`grammar_left` and `listening_reps_left` are computed and shown the same way but carry no
+refusal yet — say so if the learner tests either, rather than treating them as already
+blocked like the word cap.
+
+## Assessment cadence
+
+Three standing checks run on a clock, independent of mode, and fire from the mandatory close
+step rather than being invented mid-lesson. They are policy here; the operational detail
+(exact scoring, the pitch-marking text format, the recording format) lives in
+[[70-drills/assessment-cadence]]. *(spec, 006 FR-022)*
+
+**Weekly mora-count dictation.** One Irodori audio line, heard once, transcribed to kana with
+no lookups, scored mora-by-mora against the source. A wrong mora count (long/short vowel
+confusion, a dropped or inserted geminate っ, ん miscounted) and a devoicing miss (です/ます-
+class environments, per the l1-profile) reuse the **existing** `mora-length` and
+`devoiced-vowels` `log_error` pattern names — the same two E2/E4 already put in the pack, now
+given a weekly checkpoint instead of an ad hoc one. Distinct from KANA's daily dictation
+(Phase 0, agent-spoken, kana taught so far): this is post-Phase-0 and runs on real recorded
+audio. Closes with the reserved slug `topic: "weekly-mora-dictation"`, the same mechanism
+KANA's `phase0-kana-dictation` slug already established for letting a later gate count
+artifact kinds mechanically rather than guessing from prose.
+
+**Weekly five-word pitch-pattern marking.** Five words, kana only, marked with the `[0]`/`[n]`
+drop notation already used in [[35-phonology/pitch-accent]] — text-only, no audio, no
+synthesis anywhere in the loop. Checked against the vendored kanjium accent number via
+`lookup`'s `pitch` field, never from memory. A mismatch carrying the l1-profile's predicted
+length-creep tell reuses `mora-length`; a pitch-height-only mismatch has no existing pattern
+to reuse honestly and stays in the session's observation note rather than being forced into
+one. This is the exercise that eventually trips **F-02** (VOICEVOX TTS, deferred until
+"minimal-pair perception training enters the curriculum" per spec.md's deferred-triggers
+table) — until that fires it stays perception-only by design, not as a stopgap. Closes with
+`topic: "weekly-pitch-marking"`.
+
+**Monthly 60-second monologue.** Roughly 60 seconds, script visible or hidden per the
+modality-ladder rung, saved under the vault at `80-progress/monologues/` as `.mp3`/`.wav` —
+never under `local/` or `.derived/`, which the vault snapshot always skips. Backed up the
+moment it lands, because `VAULT_SNAPSHOT_EXTENSIONS` already carries both extensions (FR-007,
+widened in TG0/T005) — no follow-up task has to remember to widen anything. Trend is a
+comparison, not a re-listen-and-guess: length in seconds and a disfluency count against the
+prior month's numbers for the same slot, in the closing observation. Closes with
+`topic: "monthly-monologue"`.
+
+**Still open**: none of the three has a real logged instance yet — the fixture-level check
+that they are actually measurable through existing tools, with no new tool or table, is a
+separate task (006 T036). This section states the policy the fixtures will exercise, not a
+claim that a week or month has already produced one.
+
+## Kanji policy
+
+Kanji at A0–A1 is **recognition only**, budgeted per topic against the words the learner
+already says, with furigana decaying per item. *(spec, 006 FR-023)*
+
+**Production is refused as out of policy, and the tools already agree.** This is the rare rule
+that needed no enforcement work, because nothing in the pack can produce a kanji drill in the
+first place: `gen_exercise` builds its candidate pool from `DRILLABLE_KINDS = ("word",
+"sentence", "grammar")` and `kind = 'kanji'` is simply not in it, while `add_vocab` only ever
+inserts `kind = 'word'`. There is no tool that mints a kanji card, in any direction. So the
+refusal the pack states out loud — handwriting practice, write-the-character drills, kanji
+production prompts are out of policy at this level — describes what the system actually is,
+rather than a discipline the agent has to keep. The one adjacent lever that *does* exist is
+`item.production_eligible = 0`, the receptive-only flag: such an item yields nothing in
+`meaning_to_speech` / `cloze_production` / `shadow` and is skipped by `build_sentences` with the
+reason `receptive_only`. A kanji-heavy word that should be read but never said uses that
+column. Nothing here needs a new flag.
+
+**The budget is the topic's known spoken words, and "spoken" is load-bearing.** The topic key is
+`item.home_topic` — the same key `gen_exercise(topic=…)` already narrows on — and the admissible
+kanji for a topic are exactly the characters standing in the `item.kanji` field of that topic's
+word items that `known_set.is_known = 1` already calls known. Qualification runs through a
+spoken direction: `listen_to_meaning` or `meaning_to_speech`, the two `primary_directions` in
+[[90-meta/settings]] and two of the five values the `event.direction` column permits. A word
+known only through `read_to_meaning` — settings' `lazy_directions`, with `reading_as_goal:
+false` — does not buy its kanji, because reading the word is what the character is *for* and
+letting reading qualify it would make the budget circular.
+
+**Never JLPT order.** The `item.jlpt` column exists and is descriptive metadata, never a sort
+key. Ordering inside the admissible set is by how often the learner actually says the words a
+character spells, then by shared components — [[10-course/curriculum]] §"Phase 4 — Kanji" calls
+this "a personalized, component-ordered list of characters you *already say every day*", and
+[[90-meta/settings]] promises under `kanji_enabled` that the system can "order them by *your*
+usefulness rather than by JLPT level". That promise is the whole point of deferring kanji to
+month 4–6 instead of opening an N5 deck in week one.
+
+**The honest computation.** `known_set_stats` takes no arguments, so its `by_kind` word count is
+a global ceiling, not a per-topic figure, and no tool today returns a topic-filtered known
+count. The per-topic number is therefore assembled from `known_word` calls over the topic's word
+surfaces, and the pack requires the agent to say it was assembled that way rather than dressing
+it up as a tool's answer — the same labelling discipline Core behavior 2 applies to its coverage
+estimate. An `ambiguous=true` reply (a surface matching several items, returned with candidates
+and no verdict) is not a qualifying word until the learner says which item they meant.
+
+**Furigana decay has three rungs and no column.** Script rendering is a setting, never storage —
+[[ARCHITECTURE]]'s rule and the storage-vs-rendering principle in [[90-meta/settings]], where
+`furigana_mode: unknown_only` already says it "uses known_set: gloss only the kanji you haven't
+learned yet." The stages are read off existing state at render time:
+
+| Stage | Derived from |
+|---|---|
+| **always** | not found, `is_known=false`, or an ambiguous surface with no verdict; grammar item rated below 3 |
+| **first occurrence only** | known by the learner's own manual mark (`source='manual'`), or known-and-`suspect`; grammar item rated 3–4 |
+| **off** | known through the Anki mirror's maturity rule (`source='anki'`, `ivl >= 21`), not suspect; grammar item rated 5 |
+
+Each rung is a field that was already there for its own reasons. `source` is `'manual'` exactly
+when the latest manual mark is `known`/`unknown` and `'anki'` otherwise, which turns
+assertion→demonstrated-retention into a real ladder rung instead of an invented one. `suspect`
+is deliberately kept out of `is_known` — "a suspicion is a reason to look again, not a verdict",
+as both `known.py` and the view's own comment put it — which is precisely a
+one-glance-per-page state. `understanding` is the 1–5 self-rating the schema restricts to
+grammar items, and 3 is `DEFAULT_MIN_UNDERSTANDING` ("can use it with effort"), already the
+threshold reachability treats as mastery alongside the known set. For a word or kanji item
+`understanding` is NULL and the stage comes from `is_known`/`suspect` alone.
+
+Two consequences the pack states rather than hides. The stage is recomputed every render, so it
+moves **both** ways: a `mark_unknown` or `mark_suspect` puts furigana back on, and the agent says
+that is the derivation working, not a demotion. And because the latest manual mark wins over the
+mirror in the view, an item marked known by hand reports `source='manual'` even when its Anki
+card is mature, pinning it at *first occurrence only* instead of *off* — a conservatism that
+errs toward more furigana, which is the safe direction, and which is never to be "fixed" by
+overriding a stage by hand. Hand-setting a stage is the one thing forbidden outright: not off as
+a reward for a good session, not back on because a session felt hard. A stored stage column
+would make both possible, which is the reason there isn't one.
+
+**Phase 0 overrides all of it**: `kanji_enabled: false`, furigana always, no budget — there are
+no known spoken words yet to tie one to. The ladder starts after the kana gate.
 
 ## What v1 still does not know
 

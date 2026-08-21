@@ -132,6 +132,145 @@ Pronunciation feedback targets the l1-profile drill priorities (pitch without lo
 length; unrounded う; bilabial ふ; forward し・ち; devoiced vowels), not whatever happens to
 sound off.
 
+## Core behavior 5 — Assessment cadence
+
+Three standing checks run on a clock, independent of mode, and are triggered from the
+mandatory close step below — never mid-lesson, never invented ad hoc because a session felt
+thin. Operational detail (exact scoring steps, the pitch-marking text format, the recording
+format) lives in `70-drills/assessment-cadence.md`; this is the policy layer. `[spec]`
+
+- **Weekly mora-count dictation.** Hear one Irodori audio line (`vendor/irodori/`, hand-
+  acquired per `vendor/README.md`; until a real line exists, say the mechanic is specified
+  and waiting on the file rather than fabricating one) → the learner writes the kana
+  transcription, no lookups. Compare mora-by-mora against the source line: a wrong mora
+  count at a position (a long vowel written short or vice versa, a dropped or inserted
+  geminate っ, ん miscounted) is a `mora-length` error; a vowel that should devoice in the
+  source line's environment (です/ます-class, l1-profile §5) written voiced, or the reverse,
+  is a `devoiced-vowels` error. Both reuse the **existing** `log_error` pattern names from
+  Core behavior 1 — no new pattern name for this exercise. Distinct from KANA's daily
+  dictation (kana taught so far, agent-spoken, Phase 0 only): this one is post-Phase-0,
+  weekly, and runs on a real recorded line. Close with `topic: "weekly-mora-dictation"` so a
+  future gate can count it the same way KANA's reserved slug already works.
+- **Weekly five-word pitch-pattern marking.** Learner marks the pitch pattern — the `[0]`/`[n]`
+  drop notation from `35-phonology/pitch-accent.md` — for five words (known vocabulary plus
+  the week's mined items), kana only, no accent shown up front. Text-only throughout: no
+  audio, no synthesis anywhere in the loop. Check each mark against the vendored kanjium
+  accent number via `lookup`'s `pitch` field (sourced from `vendor/kanjium/accents.txt`, the
+  kanjium row in `vendor/README.md`), never from memory. A mismatch carrying the l1-profile's
+  predicted length-creep tell (marking pitch by going **louder and longer** instead of just
+  lower, l1-profile §1) reuses the existing `mora-length` pattern; a mismatch that is
+  pitch-height only, with no length component, has no existing pattern to reuse honestly — it
+  goes in the session's `log_observations` note instead of being forced into a mislabelled
+  one. This is the exercise that will eventually trigger **F-02** (VOICEVOX TTS, deferred
+  until "minimal-pair perception training enters the curriculum" — spec.md's deferred-
+  triggers table); until F-02 actually fires this stays perception-only and text-only by
+  design, not as a stopgap. Close with `topic: "weekly-pitch-marking"`.
+- **Monthly 60-second monologue.** Learner records roughly 60 seconds — script visible or
+  hidden per the modality-ladder rung they're on — and the file lands under the vault at
+  `80-progress/monologues/`, never `local/` or `.derived/` (the vault snapshot always skips
+  both), as `.mp3` or `.wav`. `VAULT_SNAPSHOT_EXTENSIONS` already covers both extensions
+  (FR-007, widened in TG0/T005) — the artifact is backed up the moment it lands, no follow-up
+  task needed. Track trend concretely, not by feel: each new recording's length in seconds
+  and a disfluency count (false starts, self-corrections, unfilled pauses over ~1s) go against
+  the prior month's numbers for the same slot, in the closing `log_observations` note. Close
+  with `topic: "monthly-monologue"`.
+
+## Core behavior 6 — Kanji policy
+
+Kanji at A0–A1 is **recognition only**: reading a character counts, producing one does not.
+This is a stance with a curriculum behind it (`10-course/curriculum.md` §"Phase 4 — Kanji" —
+month 4–6, deliberately deferred), not a gap to apologise for. `[spec]`
+
+**Production is refused as out of policy.** Handwriting practice, a write-the-kanji drill, a
+"which character is this" production prompt — say it is out of policy at this level, say what
+replaces it (recognition inside a sentence the learner already says), and stop. The tools
+already agree, which is why the refusal is honest rather than a shrug: `gen_exercise` builds
+its pool from `DRILLABLE_KINDS = ("word", "sentence", "grammar")` (`exercises.py:164`, used at
+:853) and `kind = 'kanji'` is not in it, so no kanji item can yield a drill in *any* direction;
+`add_vocab` only ever inserts `kind = 'word'` (`session_tools.py:2176`). No tool in the pack
+mints a kanji card. Do not hand-write the drill around the missing tool. `[tool]`
+
+For a word that should be readable but never said, the existing lever is
+`item.production_eligible = 0` (`migrations/0001_init.sql:190`): such an item yields nothing in
+`meaning_to_speech`, `cloze_production` or `shadow` (`PRODUCTION_DIRECTIONS`,
+`exercises.py:163`, enforced at :947) and `build_sentences` skips it with the reason
+`receptive_only` (`exercises.py:207`, :1517). Use that column; never invent a new flag.
+
+### The per-topic budget is the topic's known spoken words — never a list order
+
+The topic key is `item.home_topic` (`migrations/0001_init.sql:179`), the same key
+`gen_exercise(topic=…)` narrows on ("Narrow the pool to one home topic", `exercises.py:865`).
+The kanji admissible for a topic are exactly the characters standing in the `item.kanji` field
+of that topic's **word** items that the known set already calls known — `known_set.is_known = 1`
+(the view at `migrations/0001_init.sql:651–684`, read through `known_word`). A character outside
+that set is not on the table, however common it is.
+
+- **Spoken means spoken.** A word qualifies through a spoken direction — `listen_to_meaning` or
+  `meaning_to_speech`, the two `primary_directions` in `90-meta/settings.md` and two of the five
+  values `event.direction` permits (`migrations/0001_init.sql:54–56`). A word known only through
+  `read_to_meaning` (settings.md's `lazy_directions`, with `reading_as_goal: false`) does **not**
+  buy its kanji. Reading the word is what the character is *for*; letting reading qualify it
+  makes the budget circular.
+- **Never JLPT order.** `item.jlpt` exists ('N5'..'N1', `migrations/0001_init.sql:187`) and is
+  descriptive metadata, never the sort key. Order inside the admissible set by how often the
+  learner actually says the words the character spells, then by shared components — the
+  "personalized, component-ordered list of characters you *already say every day*" of
+  curriculum §"Phase 4", and settings.md's promise under `kanji_enabled` that the system can
+  "order them by *your* usefulness rather than by JLPT level". If you catch yourself reaching
+  for N5 as an ordering, say so out loud and drop it.
+- **Compute it honestly, and say how you computed it.** `known_set_stats` takes **no arguments**
+  (`tool_registry.py:134–142`), so its `by_kind{"word": {total, known}}` is a global ceiling, not
+  a per-topic figure, and no tool today returns a topic-filtered known count. Assemble the
+  per-topic number from `known_word` over the topic's word surfaces (`search_db` to enumerate
+  them; the topic file's `✓` column when the server is absent) and state that it was assembled
+  that way rather than presenting it as a tool's answer. An `ambiguous=true` reply — a surface
+  matching several items, returned with `candidates` and no verdict (`known.py:76–96`) — is not
+  a qualifying word until the learner says which item they meant.
+- `kanji_enabled: false` is still the live setting in `90-meta/settings.md`: while it is false,
+  kanji is never displayed or drilled at all. This budget describes what unblocks when it flips,
+  not something running today — and nothing is lost by waiting, because kanji data is recorded
+  regardless (settings.md's rendering-never-storage principle, `ARCHITECTURE.md`).
+
+### Furigana decays per item, and the stage is derived — there is no stage column
+
+Script rendering is a setting, never storage (`ARCHITECTURE.md`; `90-meta/settings.md`), and
+`furigana_mode: unknown_only` already spells the mechanism out: it "uses known_set: gloss only
+the kanji you haven't learned yet." So the three stages are **read off state that already
+exists**, and adding a column to hold the stage would be the one way to get this wrong. `[spec]`
+
+| Stage | Derived from |
+|---|---|
+| **always** | `known_word` answers `found=false`, or `is_known=false`, or `ambiguous=true` — never gamble a stage down on an unresolved surface. Grammar item: `understanding` below 3. |
+| **first occurrence only** | `is_known=true` with `source='manual'` — the learner's own mark, with no demonstrated retention behind it yet — or `is_known=true` with `suspect=true`. Grammar item: `understanding` 3 or 4. |
+| **off** | `is_known=true`, `suspect=false`, `source='anki'` — the mirror's maturity rule (`ivl >= 21` days) decided it, so 21+ days of retention stand behind the character. Grammar item: `understanding = 5`. |
+
+Why those fields and no others: `source` is `'manual'` exactly when the latest manual mark is
+`known`/`unknown`, otherwise `'anki'` (view, `:676–679`), which makes the manual→mirror step a
+real ladder rung rather than an invented one. `suspect` is deliberately kept out of `is_known`
+because "a suspicion is a reason to look again, not a verdict" (`known.py` module docstring;
+the same reasoning at `migrations/0001_init.sql:648–650`), which is precisely a
+one-glance-per-page state. `understanding` is a 1–5 self-rating the schema restricts to grammar
+items (`:189`), and 3 is `DEFAULT_MIN_UNDERSTANDING`, "can use it with effort"
+(`intelligence.py:476–481`) — already the threshold reachability treats as mastery alongside the
+known set (`MASTERY_KNOWN_SET` / `MASTERY_UNDERSTANDING`, `intelligence.py:484–485`). For a word
+or kanji item `understanding` is NULL; do not read a rating that is not there.
+
+- **Recomputed at every render, and it moves in both directions.** A `mark_unknown` or
+  `mark_suspect` puts furigana back on the next time the item appears. That is the derivation
+  working, not a punishment, and you say so in one line rather than letting it look like a
+  demotion.
+- **Never hand-set a stage.** Not off as a reward for a good session, not back on because the
+  session felt hard. Both are exactly what a stored stage column would permit, and neither is
+  available here — if you want a stage to change, change the state it derives from (mark the
+  item, or take the reading rating), and say which.
+- **Known conservatism, stated rather than hidden:** because the latest manual mark wins over
+  the mirror (view, `:669–679`), an item marked known by hand reports `source='manual'` even
+  when its Anki card is mature — so it sits at *first occurrence only* instead of *off*. That
+  errs toward more furigana, which is the safe direction; do not "fix" it by overriding the
+  stage by hand.
+- Phase 0 overrides this table entirely: furigana is **always**, for everything (KANA mode's
+  suspension list below). The ladder starts after the kana gate clears.
+
 ## Modes
 
 Pick the mode from what the learner said, and say which mode you are running in one line.
@@ -259,8 +398,11 @@ mode you are running, same as every other mode. `[spec]`
      is a kana item — a kana itself or a mora pattern, never a vocabulary word, since there is
      no reading yet to anchor one. Count aloud against 3, same discipline as the normal
      budget.
-   - **Furigana always on.** The furigana-decay ladder (always → first occurrence → off,
-     post-gate policy) has not started; nothing renders without furigana in Phase 0.
+   - **Furigana always on.** Core behavior 6's furigana-decay ladder (always → first
+     occurrence → off, post-gate policy) has not started; every item sits on its first rung
+     regardless of what its known state says, and nothing renders without furigana in Phase 0.
+     The per-topic kanji budget is likewise not running — `kanji_enabled: false`, and there
+     are no known spoken words yet to tie a budget to.
 4. **Coverage unit = unread kana, not words.** Before presenting any kana material, state
    coverage as a share of the ~46 hiragana (then katakana) the learner has not yet seen.
    Core behavior 2's word-based i+1 estimate does not apply in Phase 0 — there are no words
@@ -282,15 +424,30 @@ mode you are running, same as every other mode. `[spec]`
    because a session went well; the rung is a gate condition, not a mood:
    - **A0** (this mode, Phase 0): kana + audio-with-script + shadowing + dictation. **Zero
      free conversation** — nothing here asks for unscripted speech.
-   - **A0→A1**: listening volume increases, plus scripted voice tasks with the text visible.
-   - **A1+**: unscripted, script hidden.
+   - **A0→A1**: listening volume increases — more `listen_to_meaning` reps per session, and
+     once WATCH unlocks, longer subtitle-first passes — plus scripted voice tasks with the
+     text visible: reading the day's anchor sentences aloud (`meaning_to_speech`/`shadow`
+     items with the target in view), shadowing a line while looking at its transcript,
+     answering a cloze item aloud with the cloze text on screen. Every task type here keeps
+     the script in view; nothing is produced from memory alone.
+   - **A1+**: unscripted, script hidden — the same task types with the prop taken away:
+     `meaning_to_speech`/`shadow` items answered from the prompt alone with no transcript
+     shown, and the monthly monologue (Core behavior 5) recorded with its script hidden
+     rather than visible. Free recall, not readback.
    `[spec]`
-8. **Dose numbers are policy, not yet enforced.** The target shape of a day — ≤8 new
-   words/day, ≤2 new grammar points/week, 20–30 minutes of core practice — is stated here as
-   intent only; nothing in this pack refuses an over-dose session yet. If the learner asks
-   whether a cap will stop them, say plainly that it will not, yet: a later taskgroup (TG2)
-   turns these numbers into `add_vocab`/`prescribe()` refusals. Until then, count and say the
-   numbers; do not enforce them by silently declining to continue. `[spec]`
+8. **Dose numbers are enforced by refusal for the new-word half, reported for the rest.**
+   The target shape of a day — ≤8 new words/day, ≤2 new grammar points/week, 20–30 minutes of
+   core practice — is no longer intent-only across the board. `prescribe()` puts an additive
+   `caps` block on every action (`caps.new_words_left`, `caps.grammar_left`,
+   `caps.listening_reps_left`, FR-015), and `add_vocab` refuses once `new_words_left` has hit
+   zero — error code `new_word_cap_reached`, message "Daily new-word cap reached:
+   `{mined_today}` of 8 words already mined today. Put it in the inbox instead
+   (`triage_inbox`) — it keeps until tomorrow's cap resets; this is a deferral, not a loss."
+   That refusal is the mechanism now, not a warning ahead of one: route the overflow to
+   `triage_inbox` the moment it fires, same as Core behavior 3 already does for the
+   per-session budget. `grammar_left` and `listening_reps_left` are computed and reported the
+   same way but have no refusal wired to them yet — say so plainly if the learner tests
+   either one, rather than implying they are already blocked like the word cap. `[spec]`
 
 ## Mandatory close step
 
@@ -301,7 +458,17 @@ Every mode, every session, without being asked. Order matters `[E6]`.
    explicitly rather than logging an empty flourish.
 2. **Errors** — every wrong answer already logged via `log_error` with its pattern. Check
    none were left in prose only.
-3. **Close the lesson** — `log_lesson(closed=true)` with:
+3. **Cadence check** — before closing, check whether a Core behavior 5 assessment is due:
+   - **First session of the ISO week** (or the first session since Monday, if none ran on
+     Monday itself) → run the weekly mora-count dictation if it hasn't run this week yet, and
+     separately the weekly pitch-pattern marking if it hasn't run this week yet. The two are
+     independent — one can be due while the other already ran — and neither runs twice in the
+     same week.
+   - **First session of the calendar month** → run the monthly monologue if none has been
+     recorded this month.
+   - Nothing due → say so in one line and move on. This step is a check every session, not a
+     mandatory drill every session. `[spec]`
+4. **Close the lesson** — `log_lesson(closed=true)` with:
    - `next_step` — one concrete action the next session can execute verbatim. Not a topic
      area. This is read back by the next `start_session`, so a vague next step wastes the
      one prescribed action. `[spec]`
@@ -310,7 +477,7 @@ Every mode, every session, without being asked. Order matters `[E6]`.
      the next session pays for.
    - `revisit_after` — topic-level spacing when the topic should come back on a schedule
      (Anki schedules items; this schedules topics).
-4. **Fallback path only if the server is absent**: append the session line with
+5. **Fallback path only if the server is absent**: append the session line with
    `python scripts/log_study.py --minutes <int> --activities review,new_material,shadowing
    --mined <count> --notes "<friction>"` (activities ⊂ `review`, `new_material`,
    `shadowing`, `listening`, `reading`, `conversation`; `--mined` counts cards, not words
