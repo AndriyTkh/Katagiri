@@ -222,6 +222,89 @@ connection, which is orthogonal to everything this recording exercises.
 Re-run Step 5's second `netstat` check afterward to confirm you know
 which state you're back in before recording anything.
 
+### Step 9 — Pre-approve Windows Defender / firewall prompts (T026)
+
+Do this **before** the first rehearsal on any machine/profile pair that has
+not run the demo stack before -- never for the first time mid-recording. A
+Defender/SmartScreen "Do you want to allow this app..." dialog or a firewall
+"Windows Defender Firewall has blocked some features of this app" prompt
+appearing mid-take costs that segment's timing budget (see the 5-segment
+table in `docs/assignment/defence-script.md`) and looks unpolished on
+camera.
+
+1. Run Step 10's pre-flight script once, **in full** (without `--skip-live`)
+   -- this alone drives one real stdio spawn of `katagiri.mcp_server` and
+   one real HTTPS round trip to the demo Obsidian instance, which is
+   exactly what would otherwise trigger a first-run prompt during the
+   actual recording.
+2. Approve any prompt that appears:
+   - A firewall prompt for `python.exe` reaching `127.0.0.1:<demo port>` --
+     choose **Allow access** for both Private and Public networks (this is
+     loopback-only traffic; there is no external exposure either way).
+   - A Defender/SmartScreen prompt for running the katagiri or agent
+     interpreter -- allow it once; Windows remembers the decision for that
+     exact executable path.
+3. Re-run Step 10 a second time and confirm every check now passes clean
+   with **no prompt appearing** -- that repeat, silent pass is the actual
+   evidence this step is done, not the first run (which is expected to be
+   the one that surfaces the prompt).
+
+### Step 10 — Run the pre-flight script (T026)
+
+Run this immediately before **every** recording -- rehearsal and the
+graded take alike -- after Steps 1-8 (demo Obsidian window open, plugin
+enabled, `KATAGIRI_CONFIG` set) and after Step 9 has been done at least
+once on this machine.
+
+From the repo root, using katagiri's own venv:
+
+```
+C:\ProjectsC\RandomPr\Katagiri\.venv\Scripts\python.exe scripts\preflight_demo.py
+```
+
+It runs six checks, in this order, and prints one `[PASS]`/`[FAIL]` line
+for each:
+
+1. **Demo port bound and distinct from 27123** -- reads `OBSIDIAN_MCP_URL`
+   (agent/.env or this shell's environment), rejects it outright if the
+   port is `27123` (the personal instance's port), then confirms something
+   is actually listening on the configured port.
+2. **No stale katagiri/agent processes** -- enumerates `python.exe`
+   processes (PowerShell `Get-CimInstance Win32_Process`) and flags any
+   whose command line still mentions `katagiri.mcp_server` or
+   `katagiri_agent` from a previous, not-cleanly-exited run.
+3. **Required env keys present** -- presence only, **no value is ever
+   printed**: `KATAGIRI_CONFIG` in this shell's environment, plus
+   `KATAGIRI_PYTHON`, the Obsidian transport keys, and the OpenRouter keys
+   in `agent/.env` (checked by shelling out to the agent venv's own
+   `katagiri_agent.config` builders and catching `ConfigError` -- the same
+   presence check the agent itself would fail on, never duplicated logic).
+4. **The T011 isolation guard** -- runs `tests/test_demo_isolation.py`
+   for real via a `pytest` subprocess (reused, not duplicated) and requires
+   it to pass.
+5. **Checkpoint DB directory writable** -- `agent/scratch/checkpoints.sqlite`
+   by default (override with `KATAGIRI_AGENT_CHECKPOINT_DB`); creates the
+   directory if missing and probes it with a throwaway file, never
+   touching an existing checkpoint DB directly.
+6. **One real tool-call round-trip per connection** -- `ping` against
+   katagiri over stdio, `vault_list` against the demo Obsidian instance
+   over Streamable HTTP. If the demo Obsidian window is not open yet, this
+   is an expected **FAIL** with an actionable line telling you to open it
+   -- not a crash.
+
+Exits `0` only when every check passes. On any failure it reprints one
+actionable line per failed check at the end and exits non-zero -- act on
+each line and re-run rather than proceeding into the recording.
+
+`--skip-live` runs only the first five (offline) checks -- port, processes,
+env presence, isolation guard, checkpoint dir -- with no MCP round-trip, so
+the script itself (or a machine's static setup) can be sanity-checked
+without the demo Obsidian window open. It is a debugging aid, **never** a
+substitute for the full run immediately before recording: the two live
+round-trip checks are exactly the ones that catch "the Obsidian window
+isn't open" or "the wrong OpenRouter key is in `agent/.env`" before they
+cost a take.
+
 ## Reachable states (T016)
 
 `_seed_demo_state` (`scripts/build_demo_db.py`) writes two things on top of
@@ -297,7 +380,5 @@ under `agent/tests` regardless, and for how it builds its scratch DB (schema
 
 ## What comes later (not this task)
 
-- **Pre-flight + Windows Defender section**: added by T026
-  (`scripts/preflight_demo.py`), appended below this runbook's numbered
-  steps once that script exists — do not duplicate its content here in
-  advance.
+- **Pre-flight + Windows Defender section**: done — see Steps 9-10 above
+  (`scripts/preflight_demo.py`, T026).
