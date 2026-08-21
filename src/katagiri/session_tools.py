@@ -90,6 +90,12 @@ from katagiri.events import append_event, new_ulid, utc_now_stamp
 from katagiri.logging_setup import get_logger
 from katagiri.normalizer import is_han_char, is_kana_char
 
+# katagiri.intelligence is deliberately *not* imported at module scope: it
+# imports COVERAGE_BANDS back from this module, and a top-level import here
+# would make the two modules a circular pair that fails on whichever one
+# happens to load first. :func:`_curriculum_action` imports it locally instead
+# — by the time any function runs, both modules have finished loading.
+
 _log = get_logger("session_tools")
 
 # ---------------------------------------------------------------------------
@@ -142,6 +148,7 @@ ACTION_TIRED_MODE: Final = "tired_mode_minimum"
 ACTION_NEXT_STEP: Final = "continue_next_step"
 ACTION_REVISIT_TOPIC: Final = "revisit_topic"
 ACTION_RESOLVE_THREAD: Final = "resolve_thread"
+ACTION_CURRICULUM_TOPIC: Final = "curriculum_topic"
 ACTION_OPEN_FIRST_LESSON: Final = "open_first_lesson"
 
 ACTION_KINDS: Final[tuple[str, ...]] = (
@@ -149,6 +156,7 @@ ACTION_KINDS: Final[tuple[str, ...]] = (
     ACTION_NEXT_STEP,
     ACTION_REVISIT_TOPIC,
     ACTION_RESOLVE_THREAD,
+    ACTION_CURRICULUM_TOPIC,
     ACTION_OPEN_FIRST_LESSON,
 )
 
@@ -951,6 +959,74 @@ def _unresolved_action(conn: sqlite3.Connection) -> dict[str, Any] | None:
     )
 
 
+def _curriculum_action(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    """The most foundational reachable grammar point that has no lesson yet.
+
+    Reachability is :func:`katagiri.intelligence.grammar_reachability`'s verdict,
+    unchanged: a ``prereq``-only walk, mastery via the known set or
+    ``item.understanding``, sealed items never offered (intelligence.py, "The
+    i+1 gate"). A mastered point is not a topic to open a lesson for; a point
+    with an unmastered prerequisite is not yet reachable, however useful it
+    would eventually be. Among what is left, the point with the smallest prereq
+    closure is offered first — the curriculum's own idea of "next", not a guess
+    made here.
+
+    A grammar point that already names some lesson's topic is not offered
+    again: it is either still being tracked by the next-step/revisit/unresolved
+    rungs above, or it was resolved by them, and re-suggesting it here would
+    just repeat one of those under a different name. Returns ``None`` when the
+    curriculum has not been imported (no ``item_edge`` rows at all), when the
+    stored graph has a cycle and so cannot answer reachability, or when nothing
+    reachable and untaught remains — the fallback rung covers all three.
+    """
+    from katagiri.intelligence import (
+        GRAMMAR_KIND,
+        grammar_reachability,
+        load_grammar_dag,
+    )
+
+    dag = load_grammar_dag(conn)
+    if dag.cycle is not None or (not dag.prereqs and not dag.unlocked_by):
+        return None
+    rows = conn.execute(
+        "SELECT id FROM item WHERE kind = ? AND sealed = 0 ORDER BY id ASC",
+        (GRAMMAR_KIND,),
+    ).fetchall()
+    if not rows:
+        return None
+    grammar_ids = [str(row["id"]) for row in rows]
+    taught = {
+        str(row["topic"])
+        for row in conn.execute("SELECT DISTINCT topic FROM lesson").fetchall()
+    }
+    verdicts = grammar_reachability(conn, grammar_ids, dag=dag)
+    candidates = [
+        verdict
+        for grammar_id, verdict in verdicts.items()
+        if not verdict["mastered"]
+        and verdict["reachable"]
+        and grammar_id not in taught
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda verdict: (verdict["closure_size"], verdict["id"]))
+    topic = candidates[0]["id"]
+    return _action(
+        ACTION_CURRICULUM_TOPIC,
+        (
+            f"Open a lesson on {topic}: name its can-do objective, teach to "
+            "it, then close it with log_lesson (next_step included)."
+        ),
+        (
+            f"{topic} is reachable — every prerequisite in its closure is "
+            "mastered — and no lesson has touched it yet. It is the "
+            "curriculum's next point, not a pick from a list."
+        ),
+        topic=topic,
+        source="curriculum_reachability",
+    )
+
+
 def prescribe(
     conn: sqlite3.Connection, *, tired: bool = False, today: str | None = None
 ) -> dict[str, Any]:
@@ -963,15 +1039,20 @@ def prescribe(
        close, read at open),
     3. the most overdue **topic revisit**,
     4. the oldest open **unresolved thread**,
-    5. otherwise: **open a lesson** and define the objective.
+    5. the most foundational reachable, untaught **curriculum topic** (FR-014:
+       read from curriculum reachability),
+    6. otherwise: **open a lesson** and define the objective.
 
     Order is deliberate. A declared tired session overrides everything because
     the alternative is no session at all. Next step outranks a due revisit
     because it is the more specific instruction — the learner already decided
     what should happen next, while the revisit date was arithmetic. Both outrank
-    an open thread, which has no date and so is never late. The fallback names
-    the one thing that is always available, so the answer is never a menu and
-    never empty.
+    an open thread, which has no date and so is never late. The curriculum rung
+    outranks the fallback because it names a specific, reachable point instead
+    of leaving the objective undefined — but it ranks below the first three
+    because those are about something already started, and finishing what was
+    started beats starting something new. The fallback names the one thing
+    that is always available, so the answer is never a menu and never empty.
 
     Exposed separately from :func:`start_session` so the choice can be inspected
     (and tested) without appending an event.
@@ -988,6 +1069,7 @@ def prescribe(
         _next_step_action(conn),
         _revisit_action(conn, day),
         _unresolved_action(conn),
+        _curriculum_action(conn),
     ):
         if candidate is not None:
             return candidate
@@ -2471,6 +2553,7 @@ def triage_inbox(
 
 
 __all__ = [
+    "ACTION_CURRICULUM_TOPIC",
     "ACTION_KINDS",
     "ACTION_NEXT_STEP",
     "ACTION_OPEN_FIRST_LESSON",
