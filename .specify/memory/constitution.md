@@ -1,5 +1,33 @@
 <!--
 Sync Impact Report
+- Version change: 1.3.0 → 1.4.0
+- Amendment: Technology Constraints — the whole-schema-in-one-migration rule (D-12/D-27)
+  gains a scoped exception for migration 0002 (006-teaching-method FR-018): additive
+  audio-anchor columns on `item`/`sentence` (source + timestamp, Irodori MP3 refs) plus a
+  text-only-not-for-A0-production marker. Scope fence: additive columns only — no rename,
+  no drop, no derived-table rebuild, no `user_version` statement in the script (the runner
+  alone stamps it), backup-before-migrate applies unconditionally. The original rule text
+  is unchanged and stays fully binding for every migration other than 0002.
+- Rationale for MINOR (not PATCH): this is a scoped exception to a Technology Constraint,
+  not a mere clarification of it — it lets a real migration file exist that the rule's
+  literal text would otherwise forbid. Rationale for not MAJOR: the rule itself is not
+  removed or redefined — its text stands unedited and remains binding for every case
+  outside the named scope; this is additive guidance layered on top, the same MINOR
+  pattern used for the Principle IV and VI amendments below.
+- Ledger row filed first per Governance's amendment procedure: D-38 (scoped exception to
+  D-12/D-27 for migration 0002, filed before the migration exists — gates 006 T023).
+  Reasoning: docs/audit-log.md "006 TG4 — migration 0002 constitution exception
+  (2026-08-21)".
+- Added sections: none (existing Technology Constraints bullet amended with a following
+  paragraph; no bullet removed).
+- Removed sections: none.
+- Templates status: spec/plan/tasks templates are stock speckit 0.16.4; plan-template's
+  Constitution Check gate now resolves against this document. ✅
+- Follow-up TODOs: none.
+
+---
+
+Sync Impact Report (superseded by the entry above — kept for history)
 - Version change: 1.2.0 → 1.3.0
 - Amendment: Principle IV (Study-First, Gated Progression) — the 006 entry gate addendum
   records a user waiver of its blocking effect. The D-33 criteria (≥10 study days, ≥6
@@ -184,6 +212,19 @@ return plausible stubs. `search_db` is the definitive search; no later "proper" 
   `PYTHONUTF8=1` required.
 - SQLite single-file DB; whole schema shipped in one migration; minimal runner
   (`PRAGMA user_version`, numbered scripts, backup-before-migrate).
+
+**Scoped exception (D-38, 2026-08-21)**: the whole-schema-in-one-migration rule above does not
+survive 006-teaching-method's FR-018 unchanged — Phases A–D already stamped a live database
+holding real learner history (Principle III: the event log is sacred, non-reconstructible), so
+adding the audio-anchor reference cannot be done by rewriting the original migration. **Migration
+0002**, and only migration 0002, is exempted: additive columns on `item`/`sentence` for the
+audio-anchor reference (source + timestamp, Irodori MP3 refs) plus a text-only-not-for-A0-production
+marker. Scope fence — no rename, no drop, no derived-table rebuild, no `PRAGMA user_version`
+statement in the script (the runner alone stamps it), backup-before-migrate applies
+unconditionally, exactly as the existing runner already enforces for every migration. The rule
+above is not repealed: it stands, unedited and fully binding, for every migration other than 0002;
+any future migration proposing a rename, drop, or derived-table rebuild needs its own argued
+exception and ledger row, filed before its code task, the same way this one was.
 - FTS5 dual index: fugashi shadow column (unicode61) + trigram, routed by query length;
   indexed rows carry dict/tokenizer version (D-09).
 - Vendored, checksummed data: full UniDic + kanjium accents; no runtime downloads (D-10).
@@ -219,4 +260,4 @@ materially expanded guidance, PATCH for clarifications. Every plan's Constitutio
 gates against the current version; violations require a Complexity Tracking entry or a
 scope cut.
 
-**Version**: 1.3.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21
+**Version**: 1.4.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21

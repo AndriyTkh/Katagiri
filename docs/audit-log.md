@@ -1310,3 +1310,77 @@ ToolSpec — not to add one under time pressure. Zero new ToolSpecs are expected
 **Net effect**: no code changes from this filing. This entry and ledger row D-37 are the
 governance step FR-025 requires before T019–T021 (the listening-block writer and any read-side
 exposure) land.
+
+## 006 TG4 — migration 0002 constitution exception (2026-08-21)
+
+Session date: 2026-08-21. Filed as ledger D-38, per spec.md FR-018 ("The migration requires a
+stated constitution exception plus a ledger row, filed first") and FR-025's governance-first
+rule: this entry and D-38 land before T023 (the migration file itself) is written. T023 does not
+exist yet — this is the exception that lets it exist.
+
+**Why the whole-schema-in-one-migration rule cannot survive this feature.** D-12 ("whole schema in
+one migration — lexeme, alias, item, event, observation, lesson, media") and D-27 ("all DDL in the
+A1 migration") were decided in round 4/round 5, before any database existed. At that point "one
+migration" was a coherent, satisfiable rule: the schema had no history yet, so writing it once, in
+one file, was strictly better than staging it across several — no runner had to reconcile
+versions, no live data existed to protect. That precondition no longer holds. Phases A through D
+shipped, and the event log — Principle III, "the single non-reconstructible asset" — now holds
+real (if still agent/fixture-only per the Phase D coverage note) history stamped at whatever
+`user_version` migration 0001 left it at. FR-018 needs an audio-anchor reference (source +
+timestamp; Irodori MP3 refs) added to `item`/`sentence`, plus a text-only-not-for-A0-production
+marker. There is no way to add a column to a table that already exists in an already-migrated
+database except a **new** migration — going back and rewriting migration 0001 in place is not an
+option: `db.py`'s own runner (`discover_migrations`, `db.py:178-214`) discovers and orders
+migration files by their `NNNN_name.sql` stamp and refuses duplicate version numbers; rewriting
+0001 after it has already run against someone's database would not touch that database's
+recorded `user_version` at all, and the runner's `migrate()` explicitly refuses to let an older
+build's migration set act on a database a newer build already stamped past it (`db.py:284-293`).
+The "one migration" instruction, taken literally, is now unsatisfiable without either destroying
+existing history or leaving the runner's own consistency guarantees. Something has to give: either
+the rule, or the guarantees it was meant to protect. The exception gives ground on the rule's
+letter while holding its intent.
+
+**Why additive-only + the runner's existing guarantees preserve the rule's intent.** D-12/D-27
+were never really about the number "one" — reading them together with Principle III's derived vs.
+source-of-truth classification, the actual concern is that schema history stay append-only and
+restorable, the same property the event log itself is held to. Migration 0002 preserves that
+property by construction, not by promise:
+- **One transaction per migration, still.** `_apply` (`db.py:317-357`) wraps migration 0002's
+  script in exactly one `BEGIN IMMEDIATE ... COMMIT` the same as migration 0001 did; a mid-script
+  failure rolls back to the pre-0002 state, reported with the exact pre-migration version. Two
+  migration files does not mean two half-applied states are now possible — each file is still
+  atomic on its own.
+- **The runner alone owns the version stamp.** `_validate_script` (`db.py:217-254`) rejects any
+  migration script that itself sets or reads `user_version`, and rejects `BEGIN`/`COMMIT`/`VACUUM`/
+  transaction-control statements in the script text — migration 0002's `.sql` file gets the same
+  validation migration 0001's did. The scope fence below adds "no `user_version` statement" as an
+  explicit, redundant-on-purpose restatement of a check the runner already enforces mechanically.
+- **Backup-before-migrate is unconditional.** `migrate()` (`db.py:273-314`) snapshots via
+  `VACUUM INTO` before applying anything whenever the database is non-empty (`db.py:301-302`,
+  `_backup` at `db.py:381-413`) — a real learner's database, non-empty by definition, always gets
+  a pre-0002 snapshot before the new columns land. Restorability — the property Principle III's
+  "rehearsed restore drill" cares about — is not weakened by there being two migration files
+  instead of one; the snapshot happens before *each* pending migration is applied, not once at
+  the start of time.
+- **Additive-only means nothing already-appended is disturbed.** The scope fence — new nullable
+  columns on `item`/`sentence` only; no rename, no drop, no derived-table rebuild — means existing
+  rows, existing column meanings, and every query written against the pre-0002 schema keep working
+  unchanged. This is the same append-only spirit the event log's `BEFORE UPDATE`/`BEFORE DELETE`
+  triggers enforce in-schema: migration 0002 extends the schema forward, it does not rewrite what
+  came before.
+
+**The scope fence, explicitly.** The exception covers migration 0002 and only migration 0002:
+additive columns for the audio-anchor reference (source + timestamp, Irodori MP3 refs) and a
+text-only-not-for-A0-production marker on `item`/`sentence`. It does not cover, now or by
+precedent: renaming a column or table, dropping a column or table, or rebuilding any derived table
+(FTS, JMdict mirror, Anki mirror — D-27's derived classification already treats those as
+drop-and-rebuild-never-migrated, untouched by this row). A future migration proposing any of those
+still needs its own argued exception and its own ledger row, filed before its code task, exactly as
+this one was. D-12/D-27's text is not edited to read differently for the general case — the
+constitution amendment adds a scoped paragraph recording this exception without touching the
+original rule's wording, so the rule stands, unweakened, for every migration that is not 0002.
+
+**Net effect**: no code changes from this filing (migration 0002 / T023 is a separate task, gated
+open by this entry and ledger row D-38). This entry, D-38, and the constitution's Technology
+Constraints amendment (1.3.0 → 1.4.0) are the governance step FR-018 and FR-025 require before
+T023 is written.
