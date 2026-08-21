@@ -18,13 +18,12 @@ bd close <id>         # Complete work
 
 ### Rules
 
-- **Phases A/B (Obsidian-render and earlier)**: use `bd` for ALL task tracking — do NOT use
-  TodoWrite, TaskCreate, or markdown TODO lists. Run `bd prime` for command reference and
-  session close protocol.
-- **Phases C/D/E**: task tracking is spec-kit (`specs/README.md` is the authoritative workflow
-  doc) — the `specs/NNN-*/tasks.md` checkboxes ARE the task list for this work; do not open
-  competing beads. The `bd prime` SessionStart hook still fires every session; its
-  beads-workflow guidance does not apply to phase C+ work.
+- **All phases**: task tracking is spec-kit (`specs/README.md` is the authoritative workflow
+  doc) — the `specs/NNN-*/tasks.md` checkboxes ARE the task list; do not open competing beads.
+  **Beads retired 2026-08-21** (Phase B closed under D-35; retirement checklist in
+  specs/README.md executed): the beads DB is a read-only archive — `[was:]` refs point into
+  it. A few archived P2/P3 beads (kata-3t7, kata-626, kata-mz2, kata-ph-a.1) may still be
+  referenced by ID and closed via `bd close` when their work lands; do not create new beads.
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files (all phases).
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.

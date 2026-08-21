@@ -78,7 +78,12 @@ Historical bead IDs survive in tasks as `[was: kata-*]` for traceability.
 Deliberately not duplicated into spec-kit: docs/db-schema.md (data model),
 src/katagiri/tool_registry.py (contracts), docs/audit-log.md (research detail).
 
-## Beads retirement checklist (run when kata-bvf closes)
+## Beads retirement checklist (run when kata-bvf closes) — EXECUTED 2026-08-21
+
+> Done at Phase B close (D-35 waiver): 001 tasks.md reconciled, CLAUDE.md + AGENTS.md
+> beads rules replaced with spec-kit-only wording, `bd prime` SessionStart hook removed,
+> kata-duw closed, and ALL remaining beads closed (stale C/D/E duplicates + archive
+> residents) at user request. `.beads/` stays as a read-only archive for `[was:]` refs.
 
 1. Reconcile specs/001 tasks.md checkboxes against final `bd list` state (archive accuracy).
 2. Update CLAUDE.md + AGENTS.md: drop the now-dead phase-A/B beads rule (the phase-scoped
