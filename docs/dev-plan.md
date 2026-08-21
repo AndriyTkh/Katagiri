@@ -361,3 +361,6 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   stop gate (`stop_gate_status`, T020/T021) still blocks all Phase E (specs/004) code until
   real 14/18-day evidence plus a recorded probe battery exist. Consumption-mix record (F-10)
   deferred to Phase E entry for the same reason. Next work: specs/006 TG0 + specs/005 TG-A.
+- 2026-08-21 — specs/006 TG7 T040: worksheet read-back confirmed wired through the existing
+  GET-only `vault_file` MCP tool (`redact(obsidian_proxy.read_vault_file(path))`) — no new
+  ToolSpec, no new parameter, no contract change.
