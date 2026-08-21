@@ -41,6 +41,8 @@ from typing import Any, Final
 
 from katagiri import events, known, lesson_memory, sensei_letter
 from katagiri.config import get_config
+from katagiri.db import resolve_alias
+from katagiri.intelligence import DEFAULT_MIN_UNDERSTANDING
 from katagiri.logging_setup import get_logger
 
 logger = get_logger("today_export")
@@ -1140,6 +1142,410 @@ def write_today(
 
 
 # ---------------------------------------------------------------------------
+# Worksheets
+# ---------------------------------------------------------------------------
+#
+# A worksheet is a sibling of the Today page and the sensei letter, not a third
+# kind of writer: it rides the same confined path (:func:`derived_target`, into
+# ``.derived`` rather than ``80-progress`` — a worksheet is disposable practice
+# material, not a weekly record) and the same ``generated: true`` guard
+# (:data:`is_generated_note`), and it writes through the identical
+# tempfile-then-``os.replace`` sequence :func:`write_today` uses, for the same
+# reason: a crash mid-write must never leave a frontmatter-less file that the
+# guard would then mistake for something hand-written.
+#
+# **Item selection is out of scope for this writer.** Nothing in this module or
+# in :mod:`katagiri.session_tools` yet assembles "today's items" as a set — the
+# nearest things (`_weakest_morphs_section`'s AnkiMorphs lemmas, the single
+# next-step action in ``session_tools``) are shaped for a sentence, not a batch
+# of items to drill. So :func:`worksheet_items` takes the simplest input that
+# composes with what this module already reads: a caller-supplied sequence of
+# item ids (or a surface form ``known_word`` can resolve). A future item-picker
+# (``find_i_plus_one``, a curated list, an operator's own choice) plugs in ahead
+# of this function without it changing.
+
+
+#: The three shapes FR-024 names. A worksheet may render any subset, in any
+#: order; :func:`render_worksheet` renders exactly the shapes it is given, in
+#: the order given.
+WORKSHEET_SHAPES: Final = ("cloze", "scramble", "table")
+
+WORKSHEET_FILENAME_TEMPLATE: Final = "Worksheet-{day}.md"
+WORKSHEET_EVENT_TYPE: Final = "worksheet_export"
+WORKSHEET_FRONTMATTER_TYPE: Final = "worksheet"
+
+#: The three furigana-decay stages (skills-pack-v1.md, "Furigana decays per
+#: item"; T034, prose-only). Named exactly as that table names them so a reader
+#: moving between the doc and this code is looking at the same three words.
+FURIGANA_ALWAYS: Final = "always"
+FURIGANA_FIRST_OCCURRENCE: Final = "first_occurrence"
+FURIGANA_OFF: Final = "off"
+
+
+def worksheet_filename(day_key: str) -> str:
+    """``Worksheet-2026-08-21.md``. One worksheet file per day, like Today.md."""
+    return WORKSHEET_FILENAME_TEMPLATE.format(day=day_key)
+
+
+@dataclass(frozen=True, slots=True)
+class WorksheetItem:
+    """One item as every shape on the page will render it.
+
+    Resolved once per render (:func:`worksheet_items`) so a word that appears in
+    more than one shape gets the same surface, meaning and furigana stage
+    everywhere on the page — never recomputed per shape, which is what keeps the
+    stages from disagreeing with themselves within one export.
+    """
+
+    item_id: str  # canonical, after alias resolution
+    kind: str | None
+    kanji: str | None
+    reading: str | None
+    meaning: str | None
+    furigana_stage: str
+
+
+def _item_row(conn: sqlite3.Connection, item_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT kind, kanji, reading, understanding, lexeme_ref "
+        "FROM item WHERE id = ?",
+        (item_id,),
+    ).fetchone()
+
+
+def _item_meaning(conn: sqlite3.Connection, lexeme_ref: str | None) -> str | None:
+    """``item.lexeme_ref`` is a soft reference (no FK, per the schema) — a stale
+    one after a re-import is a missing meaning, not an error."""
+    if not lexeme_ref:
+        return None
+    row = conn.execute(
+        "SELECT gloss_en FROM lexeme WHERE id = ?", (lexeme_ref,)
+    ).fetchone()
+    return None if row is None else row["gloss_en"]
+
+
+def furigana_stage(
+    conn: sqlite3.Connection, item_id: str, row: sqlite3.Row | None = None
+) -> str:
+    """Which of the three decay stages this item is at right now.
+
+    Reads exactly the fields skills-pack-v1.md's table names and nothing else:
+    :func:`katagiri.known.known_word` for a word or kanji item (``found``,
+    ``is_known``, ``ambiguous``, ``source``, ``suspect``), or ``item.understanding``
+    against :data:`katagiri.intelligence.DEFAULT_MIN_UNDERSTANDING` for a grammar
+    item — the same column :class:`katagiri.intelligence.MasteryLookup` reads,
+    queried the same way, so this is not a second notion of "known" grown next to
+    the first one. There is no stored stage; calling this twice after a mark
+    changes the answer, on purpose.
+
+    ``row`` lets a caller that already has the ``item`` row (as
+    :func:`worksheet_items` does) skip a second query; when omitted this queries
+    for it.
+    """
+    if row is None:
+        row = _item_row(conn, item_id)
+    kind = None if row is None else row["kind"]
+    understanding = None if row is None else row["understanding"]
+
+    if kind == "grammar":
+        if understanding is None or understanding < DEFAULT_MIN_UNDERSTANDING:
+            return FURIGANA_ALWAYS
+        if understanding >= 5:
+            return FURIGANA_OFF
+        return FURIGANA_FIRST_OCCURRENCE
+
+    answer = known.known_word(conn, item_id)
+    if not answer.get("found") or answer.get("ambiguous") or not answer.get(
+        "is_known"
+    ):
+        return FURIGANA_ALWAYS
+    if answer.get("suspect") or answer.get("source") == "manual":
+        return FURIGANA_FIRST_OCCURRENCE
+    return FURIGANA_OFF
+
+
+def worksheet_items(
+    conn: sqlite3.Connection, item_ids: Sequence[str]
+) -> list[WorksheetItem]:
+    """Resolve each id into the shape every worksheet renderer reads from.
+
+    Each id is alias-resolved first (:func:`katagiri.db.resolve_alias`), exactly
+    as :class:`katagiri.intelligence.MasteryLookup` resolves one, so a renamed
+    item keeps answering to its old id here too. An id with no ``item`` row is a
+    caller mistake, not a state this module can render around, so it raises
+    rather than silently dropping the item from the page.
+    """
+    resolved: list[WorksheetItem] = []
+    for raw_id in item_ids:
+        canonical = resolve_alias(conn, raw_id)["canonical_id"]
+        row = _item_row(conn, canonical)
+        if row is None:
+            raise TodayExportError(
+                f"Worksheet item {raw_id!r} has no matching item row; it cannot "
+                "be rendered."
+            )
+        resolved.append(
+            WorksheetItem(
+                item_id=canonical,
+                kind=row["kind"],
+                kanji=row["kanji"],
+                reading=row["reading"],
+                meaning=_item_meaning(conn, row["lexeme_ref"]),
+                furigana_stage=furigana_stage(conn, canonical, row=row),
+            )
+        )
+    return resolved
+
+
+def _render_surface(item: WorksheetItem, seen: set[str]) -> str:
+    """The item's surface, with furigana rendered per its decay stage.
+
+    ``seen`` is shared across every shape on one page: a ``first_occurrence``
+    item shows its ruby the first time any shape reaches it and plain kanji on
+    every later occurrence, on this page, in this render — the ladder rung
+    acting on the render, never a second field recording that it fired.
+    """
+    surface = item.kanji or item.reading or item.item_id
+    already_seen = item.item_id in seen
+    seen.add(item.item_id)
+    if not item.kanji or not item.reading or item.kanji == item.reading:
+        # Nothing to gloss: a kana-only surface, or no distinct reading on file.
+        return surface
+    show = item.furigana_stage == FURIGANA_ALWAYS or (
+        item.furigana_stage == FURIGANA_FIRST_OCCURRENCE and not already_seen
+    )
+    if show:
+        return f"<ruby>{item.kanji}<rt>{item.reading}</rt></ruby>"
+    return item.kanji
+
+
+def _scrambled(reading: str) -> str:
+    """A deterministic scramble: the reading's characters in reverse order.
+
+    Not random — :func:`sensei_letter.render_letter`'s "same stats, same bytes"
+    applies here too, so the same item scrambles the same way on every render.
+    Too short to scramble (0 or 1 characters) is returned unchanged.
+    """
+    chars = list(reading)
+    return reading if len(chars) < 2 else "".join(reversed(chars))
+
+
+def _render_cloze(items: Sequence[WorksheetItem], seen: set[str]) -> list[str]:
+    lines = ["Fill in the missing word from its meaning.", ""]
+    if not items:
+        lines.append("No items were supplied for this worksheet.")
+        return lines
+    for n, item in enumerate(items, start=1):
+        prompt = item.meaning or f"(no recorded meaning for {item.item_id})"
+        lines.append(f"{n}. {prompt} — ______")
+    lines.append("")
+    lines.append("<details><summary>Answers</summary>")
+    lines.append("")
+    for n, item in enumerate(items, start=1):
+        lines.append(f"{n}. {_render_surface(item, seen)}")
+    lines.append("")
+    lines.append("</details>")
+    return lines
+
+
+def _render_scramble(items: Sequence[WorksheetItem], seen: set[str]) -> list[str]:
+    lines = ["Unscramble each reading, then check it against the surface.", ""]
+    if not items:
+        lines.append("No items were supplied for this worksheet.")
+        return lines
+    for n, item in enumerate(items, start=1):
+        if not item.reading:
+            lines.append(f"{n}. (no reading recorded for {item.item_id})")
+            continue
+        lines.append(f"{n}. {_scrambled(item.reading)}")
+    lines.append("")
+    lines.append("<details><summary>Answers</summary>")
+    lines.append("")
+    for n, item in enumerate(items, start=1):
+        if not item.reading:
+            lines.append(f"{n}. —")
+            continue
+        lines.append(f"{n}. {_render_surface(item, seen)} ({item.reading})")
+    lines.append("")
+    lines.append("</details>")
+    return lines
+
+
+def _render_table(items: Sequence[WorksheetItem], seen: set[str]) -> list[str]:
+    if not items:
+        return ["No items were supplied for this worksheet."]
+    lines = ["| # | Item | Meaning |", "| --- | --- | --- |"]
+    for n, item in enumerate(items, start=1):
+        meaning = item.meaning or "(no recorded meaning)"
+        lines.append(f"| {n} | {_render_surface(item, seen)} | {meaning} |")
+    return lines
+
+
+#: Shape name -> (heading, renderer). The extension seam for a later shape,
+#: mirrored on :data:`SECTIONS`: append here, :func:`render_worksheet` does not
+#: change.
+_SHAPE_RENDERERS: Final[
+    dict[str, tuple[str, Callable[[Sequence[WorksheetItem], set[str]], list[str]]]]
+] = {
+    "cloze": ("Cloze", _render_cloze),
+    "scramble": ("Scramble", _render_scramble),
+    "table": ("Table", _render_table),
+}
+
+
+def _worksheet_frontmatter(
+    ctx: TodayContext, items: Sequence[WorksheetItem], shapes: Sequence[str]
+) -> list[str]:
+    return [
+        "---",
+        f"schema: {FRONTMATTER_SCHEMA}",
+        f"type: {WORKSHEET_FRONTMATTER_TYPE}",
+        f'title: "Worksheet — {ctx.day_key}"',
+        f"day: {ctx.day_key}",
+        f"items: {len(items)}",
+        f"shapes: {', '.join(shapes)}",
+        # Load-bearing, exactly as in _frontmatter: this is what write_worksheet
+        # checks before it is willing to overwrite anything.
+        "generated: true",
+        f"generated_at: {ctx.stamp}",
+        f"generator: {GENERATOR}",
+        "---",
+    ]
+
+
+def render_worksheet(
+    ctx: TodayContext,
+    items: Sequence[WorksheetItem],
+    shapes: Sequence[str] = WORKSHEET_SHAPES,
+) -> str:
+    """Render one worksheet page: frontmatter, then each shape as its own section.
+
+    ``seen`` (furigana occurrence tracking) is threaded across every shape, in
+    the order given, so "first occurrence" means the first line on the whole
+    page, not the first line of each shape taken separately.
+    """
+    unknown = sorted(set(shapes) - set(_SHAPE_RENDERERS))
+    if unknown:
+        raise TodayExportError(
+            f"Unknown worksheet shape(s): {', '.join(unknown)}. Choose from "
+            f"{', '.join(WORKSHEET_SHAPES)}."
+        )
+
+    lines = _worksheet_frontmatter(ctx, items, shapes)
+    lines.append("")
+    lines.append(f"# Worksheet — {ctx.day_key}")
+    lines.append("")
+    lines.append(
+        "*Generated by Katagiri from its own database. Edits here are not read "
+        "back; this file is rewritten every time it is exported.*"
+    )
+    lines.append("")
+
+    seen: set[str] = set()
+    for shape in shapes:
+        heading, renderer = _SHAPE_RENDERERS[shape]
+        lines.append(f"## {heading}")
+        lines.append("")
+        lines.extend(renderer(items, seen))
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def write_worksheet(
+    conn: sqlite3.Connection,
+    item_ids: Sequence[str],
+    vault_path: Path | str | None = None,
+    *,
+    shapes: Sequence[str] = WORKSHEET_SHAPES,
+    today: date | None = None,
+    now: datetime | None = None,
+    zone: tzinfo | None = None,
+    tz: str | None = None,
+) -> Path:
+    """Resolve, render and write one day's worksheet; return its path.
+
+    Every safety property is inherited, not reimplemented: the target path comes
+    from :func:`derived_target`, so it is confined to ``.derived`` the same way
+    ``Today.md`` is; an existing file is refused unless :func:`is_generated_note`
+    says it carries ``generated: true``; and the write itself goes to a
+    ``tempfile.mkstemp`` scratch file in the same directory, moved into place
+    with :func:`os.replace`, for the identical crash-safety reason
+    :func:`write_today` documents — a truncated in-place write would leave a
+    frontmatter-less file the guard above would then treat as hand-written.
+
+    On success a ``worksheet_export`` event is appended carrying the day key, the
+    file's basename, the item count and the shapes rendered. No item content, no
+    meanings, no furigana stages.
+    """
+    ctx = build_context(conn, today=today, now=now, zone=zone)
+    resolved_items = worksheet_items(conn, item_ids)
+    target = derived_target(worksheet_filename(ctx.day_key), vault_path)
+    where = f"{DERIVED_DIR_NAME}/{target.name}"
+
+    if target.exists():
+        try:
+            existing = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise TodayExportError(
+                f"{where} (under the configured 'vault_path') exists but could "
+                "not be read, so Katagiri cannot tell whether it was generated "
+                f"({_os_detail(exc)}). Move or delete it by hand."
+            ) from exc
+        if not is_generated_note(existing):
+            raise TodayExportError(
+                f"{where} (under the configured 'vault_path') already exists "
+                "and does not carry 'generated: true' in its frontmatter, so it "
+                "is treated as hand-written and left alone. Rename or move it "
+                "if you want a fresh worksheet here."
+            )
+
+    body = render_worksheet(ctx, resolved_items, shapes)
+    scratch: Path | None = None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        handle, scratch_name = tempfile.mkstemp(
+            dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
+        )
+        scratch = Path(scratch_name)
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(scratch, target)
+        scratch = None
+    except OSError as exc:
+        raise TodayExportError(
+            f"Could not write the worksheet to {where}, under the configured "
+            f"'vault_path' ({_os_detail(exc)})."
+        ) from exc
+    finally:
+        if scratch is not None:
+            with contextlib.suppress(OSError):
+                scratch.unlink()
+
+    events.append_event(
+        conn,
+        type=WORKSHEET_EVENT_TYPE,
+        session_id=f"worksheet:{ctx.day_key}",
+        tz=tz,
+        payload={
+            "day": ctx.day_key,
+            "path": target.name,
+            "items": len(resolved_items),
+            "shapes": list(shapes),
+        },
+    )
+    logger.info(
+        "Wrote the worksheet for %s (%d items, shapes: %s).",
+        ctx.day_key,
+        len(resolved_items),
+        ", ".join(shapes),
+    )
+    return target
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1225,23 +1631,35 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "DERIVED_DIR_NAME",
+    "FURIGANA_ALWAYS",
+    "FURIGANA_FIRST_OCCURRENCE",
+    "FURIGANA_OFF",
     "SECTIONS",
     "TODAY_EVENT_TYPE",
     "TODAY_FILENAME",
+    "WORKSHEET_EVENT_TYPE",
+    "WORKSHEET_FILENAME_TEMPLATE",
+    "WORKSHEET_SHAPES",
     "Section",
     "SectionBuilder",
     "TodayContext",
     "TodayExportError",
+    "WorksheetItem",
     "anki_due_count",
     "build_context",
     "derived_dir",
     "derived_target",
+    "furigana_stage",
     "is_generated_note",
     "main",
     "render_sections",
     "render_today",
+    "render_worksheet",
     "section",
+    "worksheet_filename",
+    "worksheet_items",
     "write_today",
+    "write_worksheet",
 ]
 
 
