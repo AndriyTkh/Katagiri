@@ -1328,8 +1328,157 @@ _PHASE_E_SPECS: Final[tuple[ToolSpec, ...]] = (
     ),
 )
 
+# Phase E, TG-E4 (T012): the remaining media-overlay backends registered.
+# asbplayer and mokuro do not get their own tools — media_now/media_context
+# above already generalise to "probe every constructible channel, return the
+# CHANNEL_PRECEDENCE winner" (media_channel.select_active_channel), so a new
+# backend only ever adds to which 'channel' value those two tools can report,
+# exactly as _PHASE_E_SPECS's own note already promised. Two backends do not
+# fit that shape and get their own tools instead:
+#   - lyrics (katagiri.media_lyrics) needs a mandatory '.lrc'/'.ass' path —
+#     there is no config key naming "the current lyrics file", so it cannot
+#     be constructed zero-argument inside the automatic dispatch loop the way
+#     mpv/asbplayer/mokuro can.
+#   - screenshot (katagiri.screenshot_tool) never fit the moment/context
+#     shape at all (T012's own instructions call this out) — it is a
+#     capture-then-read pair, not a "what's on screen" probe.
+_PHASE_E_TG_E4_SPECS: Final[tuple[ToolSpec, ...]] = (
+    ToolSpec(
+        name="lyrics_now",
+        summary=(
+            "The lyric line active at the current mpv playhead, from a "
+            "'.lrc'/'.ass' file, enveloped."
+        ),
+        args=(
+            ArgSpec(
+                "path",
+                "str",
+                True,
+                "Path to the '.lrc' or '.ass' lyrics file, parsed once per "
+                "call. The playhead comes from the mpv channel "
+                "(media_lyrics.mpv_anchor_supplier), not from this tool's "
+                "arguments.",
+            ),
+        ),
+        output=(
+            "{ok, active, note, channel, media_id, anchor_ms, displayed_text, "
+            "title, updated_ts} — same envelope shape as media_now; "
+            "active=false means mpv has no anchor right now (nothing "
+            "playing) or the anchor is before the file's first line, not an "
+            "error"
+        ),
+        stability="experimental",
+        note=(
+            "T012: wraps katagiri.media_lyrics.LyricsChannel, anchored to "
+            "mpv via mpv_anchor_supplier(MpvChannel()) — lyrics is 'not a "
+            "standalone channel' (media_lyrics.py's own docstring): it has "
+            "no playhead of its own, only a file's timestamps read against "
+            "whatever mpv reports. Reads only, re-parses 'path' every call "
+            "(no cross-call cache), so a lyrics file edited between calls is "
+            "picked up on the next one."
+        ),
+    ),
+    ToolSpec(
+        name="lyrics_context",
+        summary=(
+            "The window of lyric lines around the current mpv playhead, "
+            "enveloped."
+        ),
+        args=(
+            ArgSpec(
+                "path",
+                "str",
+                True,
+                "Path to the '.lrc' or '.ass' lyrics file. Same file "
+                "argument as lyrics_now.",
+            ),
+            ArgSpec(
+                "radius",
+                "int",
+                False,
+                "Lines before/after the active line to include (default: "
+                "media_lyrics.DEFAULT_CONTEXT_RADIUS). Unlike mpv's own "
+                "single-line context MVP, lyrics genuinely supports a "
+                "multi-line window because the whole file is already parsed.",
+            ),
+        ),
+        output=(
+            "{ok, active, note, channel, media_id, anchor_ms, "
+            "lines[{text, start_ms, end_ms}]} — same envelope shape as "
+            "media_context; an empty 'lines' means the anchor is before the "
+            "file's first line, not an error"
+        ),
+        stability="experimental",
+        note=(
+            "T012, same channel construction as lyrics_now. 'radius' is the "
+            "one optional argument LyricsChannel.media_context already "
+            "accepts (media_lyrics.py); omitting it reproduces the "
+            "channel's own default window."
+        ),
+    ),
+    ToolSpec(
+        name="screenshot_capture",
+        summary=(
+            "Capture mpv's current frame into a confined scratch root, "
+            "server-named."
+        ),
+        args=(),
+        output=(
+            "{ok, active, note, screenshot_id, media_id, anchor_ms, title, "
+            "created_ts} — 'screenshot_id' is a server-generated name (never "
+            "derived from the media title), passed to screenshot_read for "
+            "the bytes; active=false (screenshot_id null) means nothing is "
+            "playing on mpv right now, not an error"
+        ),
+        stability="experimental",
+        note=(
+            "T012: wraps katagiri.screenshot_tool.take_screenshot against "
+            "MpvChannel + default_mpv_capture — mpv is the only backend "
+            "that actually has a screenshot-to-file IPC command, so this "
+            "does not participate in the media_now/media_context multi-"
+            "channel dispatch. FR-004: the filename is always a uuid4 this "
+            "module generates, never derived from the (attacker-"
+            "controllable) media title, and every path is re-confined to "
+            "the scratch root before use."
+        ),
+    ),
+    ToolSpec(
+        name="screenshot_read",
+        summary="The raw bytes of a previously captured screenshot, base64-encoded.",
+        args=(
+            ArgSpec(
+                "screenshot_id",
+                "str",
+                True,
+                "The id screenshot_capture returned. Validated against a "
+                "closed character set and re-confined to the scratch root "
+                "before any file is touched — a path-traversal or "
+                "malformed id is refused, never 'fixed' into place.",
+            ),
+        ),
+        output=(
+            "{ok, screenshot_id, mime_type, image_base64} — 'image_base64' "
+            "is the PNG file's bytes, base64-encoded (JSON has no binary "
+            "type); raises rather than returning a placeholder when the id "
+            "is malformed (ScreenshotConfinementError) or names no file "
+            "(ScreenshotNotFoundError)"
+        ),
+        stability="experimental",
+        note=(
+            "T012: wraps katagiri.screenshot_tool.read_screenshot_bytes "
+            "unchanged — the confinement/id-validation this tool relies on "
+            "is that module's, not reimplemented here."
+        ),
+    ),
+)
+
 TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
-    _PHASE_A_SPECS + _PHASE_B_SPECS + _PHASE_C_SPECS + _PHASE_D_SPECS + _PHASE_E_SPECS
+    _PHASE_A_SPECS
+    + _PHASE_B_SPECS
+    + _PHASE_C_SPECS
+    + _PHASE_D_SPECS
+    + _PHASE_E_SPECS
+    + _PHASE_E_TG_E4_SPECS
 )
 
 TOOL_SPECS_BY_NAME: Final[dict[str, ToolSpec]] = {
