@@ -78,7 +78,7 @@ Merge order: US4 → US2 → US3 → US5 (screenshot ships first — completes t
 
 **[was: kata-evf]** Needs all built channels merged (cut stories noted first). Max two rerun cycles.
 
-- [ ] T013 [Gate] Cumulative cold-subagent scenarios A..E: mpv position/title; asbplayer window from anchor; mokuro page; screenshot round-trip; one .lrc through WATCH mode; **adversarial subtitle-injection refused**. Write: NEW tests/test_everify.py. Read: quickstart.md runbook, envelope.py contract, prior *verify tests. [was: kata-evf]
+- [ ] T013 [Gate] [in-progress: master checkout] Cumulative cold-subagent scenarios A..E: mpv position/title; asbplayer window from anchor; mokuro page; screenshot round-trip; one .lrc through WATCH mode; **adversarial subtitle-injection refused**. Write: NEW tests/test_everify.py. Read: quickstart.md runbook, envelope.py contract, prior *verify tests. [was: kata-evf]
 - [ ] T014 [Gate] Milestone E manual checks (anchored question on primary surface, mined words with source refs, learner metric); ledger/coverage update; weekly status line; mark phase complete. Write: docs/decisions-ledger.md, docs/dev-plan.md, this tasks.md. Read: event log, coverage table. [was: kata-evf]
 
 ## Dependencies & Execution Order
