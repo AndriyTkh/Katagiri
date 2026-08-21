@@ -269,6 +269,7 @@ def test_start_session_returns_one_action_dict_never_a_list(conn):
         "unresolved_id",
         "revisit_after",
         "source",
+        "caps",
     }
     assert action["kind"] in st.ACTION_KINDS
     assert action["rationale"], "an action without a rationale is an opaque verdict"
