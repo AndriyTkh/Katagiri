@@ -25,6 +25,7 @@ force-include = { "src/katagiri/data/morph_labels_200.tsv" = "katagiri/data/morp
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-xdist>=3.6",
     "detect-secrets>=1.5",
     "pre-commit>=4",
 ]

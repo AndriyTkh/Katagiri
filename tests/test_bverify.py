@@ -920,6 +920,7 @@ def _direct_get(
         return int(exc.code), body
 
 
+@pytest.mark.xdist_group("obsidian-port-27123")
 def test_a_successful_vault_read_carries_the_token_only_toward_loopback(
     mcp_client, vault_stub
 ):
@@ -983,6 +984,7 @@ def test_a_successful_vault_read_carries_the_token_only_toward_loopback(
     ), "the credential did not reach the plugin, so these reads proved nothing"
 
 
+@pytest.mark.xdist_group("obsidian-port-27123")
 def test_no_replay_of_what_the_agent_received_can_authenticate_directly(
     mcp_client, vault_stub
 ):

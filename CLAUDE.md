@@ -69,6 +69,13 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 # cached template under tests/.cache (imported once, then file-copied).
 uv run pytest
 
+# Faster local loop: parallel workers. ~1.9x on this suite (246s -> 132s).
+# --dist loadgroup keeps the two real :27123-binding tests
+# (test_abc_workflow.py::test_04a_..., test_bverify.py's vault-read/no-replay
+# tests, all tagged @pytest.mark.xdist_group("obsidian-port-27123")) on one
+# worker so they don't race each other for the fixed port.
+uv run pytest -n auto --dist loadgroup
+
 # Public build / full validation: ground-zero reimports, corruption/restore
 # drills, everything. Run before releases.
 uv run pytest --public-build
@@ -76,6 +83,12 @@ uv run pytest --public-build
 
 Test groups (see `tests/conftest.py`): `compile` (ground-zero rebuilds, first,
 public-build only) → general → `mcp` (spawns the real MCP server over stdio, last).
+
+Under `-n`, MCP-subprocess fixture teardown has occasionally left orphaned
+`katagiri-mcp.exe` processes behind (seen once, not reproduced since) — if a
+plain `uv run pytest` later fails with "failed to remove file ... katagiri-mcp.exe
+... used by another process", check `tasklist /FI "IMAGENAME eq katagiri-mcp.exe"`
+for stragglers before assuming it's a real bug.
 
 ## Architecture Overview
 

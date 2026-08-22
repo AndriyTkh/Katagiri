@@ -772,6 +772,7 @@ def test_03e_stop_gate_status_has_the_mechanical_pass_fail_shape(mcp_client):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("obsidian-port-27123")
 def test_04a_vault_tools_answer_through_the_loopback_stub(mcp_client, vault_stub):
     listing = _call(mcp_client, "vault_list")
     _assert_clean(listing, mcp_client.last_raw, where="vault_list")
