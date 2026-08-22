@@ -4,9 +4,12 @@
 # authority on which bytes are expected. Verified at load time; no runtime
 # downloads. See vendor/README.md for acquisition steps.
 #
-# (placeholder — no components vendored yet)
 8bd0dd127dab32ceec94cb03ab1ba6b68858ea73421dfa1731af2f373deb4f20  vendor/kanjium/accents.txt
 8aacc28f6c785ca64519d99fe137acc7a216539cf475092fb33564566009d5bc  vendor/jmdict/jmdict-eng-3.6.2.json.zip
+# Full UniDic. Only the source zip is pinned (its digest is the manifest
+# anchor katagiri.tokenizer.stamp_versions reads for provenance); the ~775 MB
+# unpacked dicdir at vendor/unidic/unidic/ is checked for presence/shape by
+# the tokenizer itself at load time, not hashed here.
 638718c4c63625ab300de4c92c67925d54c0e9e3830009eaa992f29819d59c43  vendor/unidic/unidic-3.1.0.zip
 4e082faa51bedb77b69003358b55278c6736fd32124fc38a93b1b125c64834ba  vendor/bccwj/BCCWJ_frequencylist_suw_ver1_0.zip
 756feb94eb7ea4df75c2c95a4952dfb3b8f1001905fb69d8826cfb74c7e7adac  vendor/jlpt/n1-vocab-kanji-eng.anki
@@ -16,12 +19,14 @@ c01efb431a7d3d248f16a5162168fd00e9ebf3de82896b5aa8fc9b31ff572eac  vendor/jlpt/n2
 d3e3482de309122119b289c9f8b87cbef288e48fbfef800d7a354757fa756b9d  vendor/jlpt/n5-vocab-kanji-eng.anki
 173341dd9a9b6dac16b901757629762237733b7f1823824f92d20b26bd1a40e5  vendor/jreadability/jreadability-1.1.5.tar.gz
 #
-# Irodori (Japan Foundation): no entries here by design. Files are
-# hand-acquired and never committed; scripts/fetch_irodori.py computes and
-# verifies digests locally on request but never writes into this file --
-# do not fabricate an entry for a file that isn't actually present.
+# Irodori (Japan Foundation): hand-acquired and never committed;
+# scripts/fetch_irodori.py computes and verifies digests locally on request
+# but never writes into this file -- entries below were appended by hand
+# after reviewing that script's output.
+f2a55712ebddc628500cff56d6a6d9e8bf52d4683e38aa2e775401cdc7f475d9  vendor/irodori/starter_contents_en.pdf
 #
 # Tae Kim's Guide to Japanese Grammar (CC BY-NC-SA, committable with
 # attribution): scripts/fetch_taekim.py appended the entry below from a real
 # fetch of https://guidetojapanese.org/learn/grammar.
-c4d26e12b02adbf8c16313bd248a71cc694ff7106ed1d2e0493d19c5d8647717  vendor/taekim/grammar-index.html
+4d6555cfdb71f3a0c749fccb22b57464b5dd4a762be5e113097ba93fe84fc36e  vendor/taekim/grammar-index.html
+d9c5fee0da284fe9206996e5373da21dd3d48333652851635a5587b3ea92df00  vendor/taekim/stateofbeing.html

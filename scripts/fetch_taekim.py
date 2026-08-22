@@ -31,10 +31,14 @@ TAEKIM_DIR = VENDOR_DIR / "taekim"
 CHECKSUMS_FILE = VENDOR_DIR / "CHECKSUMS.sha256"
 README_FILE = VENDOR_DIR / "README.md"
 
-# The specific extract this script acquires. Kept to one page on purpose --
-# this is a scoped extract, not a mirror of the whole site.
-SOURCE_URL = "https://guidetojapanese.org/learn/grammar"
-DEST_NAME = "grammar-index.html"
+# The specific extracts this script acquires. Kept to a short, named list on
+# purpose -- this is a set of scoped extracts, not a mirror of the whole site.
+# Add a page here (and a matching parser in import_curriculum.py) as more
+# grammar topics need seed vocabulary.
+PAGES: tuple[tuple[str, str], ...] = (
+    ("https://guidetojapanese.org/learn/grammar", "grammar-index.html"),
+    ("https://guidetojapanese.org/learn/grammar/stateofbeing", "stateofbeing.html"),
+)
 
 ATTRIBUTION_NOTICE = (
     "Tae Kim's Guide to Japanese Grammar, (c) Tae Kim, "
@@ -94,39 +98,46 @@ def attribution_recorded() -> bool:
 def main() -> int:
     print("Tae Kim grammar-guide acquisition helper")
     print("=" * 60)
-    print(f"Source: {SOURCE_URL}")
     print("License: CC BY-NC-SA -- committable WITH attribution (unlike Irodori).")
     print()
 
     TAEKIM_DIR.mkdir(parents=True, exist_ok=True)
-    dest = TAEKIM_DIR / DEST_NAME
-    rel = dest.relative_to(REPO_ROOT).as_posix()
-
-    try:
-        data = fetch(SOURCE_URL)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-        print(f"Could not fetch {SOURCE_URL}: {exc}")
-        print(
-            "No network access from this environment, or the site is\n"
-            "unreachable right now. Run this script by hand, from a machine\n"
-            "with internet access, when you are ready to (re)acquire the\n"
-            "Tae Kim extract. Nothing was written."
-        )
-        return 1
-
-    dest.write_bytes(data)
-    digest = sha256_bytes(data)
-    print(f"Wrote {rel} ({len(data)} bytes).")
-    print(f"sha256: {digest}")
-
     committed = load_committed_digests()
-    if committed.get(rel) == digest:
-        print("Digest matches the one already committed in vendor/CHECKSUMS.sha256.")
-    else:
-        append_checksum(rel, digest)
-        print(
-            f"Recorded digest in {CHECKSUMS_FILE.relative_to(REPO_ROOT).as_posix()}."
-        )
+    failures = 0
+
+    for source_url, dest_name in PAGES:
+        dest = TAEKIM_DIR / dest_name
+        rel = dest.relative_to(REPO_ROOT).as_posix()
+        print(f"Source: {source_url}")
+
+        try:
+            data = fetch(source_url)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            print(f"Could not fetch {source_url}: {exc}")
+            print(
+                "No network access from this environment, or the site is\n"
+                "unreachable right now. Run this script by hand, from a machine\n"
+                "with internet access, when you are ready to (re)acquire this\n"
+                "Tae Kim extract. Nothing was written for this page."
+            )
+            failures += 1
+            print()
+            continue
+
+        dest.write_bytes(data)
+        digest = sha256_bytes(data)
+        print(f"Wrote {rel} ({len(data)} bytes).")
+        print(f"sha256: {digest}")
+
+        if committed.get(rel) == digest:
+            print("Digest matches the one already committed in vendor/CHECKSUMS.sha256.")
+        else:
+            append_checksum(rel, digest)
+            committed[rel] = digest
+            print(
+                f"Recorded digest in {CHECKSUMS_FILE.relative_to(REPO_ROOT).as_posix()}."
+            )
+        print()
 
     if attribution_recorded():
         print("Attribution notice already present in vendor/README.md.")
@@ -136,9 +147,8 @@ def main() -> int:
             f"Required text: {ATTRIBUTION_NOTICE}"
         )
 
-    print()
-    print("Review the extract and the CHECKSUMS.sha256 diff before committing.")
-    return 0
+    print("Review the extracts and the CHECKSUMS.sha256 diff before committing.")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
