@@ -38,6 +38,12 @@ agent/obsidian-cert.pem
 agent/.venv/
 agent/**/checkpoints.sqlite
 agent/**/checkpoints.sqlite-*
+agent/.checkpoints/
+agent/.langgraph_api/
 agent/scratch/
 agent/run-transcripts/
 agent/*.log
+
+# Local Obsidian workspace/plugin state belongs to the operator's vault. It can
+# hold plugin credentials and must not enter this repository.
+docs/katagiri/katagiri/.obsidian/

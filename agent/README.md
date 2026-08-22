@@ -228,7 +228,7 @@ pinned OpenRouter chat model.
 
 **Discovery is never narrowed.** `client.get_tools(server_name=...)` calls
 each server's real `list_tools()` and sees its whole surface — katagiri's
-full 26 registered tools (per `src/katagiri/tool_registry.py`, unedited —
+full 33 registered tools (per `src/katagiri/tool_registry.py`, unedited —
 `git diff --stat src/katagiri/` stays clean for this task) and the existing
 server's full tool list. Narrowing to the featured subset happens once,
 client-side, in `clients.load_featured_tools()` — no registry edit, no
@@ -237,7 +237,7 @@ server-side profile, per research.md's decision.
 **Featured subset (fixed here; mirrored, not re-decided, into T021's
 `docs/assignment/tool-triage.md`):**
 
-katagiri (11 of 26 registered tools) —
+katagiri (11 of 33 registered tools) —
 
 | Tool | Why it's featured |
 |---|---|
@@ -263,12 +263,16 @@ demo vault's goal note) —
 Every other tool on either server (katagiri's `ping`, `known_word`,
 `known_set_stats`, `recent_events`, `search_db`, `stop_gate_status`,
 `security_status`, `vault_file`, `vault_list`, `obsidian_active_note`,
-`search_notes`, `lessons`, `lesson_memory`, `log_error`, `add_vocab`; the
-existing server's write-shaped tools — `vault_write`, `vault_append`,
-`vault_patch`, `vault_move`, `vault_delete`, `vault_copy`,
-`command_execute`, ...) stays discoverable at the protocol level but is
-never bound to the model. T021's triage table gives the one-line reason
-each katagiri helper doesn't claim substantive status.
+`search_notes`, `lessons`, `lesson_memory`, `log_error`, `add_vocab`,
+`media_now`, `media_context`, `lyrics_now`, `lyrics_context`,
+`screenshot_capture`, `screenshot_read`, `open_anki`; the existing server's
+write-shaped tools — `vault_write`, `vault_append`, `vault_patch`,
+`vault_move`, `vault_delete`, `vault_copy`, `command_execute`, ...) stays
+discoverable at the protocol level but is never bound to the model. The
+media/screenshot/Anki tools are Phase E additions to katagiri's own
+production surface (the media overlay and Anki launcher), unrelated to this
+assignment's demo flow. T021's triage table gives the one-line reason each
+katagiri helper doesn't claim substantive status.
 
 **Pinned model**: `openai/gpt-4o-mini`, reached through
 `ChatOpenAI(base_url="https://openrouter.ai/api/v1")` (`clients.build_model`).
@@ -301,3 +305,44 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+## Optional: LangGraph Studio chat wrapper (not part of the graded flow)
+
+`graph.py`'s diagnostic-branch graph has no `messages` state — the branch is
+picked by server data, never model free-choice (FR-003) — so it renders in
+[LangGraph Studio](https://docs.langchain.com/oss/python/langgraph/studio)
+as a step/state inspector, not a chat window. `src/katagiri_agent/chat_graph.py`
+is a separate, ordinary tool-calling ReAct loop (`langgraph.prebuilt.create_react_agent`)
+over the same featured tools and pinned model `clients.py` already builds —
+for free-form, editable-message chat against those tools in Studio. Nothing
+in the graded path (`__main__.py`, `graph.py`) imports it; only
+`agent/langgraph.json` references it.
+
+Requires a free [LangSmith](https://smith.langchain.com) account —
+`LANGSMITH_API_KEY` in `agent/.env` (Settings > API Keys). Then, from `agent/`:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+uv run langgraph dev --allow-blocking
+```
+
+Opens `https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024` in
+a browser (Chrome/Edge — Safari blocks localhost connections; pass `--tunnel`
+there instead). Needs `OPENROUTER_API_KEY` funded same as any other run;
+the katagiri MCP server does **not** need to be started separately — the
+factory spawns its own stdio connection the same way `__main__.py` does.
+
+`--allow-blocking` works around a `langgraph dev`-only false positive: its
+`blockbuster` instrumentation flags the in-mem checkpointer's own
+`shutil.move` (used on server shutdown) as a blocking call and crashes
+teardown — nothing in this project's code, no fix on our side possible.
+
+`chat_graph.make_graph` fast-fails with one clear line, no digging through a
+traceback, for the two things that actually go wrong repeatedly in practice:
+a blank `OPENROUTER_API_KEY` (message points at `setup.py`, never asks you
+to hand-edit `.env`), and — for the `streamable_http` transport — Obsidian
+not running. That second one it tries to fix itself first: launches
+`Obsidian.exe` if it's installed but not running, waits up to 20s for the
+Local REST API endpoint to answer, and only then raises (naming the exact
+`Settings > Community plugins` steps) if it still isn't up. See
+`src/katagiri_agent/obsidian_bootstrap.py`.

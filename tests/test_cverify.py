@@ -867,7 +867,7 @@ def test_the_obsidian_proxy_is_still_the_only_http_client():
     ], "the client patterns no longer match the one real HTTP client"
     assert 'method="GET"' in proxy
     assert re.search(r"method\s*=\s*[\"'](?!GET)", proxy) is None
-    assert obsidian_proxy.BASE_URL == "http://127.0.0.1:27123"
+    assert obsidian_proxy.BASE_URL == "https://127.0.0.1:27124"
     assert obsidian_proxy.OBSIDIAN_PORT in mcp_server.HARDENED_PORTS
 
 

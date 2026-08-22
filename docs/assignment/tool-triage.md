@@ -1,10 +1,17 @@
 # Tool triage — substantive tools vs. helpers
 
-Scope: katagiri's own MCP surface, all 26 tools declared in
+Scope: katagiri's own MCP surface, all 33 tools declared in
 `src/katagiri/tool_registry.py` (`TOOL_SPECS`, read-only source for this
 table — nothing here changes the registry). This document does **not**
 triage the existing Obsidian Local REST API server; that server is
 documented separately in `docs/assignment/existing-server-contract.md`.
+
+Seven of the 33 (`media_now`, `media_context`, `lyrics_now`,
+`lyrics_context`, `screenshot_capture`, `screenshot_read`, `open_anki`) are
+Phase E additions — the media overlay and Anki launcher — landed after this
+assignment's own T012/T021 triage was fixed. They are listed among the
+helpers below for completeness, but they postdate and are unrelated to the
+005 assignment's scope.
 
 **On the rubric text**: `specs/005-mcp-assignment/spec.md` cites "rubric
 §3" repeatedly (FR-015, SC-003, and — at spec.md line 60 — an explicit
@@ -28,11 +35,12 @@ observable effect on the workflow (the criterion spec.md names outright).
   retrieval" with room to spare.
 - **Primary data source (1)**: `lookup` — JMdict senses plus pitch accent,
   read from the vendored dictionary import rather than hand-authored.
-- **Helper (20)**: every other registered tool. Five of those twenty are
-  in the model-facing allowlist anyway (session/logging plumbing and the
-  envelope ceremony); the other fifteen are server-surface only. Neither
-  group claims substantive status — see the table below for why, one line
-  each.
+- **Helper (27)**: every other registered tool. Five of those twenty-seven
+  are in the model-facing allowlist anyway (session/logging plumbing and
+  the envelope ceremony); the other twenty-two are server-surface only —
+  fifteen predating this assignment plus the seven Phase E media/
+  screenshot/Anki additions. Neither group claims substantive status — see
+  the table below for why, one line each.
 
 ## Substantive tools scored against the five criteria
 
@@ -44,7 +52,7 @@ observable effect on the workflow (the criterion spec.md names outright).
 | `build_sentences` | Only tool that authors practice sentences, from templates or from enveloped external material — distinct from both `gen_exercise` (drills on existing items) and `triage_inbox` (files existing text). | Squarely beyond retrieval: template selection keyed by coarse part of speech (a POS with no template yields nothing rather than invented Japanese), external-line mining under the envelope protocol, canary screening like `gen_exercise`. | `item_ids`/`topic`/`source_envelope_id`/`challenge_id`/`echo` in; `sentences[]` with `origin`/`provenance`/`needs_review`/`canary_screened` out. | Two-step echo-back flow (`echo_back_required` carrying the challenge) when external material is the source; receptive-only items are skipped rather than given a production sentence; fails closed on the canary set exactly like `gen_exercise`. | Read-only; recording what was built is deliberately the caller's job through `log_observations`, but the sentences it authors are the material the rest of the loop acts on. |
 | `triage_inbox` | Only tool that turns an unstructured inbox capture into filed vocabulary — distinct from `add_vocab` (mines one already-identified word) and from the vault-read tools (which only retrieve text, never classify it). | Unambiguously beyond retrieval: mechanical classification of shape (not meaning) into vocab/sentence/question, and on `dry_run=False` it **writes** — item rows plus mining events — the clearest "observable side effect" case of the five. | `note_envelope_id` (envelope-only, never a bare string) + `dry_run` in; `proposals[]`/`applied[]`/`deferred` out. | `dry_run=True` (default) previews with no echo-back required; `dry_run=False` requires the spent envelope confirmation before anything is filed — preview and commit are never the same call. | The strongest case on this criterion: a real, logged state change (new item rows, `event_id`) rather than a read that merely informs the next step. |
 
-## Every other tool of the 26 — helper, one line each
+## Every other tool of the 33 — helper, one line each
 
 Featured (allowlisted to the model per T012) but not substantive — session
 bookkeeping and the envelope ceremony, not tool-design substance:
@@ -103,37 +111,64 @@ over the MCP protocol, never offered to the pinned model in the demo):
     threads, due revisits, pending next steps) assembled from stored rows;
     an aggregation of existing state, not authored content.
 
+Phase E additions (server-surface only, postdate this assignment's T012/T021
+triage — the media overlay and Anki launcher):
+
+21. `media_now` — probes the active media channel (mpv) for the current
+    title/playhead, enveloped; a liveness/state probe, not generation.
+22. `media_context` — the subtitle/lyric window around the current
+    playhead on the active channel; retrieval of what is already on
+    screen, not authored content.
+23. `lyrics_now` — the lyric line active at the mpv playhead, read from a
+    supplied `.lrc`/`.ass` file; a lookup against a file the caller names,
+    not generation.
+24. `lyrics_context` — the window of lyric lines around the playhead from
+    the same file; same retrieval shape as `lyrics_now`, one level up.
+25. `screenshot_capture` — captures mpv's current frame to a
+    server-named file; a capture operation with no domain logic over the
+    image itself.
+26. `screenshot_read` — returns a previously captured screenshot's raw
+    bytes, base64-encoded; pure retrieval by id.
+27. `open_anki` — launches the Anki desktop app if not already running;
+    an infrastructure/process-launch action, unrelated to the study
+    domain and orthogonal to the katagiri database entirely.
+
 ## The allowlist-vs-surface split, stated plainly
 
 The pinned model in the demo (`openai/gpt-4o-mini`, per T012) is bound to a
-**client-side allowlist of 11 of these 26 tools**: the five substantive
+**client-side allowlist of 11 of these 33 tools**: the five substantive
 tools, `lookup` as the primary data source, and five helpers required for
 the session/logging graph and the envelope ceremony (`start_session`,
 `log_lesson`, `log_observations`, `stage_untrusted`, `confirm_untrusted`).
-The remaining 15 tools stay fully registered and discoverable at the MCP
-protocol level — a caller that lists tools over stdio sees all 26 — but the
+The remaining 22 tools stay fully registered and discoverable at the MCP
+protocol level — a caller that lists tools over stdio sees all 33 — but the
 agent graph never offers them to the model. This narrowing is
 **client-side only**; there is no server-side profile, per
 `specs/005-mcp-assignment/research.md`'s "Tool narrowing" decision, because
-katagiri really does have 26 tools and pretending otherwise at the server
+katagiri really does have 33 tools and pretending otherwise at the server
 would misstate the scope claim.
 
 ## Framing the surplus honestly
 
-Fifteen of the twenty-six tools exist for reasons that have nothing to do
-with this assignment's demo: liveness (`ping`), security posture
+Twenty-two of the thirty-three tools exist for reasons that have nothing to
+do with this assignment's demo: liveness (`ping`), security posture
 (`security_status`), the 006 study-consistency gate (`stop_gate_status`),
 raw event-log and search access for debugging and future tooling
 (`recent_events`, `search_db`, `search_notes`), the Obsidian read bridge
 used by the learner's own workflow outside any demo session (`vault_file`,
-`vault_list`, `obsidian_active_note`), and day-to-day logging/mining that
+`vault_list`, `obsidian_active_note`), day-to-day logging/mining that
 predates this feature entirely (`log_error`, `add_vocab`, `lessons`,
-`lesson_memory`, `known_word`, `known_set_stats`). None of it was added to
-pad the tool count for this submission — the registry predates T012's
-allowlist decision, and the additive-only contract rule in
-`tool_registry.py`'s own module docstring means nothing here could have
-been trimmed to look leaner even if that were desirable. The honest
-framing is: this is **production surface for a tool the author uses daily**,
-of which a curated eleven-tool subset is exposed to the graded model, and
-the triage above is what separates "substantive" from "helper" inside that
-full surface rather than inside the smaller allowlist.
+`lesson_memory`, `known_word`, `known_set_stats`), and — landed later still,
+under Phase E — the media overlay and Anki launcher (`media_now`,
+`media_context`, `lyrics_now`, `lyrics_context`, `screenshot_capture`,
+`screenshot_read`, `open_anki`), none of which the demo flow touches at
+all. None of it was added to pad the tool count for this submission — the
+registry predates T012's allowlist decision (and the Phase E tools postdate
+it entirely, added for the author's own daily use), and the additive-only
+contract rule in `tool_registry.py`'s own module docstring means nothing
+here could have been trimmed to look leaner even if that were desirable.
+The honest framing is: this is **production surface for a tool the author
+uses daily**, of which a curated eleven-tool subset is exposed to the
+graded model, and the triage above is what separates "substantive" from
+"helper" inside that full surface rather than inside the smaller
+allowlist.

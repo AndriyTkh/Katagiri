@@ -41,7 +41,7 @@ import subprocess
 import sys
 import tomllib
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -59,10 +59,29 @@ MPV_CONF_LINE = r"input-ipc-server=\\.\pipe\mpv-katagiri"
 
 ANKIMORPHS_URL = "https://github.com/mortii/anki-morphs"
 
+# Anki 26.08 removed the API AnkiMorphs used to install its spaCy/CAMeL venv
+# deps; the AnkiMorphs maintainer's fix is a hard version cap, not a patch on
+# their side -- see https://github.com/mortii/anki-morphs/issues/421.
+ANKIMORPHS_MAX_ANKI_VERSION = (26, 5)
+ANKIMORPHS_PINNED_ANKI_VERSION = "26.05"
+ANKIMORPHS_COMPAT_ISSUE_URL = "https://github.com/mortii/anki-morphs/issues/421"
+
 EPILOGUE = (
     "Daily start: open Claude Code in this repository and run /katagiri-study.\n"
     "Obsidian only needs to be running for vault-backed tools (notes search,\n"
     "active-note lookup) -- everything else works with Obsidian closed."
+)
+
+WIZARD_PREAMBLE = (
+    "\nSetting up, and why:\n"
+    "  - config.toml            where every path/token below gets saved\n"
+    "  - vendor data + JMdict   the dictionaries word lookups run against\n"
+    "  - Anki                   flashcards: spaced-repetition review of what you've learned\n"
+    "  - search indexes         sentence search + your Obsidian notes, indexed for lookup\n"
+    "  - Yomitan overlay        browser popup dictionary for known/unknown words\n"
+    "  - Obsidian bridge        your notebook: vault-backed notes and search\n"
+    "  - scheduled tasks        optional background sync/backup (asks before creating any)\n"
+    "  - backup rehearsal       proves a database snapshot can be created and restored\n"
 )
 
 STEP_LABELS = (
@@ -225,6 +244,42 @@ class InstallerError(RuntimeError):
     a traceback -- everything named in the message is a path or a key, never a
     secret value.
     """
+
+
+def _acquire_wizard_lock(lock_path: Path) -> Any:
+    """Refuse to start the wizard if another instance already holds this lock.
+
+    Two concurrent wizards would both read-modify-write ``config.toml`` (and,
+    via ``fetch_taekim.py``, ``CHECKSUMS.sha256``) with no coordination, so
+    the second writer can silently clobber the first's update. This uses an
+    OS-level advisory lock (``msvcrt.locking``) rather than a PID file: the
+    lock is released by Windows itself the moment this process's handle
+    closes, including on a crash or ``taskkill /F``, so there is no stale-lock
+    state a later run could get stuck behind.
+    """
+    import msvcrt
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "a+b")
+    try:
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        fh.close()
+        raise InstallerError(
+            f"Another katagiri installer is already running (lock held on "
+            f"{lock_path}). Wait for it to finish, or close it, before "
+            "running this one."
+        ) from None
+    return fh
+
+
+def _release_wizard_lock(fh: Any) -> None:
+    import msvcrt
+
+    fh.seek(0)
+    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    fh.close()
 
 
 def apply_config_updates(path: Path, updates: dict[str, str]) -> None:
@@ -542,6 +597,38 @@ def probe_jmdict(db_path: Path) -> ComponentStatus:
     return ComponentStatus("jmdict/kanjium import", "MISSING", "not imported yet")
 
 
+def _detect_anki_data_dir() -> Path | None:
+    """Best-effort locate Anki's profiles folder at its default Windows path.
+
+    Only checks ``%APPDATA%\\Anki2`` for a subdirectory holding
+    ``prefs21.db`` (the marker Anki writes once a profile is initialized) --
+    pure filesystem/env reads, no subprocess, no network. Returns ``None``
+    if Anki isn't installed, was moved, or has no profile yet.
+    """
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    base = Path(appdata) / "Anki2"
+    if not base.is_dir():
+        return None
+    for entry in sorted(base.iterdir()):
+        if entry.is_dir() and (entry / "prefs21.db").is_file():
+            return base
+    return None
+
+
+def _anki_manual_step_detail() -> str:
+    """Distinguish "not installed" from "installed, no profile yet" for the doctor/wizard messages."""
+    from katagiri.anki_launch import WINGET_HINT, find_anki_exe
+
+    if find_anki_exe() is None:
+        return f"Anki not found. Install it ({WINGET_HINT}), then re-run."
+    return (
+        "Anki is installed but has no profile yet. Open Anki once to create one, "
+        f"install AnkiMorphs ({ANKIMORPHS_URL}), then re-run."
+    )
+
+
 def probe_anki(cfg: RawConfig) -> ComponentStatus:
     """READY once a sync has *run*, not once the mirror holds a card.
 
@@ -559,11 +646,12 @@ def probe_anki(cfg: RawConfig) -> ComponentStatus:
     only used for the message.
     """
     if cfg.anki_data_dir is None:
-        return ComponentStatus(
-            "anki mirror",
-            "MANUAL STEP",
-            f"install Anki + AnkiMorphs ({ANKIMORPHS_URL}), then set anki_data_dir",
-        )
+        detected = _detect_anki_data_dir()
+        if detected is not None:
+            return ComponentStatus(
+                "anki mirror", "MISSING", f"found at {detected}; re-run install to save it"
+            )
+        return ComponentStatus("anki mirror", "MANUAL STEP", _anki_manual_step_detail())
     synced = _ro_query_scalar(cfg.db_path, "SELECT 1 FROM mirror_meta WHERE id = 1")
     if synced is None:
         return ComponentStatus("anki mirror", "MISSING", "not synced yet")
@@ -745,19 +833,123 @@ def step_jmdict(db_path: Path) -> StepResult:
     )
 
 
-def step_anki(cfg: RawConfig) -> StepResult:
+def _parse_dotted_version(text: str) -> tuple[int, ...] | None:
+    """Best-effort ``"26.08.1"`` -> ``(26, 8, 1)``. ``None`` for anything else."""
+    if not re.fullmatch(r"\d+(?:\.\d+)*", text.strip()):
+        return None
+    return tuple(int(part) for part in text.strip().split("."))
+
+
+def _installed_anki_version() -> tuple[int, ...] | None:
+    """Best-effort installed Anki version via ``winget`` (no other reliable
+    stdlib source on Windows). Never raises: winget missing, not on PATH,
+    unparsable output, or a timeout all mean "unknown", not "incompatible" --
+    a downgrade is only ever offered when this positively confirms a version
+    above the AnkiMorphs cutoff.
+    """
+    try:
+        proc = _run(["winget", "list", "--id", "Anki.Anki", "--exact"], timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in (proc.stdout or "").splitlines():
+        if "Anki.Anki" not in line:
+            continue
+        for token in line.split():
+            version = _parse_dotted_version(token)
+            if version is not None:
+                return version
+    return None
+
+
+def _ankimorphs_camel_wrapper_paths(anki_data_dir: Path) -> list[Path]:
+    """Locate AnkiMorphs' ``camel_wrapper.py`` under any installed addon folder.
+
+    Matched by file path, not addon folder name: AnkiWeb-shared installs use
+    a numeric folder id (see the traceback in
+    https://github.com/mortii/anki-morphs/issues/421), not the literal name
+    "ankimorphs".
+    """
+    addons = anki_data_dir / "addons21"
+    if not addons.is_dir():
+        return []
+    return sorted(addons.glob("*/morphemizers/camel_wrapper.py"))
+
+
+def _maybe_downgrade_anki_for_ankimorphs(cfg: RawConfig, *, prompt: Any) -> str | None:
+    """Offer to downgrade Anki when AnkiMorphs is installed and Anki is newer
+    than the version AnkiMorphs still supports.
+
+    Always asks first -- even under ``--yes`` -- unlike the other optional
+    steps' "skip silently under --yes" convention: this uninstalls the user's
+    current Anki and installs a pinned older one, more invasive than anything
+    else this wizard touches. Returns ``None`` when there's nothing to offer
+    (no AnkiMorphs found, version unknown, or already at/below the supported
+    version); otherwise a detail string describing what happened.
+    """
     if cfg.anki_data_dir is None:
-        return StepResult(
-            "SKIP",
-            f"anki_data_dir not set. Install Anki and AnkiMorphs ({ANKIMORPHS_URL}), "
-            "then set anki_data_dir and re-run.",
+        return None
+    if not _ankimorphs_camel_wrapper_paths(cfg.anki_data_dir):
+        return None
+    version = _installed_anki_version()
+    if version is None or version[:2] <= ANKIMORPHS_MAX_ANKI_VERSION:
+        return None
+
+    print(
+        f"  AnkiMorphs is installed but Anki {'.'.join(map(str, version))} broke the API it "
+        f"needs ({ANKIMORPHS_COMPAT_ISSUE_URL}). AnkiMorphs only supports Anki "
+        f"{ANKIMORPHS_PINNED_ANKI_VERSION} and below."
+    )
+    try:
+        answer = prompt(
+            f"  Downgrade Anki to {ANKIMORPHS_PINNED_ANKI_VERSION} so AnkiMorphs works again? [y/N]: "
         )
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if (answer or "").strip().lower() != "y":
+        return f"AnkiMorphs needs Anki <= {ANKIMORPHS_PINNED_ANKI_VERSION}; downgrade declined"
+
+    proc = _run(
+        [
+            "winget", "install", "--id", "Anki.Anki", "-e",
+            "--version", ANKIMORPHS_PINNED_ANKI_VERSION,
+            "--source", "winget",
+            "--accept-package-agreements", "--accept-source-agreements",
+        ],
+        timeout=300,
+    )
+    if proc.returncode != 0:
+        return f"Anki downgrade to {ANKIMORPHS_PINNED_ANKI_VERSION} failed: {_truncated(proc.stderr)}"
+    return f"downgraded Anki to {ANKIMORPHS_PINNED_ANKI_VERSION} for AnkiMorphs"
+
+
+def step_anki(cfg: RawConfig, *, prompt: Any = input) -> StepResult:
+    if cfg.anki_data_dir is None:
+        detected = _detect_anki_data_dir()
+        if detected is None:
+            return StepResult("SKIP", _anki_manual_step_detail())
+        try:
+            apply_config_updates(cfg.config_file, {"anki_data_dir": _normalize_path_value(str(detected))})
+        except InstallerError as exc:
+            return StepResult("ACTION NEEDED", str(exc))
+        cfg = replace(cfg, anki_data_dir=detected)
+
+    downgrade_detail = _maybe_downgrade_anki_for_ankimorphs(cfg, prompt=prompt)
+
+    from katagiri import anki_launch
+
+    print("  Opening Anki so you know it's there -- it's what runs your flashcards.")
+    anki_launch.launch_anki()
+
     proc = _run(anki_sync_argv())
     if proc.returncode == 0:
-        return StepResult("OK", "synced")
-    return StepResult(
-        "ACTION NEEDED", f"anki_sync exited {proc.returncode}: {_truncated(proc.stderr)}"
-    )
+        detail = "synced" if not downgrade_detail else f"synced; {downgrade_detail}"
+        return StepResult("OK", detail)
+    detail = f"anki_sync exited {proc.returncode}: {_truncated(proc.stderr)}"
+    if downgrade_detail:
+        detail = f"{detail}; {downgrade_detail}"
+    return StepResult("ACTION NEEDED", detail)
 
 
 def step_fts(db_path: Path) -> StepResult:
@@ -835,12 +1027,19 @@ def step_yomitan() -> StepResult:
 
 
 def step_obsidian(cfg: RawConfig) -> StepResult:
+    from katagiri import obsidian_launch
+
+    print("  Opening Obsidian so you know it's there -- it's your main notebook.")
+    launch = obsidian_launch.launch_obsidian()
+
     if not cfg.obsidian_api_token:
-        return StepResult(
-            "SKIP",
+        detail = (
             "obsidian_api_token not set. Install the 'Local REST API' community plugin "
-            "in Obsidian, copy its API key, and re-run to set obsidian_api_token.",
+            "in Obsidian, copy its API key, and re-run to set obsidian_api_token."
         )
+        if launch.reason and not launch.already_running:
+            detail = f"{detail} ({launch.reason})"
+        return StepResult("SKIP", detail)
     ok, detail = check_obsidian_connection(cfg.obsidian_api_token)
     return StepResult("OK" if ok else "ACTION NEEDED", detail)
 
@@ -926,6 +1125,15 @@ def _print_step(n: int, total: int, name: str, result: StepResult) -> None:
 
 
 def run_wizard(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> None:
+    lock_fh = _acquire_wizard_lock(cfg_path.parent / "installer.lock")
+    try:
+        _run_wizard_steps(cfg_path, repo_root, assume_yes=assume_yes)
+    finally:
+        _release_wizard_lock(lock_fh)
+
+
+def _run_wizard_steps(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> None:
+    print(WIZARD_PREAMBLE)
     n = 1
 
     result = step_config(cfg_path, assume_yes=assume_yes)

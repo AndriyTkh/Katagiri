@@ -426,6 +426,7 @@ def dictionary_lookup(conn: sqlite3.Connection, surface: str) -> dict[str, Any]:
 
 HARDENED_PORTS: Final[tuple[int, ...]] = (
     27123,
+    27124,
     8766,
     19633,
     8765,
@@ -433,7 +434,7 @@ HARDENED_PORTS: Final[tuple[int, ...]] = (
 )
 FIREWALL_COMMAND: Final = (
     'netsh advfirewall firewall add rule name="Katagiri deny inbound" dir=in '
-    f"action=block protocol=TCP localport=27123,8766,19633,8765,{MOKURO_BRIDGE_PORT}"
+    f"action=block protocol=TCP localport=27123,27124,8766,19633,8765,{MOKURO_BRIDGE_PORT}"
 )
 SECURITY_NOTE: Final = (
     "Read-only check. Katagiri never edits firewall rules; run firewall_command "
@@ -732,7 +733,7 @@ def stop_gate_status() -> dict[str, Any]:
     name="security_status",
     title="Security status",
     description=(
-        "Read-only hardening check: are the local helper ports (27123, 8766, "
+        "Read-only hardening check: are the local helper ports (27123, 27124, 8766, "
         f"19633, 8765, {MOKURO_BRIDGE_PORT}) bound to 127.0.0.1 rather than "
         "0.0.0.0? Reports per-port state and the exact netsh command for the "
         "operator to run. Changes nothing."
@@ -1378,6 +1379,7 @@ from katagiri.media_mpv import MpvChannel, write_heartbeat  # noqa: E402
 # tool_registry.py's _PHASE_E_TG_E4_SPECS note for why).
 import base64  # noqa: E402
 
+from katagiri.anki_launch import launch_anki  # noqa: E402
 from katagiri.media_asbplayer import AsbplayerChannel  # noqa: E402
 from katagiri.media_lyrics import LyricsChannel, mpv_anchor_supplier  # noqa: E402
 from katagiri.media_mokuro import MokuroChannel  # noqa: E402
@@ -1647,6 +1649,30 @@ def screenshot_read(screenshot_id: str) -> dict[str, Any]:
     )
 
 
+@server.tool(
+    name="open_anki",
+    title="Launch Anki",
+    description=(
+        "Start the Anki desktop app if it isn't already running. Returns "
+        "immediately without waiting for Anki to exit or touching its "
+        "collection file. 'reason' explains a no-op: already running, or "
+        "Anki not found (with a winget install hint)."
+    ),
+)
+def open_anki() -> dict[str, Any]:
+    logger.debug("open_anki called")
+    result = launch_anki()
+    return redact(
+        {
+            "ok": True,
+            "launched": result.launched,
+            "already_running": result.already_running,
+            "path": str(result.path) if result.path else None,
+            "reason": result.reason,
+        }
+    )
+
+
 def _describe(resolve: Any) -> str:
     """A path for the startup line, or why it is not knowable yet.
 
@@ -1675,6 +1701,15 @@ def main() -> None:
         _describe(database_path),
         _describe(log_file_path),
     )
+    from katagiri.asbplayer_launch import ensure_asbplayer_bridge
+
+    bridge = ensure_asbplayer_bridge()
+    if bridge.launched:
+        logger.info("started configured asbplayer bridge on loopback port 8766")
+    elif bridge.already_running:
+        logger.info("reusing healthy asbplayer bridge on loopback port 8766")
+    elif bridge.reason:
+        logger.info("asbplayer bridge was not started: %s", bridge.reason)
     if sys.stdout is None:  # pragma: no cover - defensive
         raise RuntimeError("stdout is unavailable; the MCP stdio transport needs it.")
     try:

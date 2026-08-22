@@ -617,3 +617,19 @@ Check for drift without writing anything:
 - **Side effects**: _TODO (T020)_
 - **Example**: _TODO (T020)_
 <!-- END HAND: screenshot_read -->
+
+<!-- BEGIN GENERATED: open_anki -->
+### `open_anki`
+
+- **Name**: `open_anki`
+- **Model-facing description**: Launch the Anki desktop app if it isn't already running.
+- **Input schema**:
+  _none_
+- **Output schema**: {ok, launched, already_running, path, reason}
+<!-- END GENERATED: open_anki -->
+<!-- BEGIN HAND: open_anki -->
+- **Purpose**: _TODO (T020)_
+- **Error conditions**: _TODO (T020)_
+- **Side effects**: _TODO (T020)_
+- **Example**: _TODO (T020)_
+<!-- END HAND: open_anki -->

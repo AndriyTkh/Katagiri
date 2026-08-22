@@ -286,7 +286,7 @@ _PHASE_B_SPECS: Final[tuple[ToolSpec, ...]] = (
         ),
         stability="experimental",
         note=(
-            "Read-only proxy over obsidian-local-rest-api on 127.0.0.1:27123 "
+            "Read-only proxy over obsidian-local-rest-api on https://127.0.0.1:27124 "
             "(B2/D-20): Katagiri holds the API key, the agent never sees it, and "
             "the plugin's own MCP endpoint is never registered here because it "
             "carries a write surface behind the same key. Content comes back as "
@@ -1472,6 +1472,22 @@ _PHASE_E_TG_E4_SPECS: Final[tuple[ToolSpec, ...]] = (
     ),
 )
 
+_PHASE_E_ANKI_SPECS: Final[tuple[ToolSpec, ...]] = (
+    ToolSpec(
+        name="open_anki",
+        summary="Launch the Anki desktop app if it isn't already running.",
+        args=(),
+        output="{ok, launched, already_running, path, reason}",
+        stability="experimental",
+        note=(
+            "Fires katagiri.anki_launch.launch_anki and returns immediately "
+            "— never waits for Anki to exit, never touches collection.anki2 "
+            "(anki_snapshot stays read-only). 'reason' explains a no-op: "
+            "already running, or Anki not found (with a winget install hint)."
+        ),
+    ),
+)
+
 TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
     _PHASE_A_SPECS
     + _PHASE_B_SPECS
@@ -1479,6 +1495,7 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
     + _PHASE_D_SPECS
     + _PHASE_E_SPECS
     + _PHASE_E_TG_E4_SPECS
+    + _PHASE_E_ANKI_SPECS
 )
 
 TOOL_SPECS_BY_NAME: Final[dict[str, ToolSpec]] = {

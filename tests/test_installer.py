@@ -340,7 +340,16 @@ def test_check_obsidian_connection_passes_through_a_proxy_failure_note(monkeypat
     assert detail == obsidian_proxy.TOKEN_UNUSABLE_NOTE
 
 
-def test_step_obsidian_reports_action_needed_for_invalid_token(tmp_path):
+def test_step_obsidian_reports_action_needed_for_invalid_token(tmp_path, monkeypatch):
+    import katagiri.obsidian_launch as obsidian_launch_mod
+
+    monkeypatch.setattr(
+        obsidian_launch_mod,
+        "launch_obsidian",
+        lambda: obsidian_launch_mod.LaunchResult(
+            launched=False, already_running=True, path=None, reason=None
+        ),
+    )
     cfg = _raw_config(tmp_path)
     # obsidian_api_token bypasses read_raw_config's own sanitizing here, to
     # exercise check_obsidian_connection's independent validation directly.
@@ -369,16 +378,215 @@ def _raw_config(tmp_path, **overrides):
     return installer.RawConfig(**base)
 
 
-def test_step_anki_skips_when_anki_data_dir_unset(tmp_path, monkeypatch):
+def test_step_anki_skips_when_anki_not_found(tmp_path, monkeypatch):
+    import katagiri.anki_launch as anki_launch_mod
+
     cfg = _raw_config(tmp_path)
 
     def boom(*a, **k):
         raise AssertionError("must not run a subprocess when unset")
 
     monkeypatch.setattr(installer.subprocess, "run", boom)
+    monkeypatch.setattr(installer, "_detect_anki_data_dir", lambda: None)
+    monkeypatch.setattr(anki_launch_mod, "find_anki_exe", lambda: None)
     result = installer.step_anki(cfg)
     assert result.status == "SKIP"
-    assert "AnkiMorphs" in result.detail or "anki_data_dir" in result.detail
+    assert "winget" in result.detail.lower()
+
+
+def test_step_anki_skips_when_anki_installed_but_no_profile(tmp_path, monkeypatch):
+    import katagiri.anki_launch as anki_launch_mod
+
+    cfg = _raw_config(tmp_path)
+
+    def boom(*a, **k):
+        raise AssertionError("must not run a subprocess when unset")
+
+    monkeypatch.setattr(installer.subprocess, "run", boom)
+    monkeypatch.setattr(installer, "_detect_anki_data_dir", lambda: None)
+    monkeypatch.setattr(
+        anki_launch_mod, "find_anki_exe", lambda: Path("C:/fake/anki.exe")
+    )
+    result = installer.step_anki(cfg)
+    assert result.status == "SKIP"
+    assert "AnkiMorphs" in result.detail
+
+
+def test_step_anki_auto_detects_and_persists_anki_data_dir(tmp_path, monkeypatch):
+    import katagiri.anki_launch as anki_launch_mod
+
+    cfg = _raw_config(tmp_path)
+    installer.config_mod.write_default_config(cfg.config_file)
+    detected = tmp_path / "Anki2"
+    monkeypatch.setattr(installer, "_detect_anki_data_dir", lambda: detected)
+
+    launch_calls = []
+    monkeypatch.setattr(
+        anki_launch_mod,
+        "launch_anki",
+        lambda: launch_calls.append(True)
+        or anki_launch_mod.LaunchResult(
+            launched=False, already_running=True, path=None, reason=None
+        ),
+    )
+
+    calls = []
+
+    def fake_run(argv):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(installer, "_run", fake_run)
+    result = installer.step_anki(cfg)
+
+    assert result.status == "OK"
+    assert calls == [installer.anki_sync_argv()]
+    assert launch_calls == [True]
+    saved = installer.read_raw_config(cfg.config_file)
+    assert saved.anki_data_dir == detected
+
+
+def test_maybe_downgrade_anki_returns_none_without_ankimorphs(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+
+    def boom(*a, **k):
+        raise AssertionError("must not check Anki's version without AnkiMorphs installed")
+
+    monkeypatch.setattr(installer, "_installed_anki_version", boom)
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=boom)
+    assert detail is None
+
+
+def _write_camel_wrapper(anki_data_dir: Path, addon_folder: str = "472573498") -> None:
+    wrapper = anki_data_dir / "addons21" / addon_folder / "morphemizers" / "camel_wrapper.py"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("from aqt.package import venv_binary\n")
+
+
+def test_maybe_downgrade_anki_returns_none_when_version_unknown(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    _write_camel_wrapper(cfg.anki_data_dir)
+    monkeypatch.setattr(installer, "_installed_anki_version", lambda: None)
+
+    def boom(*a, **k):
+        raise AssertionError("must not prompt when the version can't be determined")
+
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=boom)
+    assert detail is None
+
+
+def test_maybe_downgrade_anki_returns_none_when_already_supported(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    _write_camel_wrapper(cfg.anki_data_dir)
+    monkeypatch.setattr(installer, "_installed_anki_version", lambda: (26, 5, 3))
+
+    def boom(*a, **k):
+        raise AssertionError("must not prompt when Anki is already at/below the supported version")
+
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=boom)
+    assert detail is None
+
+
+def test_maybe_downgrade_anki_declines_without_running_winget_install(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    _write_camel_wrapper(cfg.anki_data_dir)
+    monkeypatch.setattr(installer, "_installed_anki_version", lambda: (26, 8, 1))
+
+    def boom(*a, **k):
+        raise AssertionError("must not run winget install when the user declines")
+
+    monkeypatch.setattr(installer, "_run", boom)
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=lambda _: "n")
+    assert detail == "AnkiMorphs needs Anki <= 26.05; downgrade declined"
+
+
+def test_maybe_downgrade_anki_treats_eof_as_decline(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    _write_camel_wrapper(cfg.anki_data_dir)
+    monkeypatch.setattr(installer, "_installed_anki_version", lambda: (26, 8, 1))
+
+    def raise_eof(_):
+        raise EOFError
+
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=raise_eof)
+    assert detail == "AnkiMorphs needs Anki <= 26.05; downgrade declined"
+
+
+def test_maybe_downgrade_anki_runs_winget_install_on_yes(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    _write_camel_wrapper(cfg.anki_data_dir)
+    monkeypatch.setattr(installer, "_installed_anki_version", lambda: (26, 8, 1))
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(installer, "_run", fake_run)
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=lambda _: "y")
+    assert detail == "downgraded Anki to 26.05 for AnkiMorphs"
+    assert calls == [
+        [
+            "winget", "install", "--id", "Anki.Anki", "-e",
+            "--version", "26.05",
+            "--source", "winget",
+            "--accept-package-agreements", "--accept-source-agreements",
+        ]
+    ]
+
+
+def test_maybe_downgrade_anki_reports_winget_install_failure(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    _write_camel_wrapper(cfg.anki_data_dir)
+    monkeypatch.setattr(installer, "_installed_anki_version", lambda: (26, 8, 1))
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="access denied")
+
+    monkeypatch.setattr(installer, "_run", fake_run)
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=lambda _: "y")
+    assert detail == "Anki downgrade to 26.05 failed: access denied"
+
+
+def test_installed_anki_version_parses_winget_list_output(monkeypatch):
+    def fake_run(argv, **kwargs):
+        assert argv == ["winget", "list", "--id", "Anki.Anki", "--exact"]
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="Name  Id        Version Source\nAnki  Anki.Anki 26.08.1 winget\n", stderr=""
+        )
+
+    monkeypatch.setattr(installer, "_run", fake_run)
+    assert installer._installed_anki_version() == (26, 8, 1)
+
+
+def test_installed_anki_version_none_when_winget_unavailable(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("winget not found")
+
+    monkeypatch.setattr(installer, "_run", boom)
+    assert installer._installed_anki_version() is None
+
+
+def test_step_anki_folds_downgrade_detail_into_result(tmp_path, monkeypatch):
+    import katagiri.anki_launch as anki_launch_mod
+
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    (cfg.anki_data_dir).mkdir()
+    monkeypatch.setattr(anki_launch_mod, "launch_anki", lambda: anki_launch_mod.LaunchResult(
+        launched=False, already_running=True, path=None, reason=None
+    ))
+    monkeypatch.setattr(
+        installer, "_maybe_downgrade_anki_for_ankimorphs", lambda cfg, prompt: "downgraded Anki to 26.05 for AnkiMorphs"
+    )
+
+    def fake_run(argv):
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(installer, "_run", fake_run)
+    result = installer.step_anki(cfg)
+    assert result.status == "OK"
+    assert result.detail == "synced; downgraded Anki to 26.05 for AnkiMorphs"
 
 
 def test_step_md_search_skips_when_vault_path_unset(tmp_path, monkeypatch):
@@ -435,9 +643,41 @@ def test_step_search_indexes_skips_both_rebuilds_when_stamp_fails(tmp_path, monk
     assert calls[0] == installer.tokenizer_stamp_argv()
 
 
-def test_step_obsidian_skips_when_token_unset(tmp_path):
+def test_step_obsidian_skips_when_token_unset(tmp_path, monkeypatch):
+    import katagiri.obsidian_launch as obsidian_launch_mod
+
+    monkeypatch.setattr(obsidian_launch_mod, "find_obsidian_exe", lambda: None)
     cfg = _raw_config(tmp_path)
     result = installer.step_obsidian(cfg)
+    assert result.status == "SKIP"
+
+
+def test_step_obsidian_launches_obsidian_and_notes_when_not_found(tmp_path, monkeypatch):
+    import katagiri.obsidian_launch as obsidian_launch_mod
+
+    monkeypatch.setattr(obsidian_launch_mod, "obsidian_is_running", lambda: False)
+    monkeypatch.setattr(obsidian_launch_mod, "find_obsidian_exe", lambda: None)
+    cfg = _raw_config(tmp_path)
+    result = installer.step_obsidian(cfg)
+    assert result.status == "SKIP"
+    assert "winget" in result.detail.lower()
+
+
+def test_step_obsidian_launches_obsidian_when_found(tmp_path, monkeypatch):
+    import katagiri.obsidian_launch as obsidian_launch_mod
+
+    calls = []
+    monkeypatch.setattr(
+        obsidian_launch_mod,
+        "launch_obsidian",
+        lambda: calls.append(True)
+        or obsidian_launch_mod.LaunchResult(
+            launched=True, already_running=False, path=Path("C:/fake/Obsidian.exe"), reason=None
+        ),
+    )
+    cfg = _raw_config(tmp_path)
+    result = installer.step_obsidian(cfg)
+    assert calls == [True]
     assert result.status == "SKIP"
 
 
@@ -646,10 +886,22 @@ def test_probe_jmdict_ready_when_rows_present(tmp_path):
     assert status.status == "READY"
 
 
-def test_probe_anki_manual_step_when_unset(tmp_path):
+def test_probe_anki_manual_step_when_unset(tmp_path, monkeypatch):
+    import katagiri.anki_launch as anki_launch_mod
+
     cfg = _raw_config(tmp_path)
+    monkeypatch.setattr(installer, "_detect_anki_data_dir", lambda: None)
+    monkeypatch.setattr(anki_launch_mod, "find_anki_exe", lambda: None)
     status = installer.probe_anki(cfg)
     assert status.status == "MANUAL STEP"
+
+
+def test_probe_anki_missing_when_detected_but_not_saved(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path)
+    monkeypatch.setattr(installer, "_detect_anki_data_dir", lambda: tmp_path / "Anki2")
+    status = installer.probe_anki(cfg)
+    assert status.status == "MISSING"
+    assert "re-run" in status.detail
 
 
 def test_probe_anki_missing_when_set_but_not_synced(tmp_path):
@@ -871,3 +1123,78 @@ def test_check_does_not_invoke_subprocess_run_for_module_steps(tmp_path, monkeyp
 
     for argv in seen:
         assert argv[:2] != [sys.executable, "-m"], f"unexpected module invocation: {argv}"
+
+
+# ---------------------------------------------------------------------------
+# Wizard concurrency lock: refuse a second instance, always released
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_lock_round_trip_acquire_then_release(tmp_path):
+    lock_path = tmp_path / "installer.lock"
+    fh = installer._acquire_wizard_lock(lock_path)
+    installer._release_wizard_lock(fh)
+
+    # Released cleanly: acquiring again on the same path afterward also works.
+    fh2 = installer._acquire_wizard_lock(lock_path)
+    installer._release_wizard_lock(fh2)
+
+
+def test_wizard_lock_contention_raises_installer_error(tmp_path):
+    import msvcrt
+
+    lock_path = tmp_path / "installer.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    held_fh = open(lock_path, "a+b")
+    held_fh.seek(0)
+    msvcrt.locking(held_fh.fileno(), msvcrt.LK_NBLCK, 1)
+    try:
+        with pytest.raises(installer.InstallerError) as excinfo:
+            installer._acquire_wizard_lock(lock_path)
+        assert str(lock_path) in str(excinfo.value)
+    finally:
+        held_fh.seek(0)
+        msvcrt.locking(held_fh.fileno(), msvcrt.LK_UNLCK, 1)
+        held_fh.close()
+
+
+def test_run_wizard_refuses_to_start_when_lock_already_held(tmp_path, monkeypatch):
+    import msvcrt
+
+    cfg_path = tmp_path / "config.toml"
+    lock_path = cfg_path.parent / "installer.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    held_fh = open(lock_path, "a+b")
+    held_fh.seek(0)
+    msvcrt.locking(held_fh.fileno(), msvcrt.LK_NBLCK, 1)
+
+    def boom(*a, **k):
+        raise AssertionError("must not run steps when lock is held")
+
+    monkeypatch.setattr(installer, "_run_wizard_steps", boom)
+
+    try:
+        with pytest.raises(installer.InstallerError):
+            installer.run_wizard(cfg_path, tmp_path, assume_yes=True)
+    finally:
+        held_fh.seek(0)
+        msvcrt.locking(held_fh.fileno(), msvcrt.LK_UNLCK, 1)
+        held_fh.close()
+
+
+def test_run_wizard_releases_lock_even_when_a_step_raises(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.toml"
+    lock_path = cfg_path.parent / "installer.lock"
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(installer, "_run_wizard_steps", boom)
+
+    with pytest.raises(RuntimeError):
+        installer.run_wizard(cfg_path, tmp_path, assume_yes=True)
+
+    # The `finally` released it: acquiring immediately afterward must succeed,
+    # which proves run_wizard didn't leak the OS lock on a step failure.
+    fh = installer._acquire_wizard_lock(lock_path)
+    installer._release_wizard_lock(fh)

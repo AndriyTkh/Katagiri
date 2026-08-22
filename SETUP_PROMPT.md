@@ -77,7 +77,26 @@ of guessing or inventing a placeholder that looks real.
    background jobs without asking is exactly what this project's docs say
    not to do.
 
-5. Agent subproject (a separate uv project, needed only if the human wants
+5. Anki + AnkiMorphs — the doctor step above reports the anki mirror as
+   MANUAL STEP or MISSING until this is done; both winget and the addon
+   download need your go-ahead first, so tell the human what you're about
+   to run before running it:
+   - Check for Anki: `where anki` or look for
+     `%LOCALAPPDATA%\Programs\Anki\anki.exe`. If missing, tell the human you're
+     about to install it, then run
+     `winget install --id Anki.Anki -e --source winget --accept-package-agreements --accept-source-agreements`.
+   - If `%APPDATA%\Anki2` doesn't exist yet, no profile has been created —
+     launch Anki once (it creates the default profile on first run), then
+     close it.
+   - Download the latest AnkiMorphs release asset (a `.ankiaddon` file) from
+     https://github.com/mortii/anki-morphs/releases/latest and extract it
+     (it's a zip) into `%APPDATA%\Anki2\addons21\anki-morphs\`. Tell the
+     human to restart Anki afterward so it loads the add-on.
+   - Re-run `install.bat` — the installer's doctor auto-detects
+     `anki_data_dir` at its default location, saves it to config.toml, and
+     runs the anki mirror sync, no manual path entry needed.
+
+6. Agent subproject (a separate uv project, needed only if the human wants
    the LangGraph-style study agent, not just the raw MCP server):
    - `cd agent && uv sync`
    - `copy .env.example .env`
@@ -95,12 +114,12 @@ of guessing or inventing a placeholder that looks real.
      (Keys > Create key), and to set a spend cap on it. The free tier is
      50 requests/day, which is not much for real study sessions.
 
-6. Verify: from the repo root, `uv run pytest -q` should pass (public/CI mode
+7. Verify: from the repo root, `uv run pytest -q` should pass (public/CI mode
    also exists via `uv run pytest --public-build`, but that's slower and not
    needed for a normal fresh install). If `agent/` was set up, its own test
    suite (if any) runs from inside `agent/`.
 
-7. Final report to the human — list clearly, separated into:
+8. Final report to the human — list clearly, separated into:
    - Done automatically: what you downloaded/installed/configured.
    - Still needs the human, with the exact action for each: Irodori files,
      confirming/generating the Obsidian API token if setup.py couldn't pull

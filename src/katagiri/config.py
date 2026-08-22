@@ -17,7 +17,7 @@ the offending key *name* only, never a value.
 a *pinned* port number, declared here (not in ``mcp_server.py``) so this module
 stays the single source of truth for Phase-E configuration, but not exposed as a
 ``config.toml`` key — like the other third-party ports Katagiri hardens
-(Obsidian's 27123, AnkiConnect's 8765, yomitan-api's 19633, asbplayer's 8766),
+(Obsidian's 27123/27124, AnkiConnect's 8765, yomitan-api's 19633, asbplayer's 8766),
 it is a fixed contract the bridge and its client must agree on, not something
 an operator should be able to drift out from under ``HARDENED_PORTS``.
 """
@@ -49,6 +49,8 @@ _PATH_KEYS: Final = (
     "scratch_root",
     "db_path",
     "screenshot_scratch_root",
+    "obsidian_ca_bundle",
+    "asbplayer_bridge_dir",
 )
 
 # Keys that are plain strings rather than paths. Kept as a separate tuple so the
@@ -97,10 +99,23 @@ _KEY_BLOCKS: Final[dict[str, str]] = {
     "obsidian_api_token": """\
 # API key for the Obsidian "Local REST API" plugin (Settings -> Local REST API).
 # This is a credential: Katagiri holds it so the agent never does, and uses it
-# only for GET-shaped vault reads against http://127.0.0.1:27123. It is never
+# only for GET-shaped vault reads against https://127.0.0.1:27124. It is never
 # logged, never returned by a tool, and never written back to this file.
 # Leave it unset and the Obsidian tools report themselves unconfigured.
 # obsidian_api_token = ""
+""",
+    "obsidian_ca_bundle": """\
+# Optional PEM certificate bundle for Obsidian Local REST API's HTTPS endpoint.
+# Leave unset to use normal Windows/Python certificate verification. If the
+# plugin uses its local self-signed certificate, export that certificate as PEM
+# and set this to its absolute path; verification remains enabled.
+# obsidian_ca_bundle = ""
+""",
+    "asbplayer_bridge_dir": """\
+# Local checkout containing the asbplayer WebSocket bridge's main.go. Katagiri
+# starts only this explicitly configured local checkout on 127.0.0.1:8766; it
+# never guesses a location or runs an arbitrary command.
+# asbplayer_bridge_dir = ""
 """,
     "screenshot_scratch_root": """\
 # Confined directory the screenshot-question tool (Phase E) writes frames into.
@@ -186,6 +201,8 @@ class Config:
     vault_path: Path | None = None
     anki_data_dir: Path | None = None
     obsidian_api_token: str | None = field(default=None, repr=False)
+    obsidian_ca_bundle: Path | None = None
+    asbplayer_bridge_dir: Path | None = None
     mokuro_shared_secret: str | None = field(default=None, repr=False)
 
     def require_vault_path(self) -> Path:
@@ -394,6 +411,8 @@ def load_config(*, create_missing: bool = True) -> Config:
         vault_path=values["vault_path"],
         anki_data_dir=values["anki_data_dir"],
         obsidian_api_token=secrets["obsidian_api_token"],
+        obsidian_ca_bundle=values["obsidian_ca_bundle"],
+        asbplayer_bridge_dir=values["asbplayer_bridge_dir"],
         mokuro_shared_secret=secrets["mokuro_shared_secret"],
     )
 

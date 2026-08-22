@@ -15,9 +15,10 @@ The GET-only property is *structural*, not a convention:
 * No function takes an HTTP method, a URL, a header map or a body. There is no
   argument through which a caller could steer a request towards a write, so a
   prompt-injected model has nothing to aim at.
-* Scheme, host and port are module constants (``http://127.0.0.1:27123``, the
-  plugin's default non-TLS port). Its self-signed HTTPS variant on 27124 is out
-  of scope.
+* Scheme, host and port are module constants (``https://127.0.0.1:27124``, the
+  plugin's secure local endpoint). TLS verification uses the normal platform
+  trust store by default; an operator may explicitly configure a PEM CA bundle
+  for the plugin's local self-signed certificate.
 * The opener is built with an empty :class:`urllib.request.ProxyHandler` and a
   redirect handler that refuses every redirect. Both matter for one reason: the
   request carries a bearer token, and neither an environment proxy nor a 302 may
@@ -50,6 +51,7 @@ from __future__ import annotations
 import contextlib
 import http.client
 import json
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -64,9 +66,9 @@ logger = get_logger("obsidian_proxy")
 # Where we are allowed to talk, and for how long
 # ---------------------------------------------------------------------------
 
-OBSIDIAN_SCHEME: Final = "http"
+OBSIDIAN_SCHEME: Final = "https"
 OBSIDIAN_HOST: Final = "127.0.0.1"
-OBSIDIAN_PORT: Final = 27123
+OBSIDIAN_PORT: Final = 27124
 BASE_URL: Final = f"{OBSIDIAN_SCHEME}://{OBSIDIAN_HOST}:{OBSIDIAN_PORT}"
 
 #: Obsidian is a local process; a slow answer means it is busy or gone, and a
@@ -107,6 +109,18 @@ UNREACHABLE_NOTE: Final = (
     f"Could not reach obsidian-local-rest-api at {BASE_URL} (port "
     f"{OBSIDIAN_PORT}). Obsidian is probably not running, or the Local REST API "
     "plugin is disabled. Nothing was read."
+)
+TLS_VERIFICATION_NOTE: Final = (
+    "Could not verify the certificate presented by obsidian-local-rest-api. "
+    "Export the Local REST API plugin's local certificate as PEM and set "
+    "'obsidian_ca_bundle' in Katagiri's config.toml to its absolute path, then "
+    "restart the Katagiri MCP server. TLS verification remains enabled."
+)
+TLS_CONFIGURATION_NOTE: Final = (
+    "The configured 'obsidian_ca_bundle' could not be loaded as a PEM certificate "
+    "bundle. Export the Local REST API plugin's local certificate as PEM, set "
+    "the key to its absolute path in Katagiri's config.toml, then restart the "
+    "Katagiri MCP server. TLS verification remains enabled."
 )
 TIMEOUT_NOTE: Final = (
     f"obsidian-local-rest-api at {BASE_URL} did not answer within "
@@ -177,6 +191,19 @@ class ObsidianTokenUnusable(ObsidianProxyError):
 class ObsidianUnreachable(ObsidianProxyError):
     code = UNREACHABLE
     note = UNREACHABLE_NOTE
+
+
+class ObsidianTlsConfiguration(ObsidianProxyError):
+    """The configured local certificate bundle cannot establish a trust store."""
+
+    code = UNCONFIGURED
+    note = TLS_CONFIGURATION_NOTE
+
+
+class ObsidianTlsVerification(ObsidianUnreachable):
+    """The local endpoint responded, but its certificate is not trusted."""
+
+    note = TLS_VERIFICATION_NOTE
 
 
 class ObsidianTimeout(ObsidianProxyError):
@@ -311,6 +338,19 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _tls_context() -> ssl.SSLContext:
+    """A verified TLS context, optionally extended with the local plugin CA."""
+    ca_bundle = get_config().obsidian_ca_bundle
+    try:
+        if ca_bundle is None:
+            return ssl.create_default_context()
+        return ssl.create_default_context(cafile=str(ca_bundle))
+    except (OSError, ssl.SSLError):
+        # These exceptions can include a local path. The safe, actionable answer
+        # identifies the configuration key but never echoes its value.
+        raise ObsidianTlsConfiguration(TLS_CONFIGURATION_NOTE) from None
+
+
 def _opener() -> urllib.request.OpenerDirector:
     """An opener that cannot be redirected and cannot be proxied.
 
@@ -318,7 +358,9 @@ def _opener() -> urllib.request.OpenerDirector:
     exactly the kind of shared mutable that later code starts adding handlers to.
     """
     return urllib.request.build_opener(
-        urllib.request.ProxyHandler({}), _RefuseRedirects()
+        urllib.request.ProxyHandler({}),
+        _RefuseRedirects(),
+        urllib.request.HTTPSHandler(context=_tls_context()),
     )
 
 
@@ -403,8 +445,13 @@ def _get(
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
             raise ObsidianTimeout(TIMEOUT_NOTE) from None
+        if isinstance(exc.reason, ssl.SSLCertVerificationError):
+            logger.debug("obsidian TLS verification failed")
+            raise ObsidianTlsVerification() from None
         logger.debug("obsidian unreachable: %s", type(exc.reason).__name__)
         raise ObsidianUnreachable(UNREACHABLE_NOTE) from None
+    except ObsidianProxyError:
+        raise
     except ValueError as exc:
         # Second layer of the credential defence. `http.client.putheader` rejects a
         # header value holding a control character or a non-latin-1 byte with a

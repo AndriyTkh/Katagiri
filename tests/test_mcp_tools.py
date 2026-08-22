@@ -769,7 +769,7 @@ def test_the_phase_d_fragment_holds_exactly_the_registered_batches():
     assert len(tool_registry._PHASE_D_SPECS) == 11 + 3
     # Fragment concatenation, not replacement: the earlier phases are all still
     # declared and still registered. Phase E (E-T007, below) adds 2 more on top.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(D_US1_CONTRACT))
@@ -1910,10 +1910,10 @@ def test_t010_registers_zero_new_toolspecs():
     """T010's rule: surface entry_gate as additive output keys, not a new tool."""
     # 26 as of T010; E-T007 adds 2 more (media_now, media_context); T012 (TG-E4,
     # below) adds 4 more (lyrics_now, lyrics_context, screenshot_capture,
-    # screenshot_read) — T010 itself still added none, which is the claim this
-    # test defends.
-    assert len(TOOL_SPECS) == 26 + 2 + 4
-    assert len(registered_tools()) == 26 + 2 + 4
+    # screenshot_read); the anki fragment (below) adds 1 more (open_anki) —
+    # T010 itself still added none, which is the claim this test defends.
+    assert len(TOOL_SPECS) == 26 + 2 + 4 + 1
+    assert len(registered_tools()) == 26 + 2 + 4 + 1
 
 
 # ---------------------------------------------------------------------------
@@ -1948,7 +1948,7 @@ def test_the_phase_e_fragment_holds_exactly_the_registered_batch():
     assert len(tool_registry._PHASE_E_SPECS) == 2
     # Fragment concatenation, not replacement: every earlier phase is still
     # declared and still registered. TG-E4 (T012, below) adds 4 more on top.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(E_US1_CONTRACT))
@@ -2170,12 +2170,58 @@ def test_the_phase_e_tg_e4_fragment_holds_exactly_the_registered_batch():
     assert len(tool_registry._PHASE_E_TG_E4_SPECS) == 4
     # Fragment concatenation, not replacement: every earlier phase (and
     # fragment) is still declared and still registered.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(E_TG_E4_CONTRACT))
 def test_e_tg_e4_contract_is_additive_only(name):
     required, optional = E_TG_E4_CONTRACT[name]
+    spec = get_spec(name)  # raises if the tool was removed or renamed
+    assert spec.required_args == required, (
+        f"{name}: required arguments changed — that is a breaking change"
+    )
+    present = set(spec.arg_names)
+    assert optional <= present, (
+        f"{name}: optional arguments {sorted(optional - present)} were dropped"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase E: anki launch — open_anki
+# ---------------------------------------------------------------------------
+#
+# katagiri.anki_launch has its own unit tests (tests/test_anki_launch.py) for
+# find_anki_exe/launch_anki themselves. What is defended here is only the
+# registration: the spec and the adapter agree, and the tool takes no args.
+
+E_ANKI_CONTRACT: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "open_anki": (frozenset(), frozenset()),
+}
+
+
+def test_phase_e_anki_tools_are_registered_with_specs():
+    registered = registered_tools()
+    for name in E_ANKI_CONTRACT:
+        assert name in registered, f"{name} is declared in the spec but not registered"
+        spec = get_spec(name)
+        assert spec.stability == "experimental"
+        assert spec.note, "an anki-fragment tool must say why its shape may still change"
+
+
+def test_the_phase_e_anki_fragment_holds_exactly_the_registered_batch():
+    """The fragment is open_anki's additive batch; an accidental extra shows here."""
+    assert {spec.name for spec in tool_registry._PHASE_E_ANKI_SPECS} == set(
+        E_ANKI_CONTRACT
+    )
+    assert len(tool_registry._PHASE_E_ANKI_SPECS) == 1
+    # Fragment concatenation, not replacement: every earlier phase (and
+    # fragment) is still declared and still registered.
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 == len(registered_tools())
+
+
+@pytest.mark.parametrize("name", sorted(E_ANKI_CONTRACT))
+def test_e_anki_contract_is_additive_only(name):
+    required, optional = E_ANKI_CONTRACT[name]
     spec = get_spec(name)  # raises if the tool was removed or renamed
     assert spec.required_args == required, (
         f"{name}: required arguments changed — that is a breaking change"
@@ -2342,6 +2388,54 @@ def test_screenshot_read_refuses_a_hostile_screenshot_id():
 
     with pytest.raises(ScreenshotConfinementError):
         mcp_server.screenshot_read(screenshot_id="../../../etc/passwd")
+
+
+# ---------------------------------------------------------------------------
+# open_anki
+# ---------------------------------------------------------------------------
+
+
+def test_open_anki_wraps_launch_result(monkeypatch):
+    from pathlib import Path
+
+    from katagiri.anki_launch import LaunchResult
+
+    monkeypatch.setattr(
+        mcp_server,
+        "launch_anki",
+        lambda: LaunchResult(
+            launched=True, already_running=False, path=Path("C:/fake/anki.exe"), reason=None
+        ),
+    )
+
+    result = mcp_server.open_anki()
+
+    assert result == {
+        "ok": True,
+        "launched": True,
+        "already_running": False,
+        "path": str(Path("C:/fake/anki.exe")),
+        "reason": None,
+    }
+
+
+def test_open_anki_reports_reason_when_not_found(monkeypatch):
+    from katagiri.anki_launch import LaunchResult
+
+    monkeypatch.setattr(
+        mcp_server,
+        "launch_anki",
+        lambda: LaunchResult(
+            launched=False, already_running=False, path=None, reason="Anki not found. Install it (winget ...), then re-run."
+        ),
+    )
+
+    result = mcp_server.open_anki()
+
+    assert result["ok"] is True
+    assert result["launched"] is False
+    assert result["path"] is None
+    assert "winget" in result["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -2593,13 +2687,23 @@ def test_main_serves_stdio_and_nothing_else(monkeypatch, capsys):
     """
     run_calls: list[dict[str, Any]] = []
     logging_calls: list[int] = []
+    bridge_calls: list[bool] = []
+    from katagiri import asbplayer_launch
+
     monkeypatch.setattr(
         mcp_server.server, "run", lambda **kwargs: run_calls.append(kwargs)
     )
     monkeypatch.setattr(mcp_server, "setup_logging", logging_calls.append)
+    monkeypatch.setattr(
+        asbplayer_launch,
+        "ensure_asbplayer_bridge",
+        lambda: bridge_calls.append(True)
+        or asbplayer_launch.BridgeLaunchResult(False, True, None, None),
+    )
 
     mcp_server.main()
 
     assert run_calls == [{"transport": "stdio"}]
     assert logging_calls, "main must configure stderr logging before serving"
+    assert bridge_calls == [True], "startup must check the managed bridge once"
     assert capsys.readouterr().out == "", "startup must not touch stdout"

@@ -73,6 +73,7 @@ OK_BLANK = {
     "OBSIDIAN_STDIO_COMMAND": "only used if OBSIDIAN_TRANSPORT=stdio (it isn't)",
     "OBSIDIAN_STDIO_ARGS": "only used if OBSIDIAN_TRANSPORT=stdio (it isn't)",
     "OBSIDIAN_CA_BUNDLE": "alternative to OBSIDIAN_VERIFY_TLS=false; filled if you export the cert below",
+    "LANGSMITH_API_KEY": "tracing/Studio are optional; get a free key at https://smith.langchain.com",  # pragma: allowlist secret
 }
 
 # Required for the *agent graph* to run; the katagiri MCP server itself
@@ -93,9 +94,13 @@ VAR_ORDER = [
     "OBSIDIAN_STDIO_ARGS",
     "OPENROUTER_API_KEY",
     "OPENROUTER_MODEL",
+    "LANGSMITH_TRACING",
+    "LANGSMITH_API_KEY",
+    "LANGSMITH_PROJECT",
 ]
 
-SECRET_VARS = {"OPENROUTER_API_KEY", "OBSIDIAN_API_TOKEN"}
+SECRET_VARS = {"OPENROUTER_API_KEY", "OBSIDIAN_API_TOKEN", "LANGSMITH_API_KEY"}
+DEFAULT_LANGSMITH_PROJECT = "katagiri-agent"
 
 
 def say(msg: str) -> None:
@@ -194,6 +199,16 @@ def write_env(values: dict[str, str]) -> None:
         f"OPENROUTER_API_KEY={values.get('OPENROUTER_API_KEY', '')}",
         "# Pinned (T012) - never blank, never auto-routing (spec FR-007).",
         f"OPENROUTER_MODEL={values.get('OPENROUTER_MODEL', DEFAULT_MODEL)}",
+        "",
+        "# --- LangSmith tracing (optional) ---",
+        "# Free key at https://smith.langchain.com (Settings > API Keys). Blank",
+        "# disables both tracing and the langgraph-dev Studio wrapper - nothing",
+        "# else in this project reads it.",
+        f"LANGSMITH_API_KEY={values.get('LANGSMITH_API_KEY', '')}",
+        "# LangChain/LangGraph tracing is automatic once a key is set above -",
+        "# no code changes. Set to false to keep the key but stop tracing.",
+        f"LANGSMITH_TRACING={values.get('LANGSMITH_TRACING', 'true' if values.get('LANGSMITH_API_KEY') else 'false')}",
+        f"LANGSMITH_PROJECT={values.get('LANGSMITH_PROJECT', DEFAULT_LANGSMITH_PROJECT)}",
         "",
     ]
     ENV_FILE.write_text("\n".join(lines), encoding="utf-8")
@@ -374,6 +389,61 @@ def step_openrouter(env: dict[str, str]) -> list[str]:
     return problems
 
 
+def check_langsmith_key(key: str) -> tuple[bool, str]:
+    """Best-effort auth check. Returns (ok, detail). A network failure counts
+    as ok=True - never block setup on connectivity, only on a confirmed
+    401/403 from LangSmith itself."""
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        "https://api.smith.langchain.com/api/v1/sessions?limit=1",
+        headers={"x-api-key": key},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return True, f"HTTP {resp.status}"
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return False, f"HTTP {exc.code} {exc.reason}"
+        return True, f"HTTP {exc.code} (not an auth error)"
+    except (urllib.error.URLError, OSError) as exc:
+        return True, f"network check skipped: {exc}"
+
+
+def step_langsmith(env: dict[str, str]) -> list[str]:
+    header("LangSmith (optional - tracing + Studio)")
+    problems: list[str] = []
+    key = env.get("LANGSMITH_API_KEY", "")
+    if not key:
+        say("  [--] LANGSMITH_API_KEY left blank on purpose: tracing/Studio are optional")
+        return problems
+
+    valid, detail = check_langsmith_key(key)
+    if valid:
+        ok(f"LANGSMITH_API_KEY already set in .env and accepted by LangSmith ({detail})")
+        return problems
+
+    warn(f"LANGSMITH_API_KEY set but rejected by LangSmith: {detail}")
+    say("  This key can't read or write anything at smith.langchain.com - traces")
+    say("  silently fail to upload. Likely causes: the key was revoked, or it")
+    say("  belongs to an org workspace this key isn't scoped to.")
+    say("  Get a fresh one: https://smith.langchain.com -> Settings -> API Keys.")
+    new_key = ask_secret("  Paste a new key now (input hidden; Enter to keep the old one): ")
+    if new_key:
+        env["LANGSMITH_API_KEY"] = new_key
+        revalid, redetail = check_langsmith_key(new_key)
+        if revalid:
+            ok(f"new LANGSMITH_API_KEY accepted by LangSmith ({redetail})")
+        else:
+            problems.append("LANGSMITH_API_KEY still rejected by LangSmith")
+            warn(f"new key still rejected: {redetail}")
+    else:
+        problems.append("LANGSMITH_API_KEY rejected by LangSmith (kept old value)")
+        warn("kept the old key - tracing will keep failing until it's replaced")
+    return problems
+
+
 def step_defaults(env: dict[str, str]) -> None:
     header("5/6 Filling remaining defaults")
     primary_python = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
@@ -390,6 +460,12 @@ def step_defaults(env: dict[str, str]) -> None:
         if not env.get(key):
             env[key] = value
             ok(f"{key} = {value}")
+    if not env.get("LANGSMITH_TRACING"):
+        env["LANGSMITH_TRACING"] = "true" if env.get("LANGSMITH_API_KEY") else "false"
+        ok(f"LANGSMITH_TRACING = {env['LANGSMITH_TRACING']} (derived from LANGSMITH_API_KEY presence)")
+    if not env.get("LANGSMITH_PROJECT"):
+        env["LANGSMITH_PROJECT"] = DEFAULT_LANGSMITH_PROJECT
+        ok(f"LANGSMITH_PROJECT = {DEFAULT_LANGSMITH_PROJECT}")
     for key, why in OK_BLANK.items():
         if not env.get(key):
             say(f"  [--] {key} left blank on purpose: {why}")
@@ -457,6 +533,7 @@ def main() -> int:
     problems += step_deps()
     problems += step_obsidian(env)
     problems += step_openrouter(env)
+    problems += step_langsmith(env)
     step_defaults(env)
 
     write_env(env)

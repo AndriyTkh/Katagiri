@@ -11,7 +11,7 @@ Phase B added:
 * ``today_export`` — the aggregate exporter that writes ``<vault>/.derived/Today.md``;
 * ``obsidian_proxy`` plus its three MCP tools (``vault_file``, ``vault_list``,
   ``obsidian_active_note``) — a GET-only proxy in front of
-  obsidian-local-rest-api on ``127.0.0.1:27123``.
+  obsidian-local-rest-api on ``https://127.0.0.1:27124``.
 
 The A-verify database is rebuilt here deliberately *cheaply* — migrate, seed a
 handful of items, mark one known — rather than by re-importing the vendored
@@ -628,8 +628,8 @@ def test_only_the_obsidian_proxy_is_an_http_client():
     assert 'method="GET"' in proxy
     assert re.search(r"method\s*=\s*[\"'](?!GET)", proxy) is None
     assert obsidian_proxy.OBSIDIAN_HOST == "127.0.0.1"
-    assert obsidian_proxy.OBSIDIAN_SCHEME == "http"
-    assert obsidian_proxy.BASE_URL == "http://127.0.0.1:27123"
+    assert obsidian_proxy.OBSIDIAN_SCHEME == "https"
+    assert obsidian_proxy.BASE_URL == "https://127.0.0.1:27124"
 
 
 # ---------------------------------------------------------------------------
@@ -1172,13 +1172,13 @@ def test_today_export_renders_overwrites_and_refuses_a_handwritten_page(
 
 
 def test_the_obsidian_port_is_in_the_hardened_port_list():
-    """27123 is checked by ``security_status``, and it is the port the proxy uses.
+    """27124 is checked by ``security_status``, and it is the port the proxy uses.
 
     Both halves asserted together on purpose: a hardening list that names a port
     the proxy no longer talks to, or a proxy that talks to a port the hardening
     list does not name, would each read as "checked" while checking nothing.
     """
-    assert 27123 in mcp_server.HARDENED_PORTS
+    assert 27124 in mcp_server.HARDENED_PORTS
     assert obsidian_proxy.OBSIDIAN_PORT in mcp_server.HARDENED_PORTS
-    assert obsidian_proxy.OBSIDIAN_PORT == 27123
+    assert obsidian_proxy.OBSIDIAN_PORT == 27124
     assert str(obsidian_proxy.OBSIDIAN_PORT) in mcp_server.FIREWALL_COMMAND

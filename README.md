@@ -42,6 +42,12 @@ with commented defaults the first time config is loaded. It may also hold local
 credentials (the Obsidian Local REST API key), so treat it as a secret: never
 commit it, never paste its contents into an issue, a log or a chat.
 
+Katagiri's read-only Obsidian proxy uses the Local REST API plugin's secure
+endpoint at `https://127.0.0.1:27124`. Certificate verification is always on.
+If the plugin's local self-signed certificate is not already trusted, export it
+as PEM and set `obsidian_ca_bundle = "C:/absolute/path/to/obsidian-cert.pem"`
+in `%LOCALAPPDATA%\Katagiri\config.toml`, then restart the MCP server.
+
 Large vendored dictionaries (full UniDic, kanjium accents) go in `vendor/`,
 gitignored, with digests committed in `vendor/CHECKSUMS.sha256`. Nothing is
 downloaded at runtime — see `vendor/README.md`.
@@ -168,13 +174,15 @@ this one.
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-uv run --project agent python -m katagiri_agent
+uv run --project agent python -m katagiri_agent --list-connections
 ```
 
-This is the invocation `specs/005-mcp-assignment/quickstart.md` walks
-through in full (discovering both MCP connections, pointing at a specific
-goal note, running the branching workflow); consult it for the exact
-flags exercised in the rehearsed demonstration. The agent wires its own
+`--list-connections` and `--goal-note PATH` are mutually exclusive and one
+is required — there is no bare-invocation mode. This is the invocation
+`specs/005-mcp-assignment/quickstart.md` walks through in full (discovering
+both MCP connections, then `--goal-note "Goals.md"` to run the branching
+workflow); consult it for the exact flags exercised in the rehearsed
+demonstration. The agent wires its own
 katagiri stdio connection (via `KATAGIRI_PYTHON`/`KATAGIRI_MODULE` in
 `agent/.env`) alongside its direct HTTPS connection to the demo Obsidian
 instance — see `agent/README.md`'s "Connection configuration" section.

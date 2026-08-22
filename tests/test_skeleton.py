@@ -98,7 +98,16 @@ def test_missing_template_keys_appended_on_load(local_app_data):
     text = (cfg_dir / "config.toml").read_text(encoding="utf-8")
     # Existing content is untouched: appended, never rewritten.
     assert text.startswith(original)
-    for key in ("anki_data_dir", "scratch_root", "db_path", "obsidian_api_token"):
+    for key in (
+        "anki_data_dir",
+        "scratch_root",
+        "db_path",
+        "obsidian_api_token",
+        "obsidian_ca_bundle",
+        "asbplayer_bridge_dir",
+        "screenshot_scratch_root",
+        "mokuro_shared_secret",
+    ):
         assert f"# {key} = " in text, f"missing commented block for {key}"
     # The active key is not duplicated by a commented copy.
     assert text.count("vault_path") == 1
@@ -120,6 +129,10 @@ def test_commented_key_counts_as_present(local_app_data):
         '# anki_data_dir = ""\n'
         '# scratch_root = ""\n'
         '# db_path = ""\n'
+        '# obsidian_ca_bundle = ""\n'
+        '# asbplayer_bridge_dir = ""\n'
+        '# screenshot_scratch_root = ""\n'
+        '# mokuro_shared_secret = ""\n'
     )
     (cfg_dir / "config.toml").write_text(original, encoding="utf-8")
 

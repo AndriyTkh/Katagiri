@@ -35,6 +35,7 @@ instead of guessing.
 
 from __future__ import annotations
 
+import json
 import pprint
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -50,13 +51,16 @@ from katagiri_agent import resilience
 # ---------------------------------------------------------------------------
 #
 # Do not edit src/katagiri/ from this project (out of scope for 005; see
-# spec.md's scope claim). These five strings are exactly
-# session_tools.ACTION_KINDS at the time T013 was written.
+# spec.md's scope claim). These six strings are exactly
+# session_tools.ACTION_KINDS (curriculum_topic added after T013 was
+# originally written, by session_tools.py's own curriculum-DAG fallback
+# rung).
 
 ACTION_TIRED_MODE: Final = "tired_mode_minimum"
 ACTION_NEXT_STEP: Final = "continue_next_step"
 ACTION_REVISIT_TOPIC: Final = "revisit_topic"
 ACTION_RESOLVE_THREAD: Final = "resolve_thread"
+ACTION_CURRICULUM_TOPIC: Final = "curriculum_topic"
 ACTION_OPEN_FIRST_LESSON: Final = "open_first_lesson"
 
 ACTION_KINDS: Final[tuple[str, ...]] = (
@@ -64,6 +68,7 @@ ACTION_KINDS: Final[tuple[str, ...]] = (
     ACTION_NEXT_STEP,
     ACTION_REVISIT_TOPIC,
     ACTION_RESOLVE_THREAD,
+    ACTION_CURRICULUM_TOPIC,
     ACTION_OPEN_FIRST_LESSON,
 )
 
@@ -91,6 +96,12 @@ ACTION_KINDS: Final[tuple[str, ...]] = (
 #   so it goes to the triage path, which exercises the envelope ceremony
 #   (stage_untrusted -> confirm_untrusted -> triage_inbox) on the thread
 #   text the same way an inbox note would be triaged.
+# - ``curriculum_topic`` -- session_tools.py's own curriculum-DAG fallback
+#   rung, offered when no next-step/revisit/unresolved rung applies -- is
+#   also fresh material advancing the curriculum (its instruction text:
+#   "Open a lesson on {topic}... close it with log_lesson"), the same shape
+#   as ``continue_next_step``/``open_first_lesson``, so it goes to the
+#   exercise path too.
 PATH_EXERCISE: Final = "exercise"
 PATH_REVIEW: Final = "review"
 PATH_TRIAGE: Final = "triage"
@@ -98,6 +109,7 @@ PATH_TRIAGE: Final = "triage"
 ACTION_KIND_TO_PATH: Final[dict[str, str]] = {
     ACTION_NEXT_STEP: PATH_EXERCISE,
     ACTION_OPEN_FIRST_LESSON: PATH_EXERCISE,
+    ACTION_CURRICULUM_TOPIC: PATH_EXERCISE,
     ACTION_REVISIT_TOPIC: PATH_REVIEW,
     ACTION_TIRED_MODE: PATH_REVIEW,
     ACTION_RESOLVE_THREAD: PATH_TRIAGE,
@@ -398,6 +410,44 @@ def _classify_empty_vault_result(result: Any) -> resilience.EmptyResult | None:
     return None
 
 
+def _unwrap_mcp_result(result: Any) -> Any:
+    """Normalize one ``tool.ainvoke`` return value into the tool's own payload.
+
+    ``langchain-mcp-adapters`` >= 0.3 on ``langchain-core`` >= 1.0 hands back
+    a list of *standard content blocks* -- ``[{"type": "text", "text": ...,
+    "id": "lc_..."}]`` -- rather than the bare string older versions
+    returned. Both MCP servers this graph drives answer with a JSON object
+    serialised into that single text block (katagiri's tool envelope,
+    ``{"ok": ..., "action": {...}}``; the Obsidian plugin's read envelope,
+    ``{"content": ..., "frontmatter": {...}, ...}``), so without unwrapping
+    here every caller sees a one-element list where it expected a mapping.
+
+    Kept deliberately narrow and total: a text block whose payload parses as
+    JSON is returned decoded, anything else is returned untouched, and
+    nothing raises. That keeps the three distinguishable ``vault_read``
+    outcomes in :func:`_call_obsidian_tool` (real result / empty / degraded)
+    decided by shape as before, only now on the shape the *server* sent
+    instead of the transport's wrapper.
+    """
+    blocks = result
+    if isinstance(blocks, tuple) and len(blocks) == 2:
+        # response_format="content_and_artifact" -> (content, artifact)
+        blocks = blocks[0]
+    if isinstance(blocks, list) and len(blocks) == 1:
+        block = blocks[0]
+        if isinstance(block, dict) and block.get("type") == "text":
+            blocks = block.get("text")
+    if isinstance(blocks, str):
+        try:
+            decoded = json.loads(blocks)
+        except (ValueError, TypeError):
+            return blocks
+        if isinstance(decoded, (dict, list)):
+            return decoded
+        return blocks
+    return blocks
+
+
 async def _call_tool(
     deps: GraphDeps, node: str, name: str, args: Mapping[str, Any]
 ) -> tuple[Any, str]:
@@ -418,7 +468,7 @@ async def _call_tool(
     line = _transcript_line(node, name, args)
 
     async def do_call() -> Any:
-        return await tool.ainvoke(dict(args))
+        return _unwrap_mcp_result(await tool.ainvoke(dict(args)))
 
     async def reconnect() -> None:
         if deps.reconnect is not None:
@@ -459,7 +509,7 @@ async def _call_obsidian_tool(
     line = _transcript_line(node, name, args)
 
     async def do_call() -> Any:
-        return await tool.ainvoke(dict(args))
+        return _unwrap_mcp_result(await tool.ainvoke(dict(args)))
 
     async def reconnect() -> None:
         if deps.reconnect is not None:

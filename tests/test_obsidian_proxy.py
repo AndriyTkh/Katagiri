@@ -12,7 +12,7 @@ than a convenience:
 map, so there is no argument a caller (or a prompt-injected model) can steer
 towards a write. The scheme, host and port are module constants.
 
-*Confinement.* Requests go to 127.0.0.1:27123 with proxies disabled and
+*Confinement.* Requests go to https://127.0.0.1:27124 with proxies disabled and
 redirects refused, so nothing can be talked into carrying the bearer token to
 another host. Vault paths are normalised and traversal is rejected before a URL
 is built.
@@ -31,6 +31,7 @@ import inspect
 import io
 import json
 import re
+import ssl
 import threading
 import urllib.error
 import urllib.request
@@ -164,7 +165,7 @@ def test_vault_file_returns_content_over_a_bearer_authenticated_get(configured, 
     assert answer["content_type"] == "text/markdown"
 
     request = http.last
-    assert request.full_url == "http://127.0.0.1:27123/vault/Notes/Today.md"
+    assert request.full_url == "https://127.0.0.1:27124/vault/Notes/Today.md"
     assert request.get_method() == "GET"
     assert request.get_header("Authorization") == f"Bearer {TOKEN}"
     assert request.data is None, "a GET carries no body"
@@ -182,7 +183,7 @@ def test_vault_list_reads_the_root_and_a_subdirectory(configured, http):
     assert root["files"] == ["Today.md", "Grammar/"]
     assert root["file_count"] == 2
     assert root["path"] == ""
-    assert http.last.full_url == "http://127.0.0.1:27123/vault/"
+    assert http.last.full_url == "https://127.0.0.1:27124/vault/"
 
     http.result = FakeResponse(
         json.dumps({"files": ["Verbs.md"]}).encode(), content_type="application/json"
@@ -190,7 +191,7 @@ def test_vault_list_reads_the_root_and_a_subdirectory(configured, http):
     sub = obsidian_proxy.list_vault_dir("Grammar")
     assert sub["files"] == ["Verbs.md"]
     assert sub["path"] == "Grammar"
-    assert http.last.full_url == "http://127.0.0.1:27123/vault/Grammar/"
+    assert http.last.full_url == "https://127.0.0.1:27124/vault/Grammar/"
 
 
 def test_active_note_reads_the_open_note(configured, http):
@@ -200,7 +201,7 @@ def test_active_note_reads_the_open_note(configured, http):
 
     assert answer["ok"] is True
     assert answer["content"] == "open note body"
-    assert http.last.full_url == "http://127.0.0.1:27123/active/"
+    assert http.last.full_url == "https://127.0.0.1:27124/active/"
     assert http.last.get_method() == "GET"
 
 
@@ -233,7 +234,17 @@ def test_obsidian_not_running_is_a_structured_answer(configured, http):
     assert answer["status"] is None
     assert answer["content"] is None
     assert answer["truncated"] is False
-    assert "27123" in answer["note"], "the note must say what could not be reached"
+    assert "27124" in answer["note"], "the note must say what could not be reached"
+
+
+def test_an_untrusted_certificate_explains_how_to_add_the_plugin_ca(configured, http):
+    http.result = urllib.error.URLError(ssl.SSLCertVerificationError("self-signed"))
+
+    answer = obsidian_proxy.read_vault_file("Notes/Today.md")
+
+    assert answer["error"] == "obsidian_unreachable"
+    assert "obsidian_ca_bundle" in answer["note"]
+    assert "self-signed" not in answer["note"]
 
 
 def test_a_timeout_is_reported_as_a_timeout(configured, http):
@@ -456,7 +467,7 @@ def test_directory_listing_rejects_traversal_too(configured, http):
         (
             "Notes\\Study Log.md",
             "Notes/Study Log.md",
-            "http://127.0.0.1:27123/vault/Notes/Study%20Log.md",
+            "https://127.0.0.1:27124/vault/Notes/Study%20Log.md",
         ),
         # A literal '%2e%2e' in a note name must reach the plugin double-encoded.
         # If quote() ever gains '%' in its safe set, the plugin decodes these back
@@ -464,17 +475,17 @@ def test_directory_listing_rejects_traversal_too(configured, http):
         (
             "Notes/%2e%2e/secrets.md",
             "Notes/%2e%2e/secrets.md",
-            "http://127.0.0.1:27123/vault/Notes/%252e%252e/secrets.md",
+            "https://127.0.0.1:27124/vault/Notes/%252e%252e/secrets.md",
         ),
         (
             "%2e%2e%2fsecrets.md",
             "%2e%2e%2fsecrets.md",
-            "http://127.0.0.1:27123/vault/%252e%252e%252fsecrets.md",
+            "https://127.0.0.1:27124/vault/%252e%252e%252fsecrets.md",
         ),
         (
             "Notes/%2fetc%2fpasswd",
             "Notes/%2fetc%2fpasswd",
-            "http://127.0.0.1:27123/vault/Notes/%252fetc%252fpasswd",
+            "https://127.0.0.1:27124/vault/Notes/%252fetc%252fpasswd",
         ),
     ],
     ids=["spaces", "encoded_dotdot", "encoded_traversal", "encoded_slash"],
@@ -516,7 +527,7 @@ def test_a_query_or_fragment_cannot_be_smuggled_into_the_url(configured, http):
     obsidian_proxy.read_vault_file("Notes/a.md?x=1#frag")
 
     url = http.last.full_url
-    assert url.startswith("http://127.0.0.1:27123/vault/")
+    assert url.startswith("https://127.0.0.1:27124/vault/")
     assert "?" not in url and "#" not in url, "path characters must be encoded, not live"
 
 
@@ -634,9 +645,42 @@ def test_the_mcp_tools_run_their_answer_through_redact(configured, monkeypatch):
 
 def test_the_module_talks_to_loopback_on_the_documented_port_only():
     assert obsidian_proxy.OBSIDIAN_HOST == "127.0.0.1"
-    assert obsidian_proxy.OBSIDIAN_PORT == 27123
-    assert obsidian_proxy.BASE_URL == "http://127.0.0.1:27123"
+    assert obsidian_proxy.OBSIDIAN_PORT == 27124
+    assert obsidian_proxy.BASE_URL == "https://127.0.0.1:27124"
     assert 0 < obsidian_proxy.TIMEOUT_S <= 10
+
+
+def test_tls_verification_is_required_by_default(configured):
+    """HTTPS must use the platform trust store unless a CA bundle is configured."""
+    context = obsidian_proxy._tls_context()
+
+    assert context.check_hostname is True
+    assert context.verify_mode is ssl.CERT_REQUIRED
+
+
+def test_tls_context_adds_an_explicitly_configured_ca_bundle(tmp_path, monkeypatch):
+    bundle = tmp_path / "obsidian-local-rest-api.pem"
+    _write_config(
+        tmp_path,
+        f'obsidian_api_token = "{TOKEN}"\n'
+        f'obsidian_ca_bundle = "{bundle.as_posix()}"\n',
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    config_mod.reset_config_cache()
+    real_create_default_context = ssl.create_default_context
+    captured: dict[str, str | None] = {}
+
+    def create_default_context(*, cafile: str | None = None):
+        captured["cafile"] = cafile
+        return real_create_default_context()
+
+    monkeypatch.setattr(obsidian_proxy.ssl, "create_default_context", create_default_context)
+    try:
+        obsidian_proxy._tls_context()
+    finally:
+        config_mod.reset_config_cache()
+
+    assert captured == {"cafile": str(bundle)}
 
 
 def test_no_public_function_accepts_a_method_a_url_or_headers():

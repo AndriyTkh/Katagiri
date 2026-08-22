@@ -23,10 +23,10 @@ Must exit 0. It checks: demo port bound and ≠ 27123, no stale katagiri/agent p
 **Step 1 — start the custom MCP server independently of the agent.** In its own terminal, in its own process:
 
 ```powershell
-$env:PYTHONUTF8="1"; $env:KATAGIRI_CONFIG="<demo config path>"; uv run katagiri
+$env:PYTHONUTF8="1"; $env:KATAGIRI_CONFIG="<demo config path>"; uv run katagiri-mcp
 ```
 
-Say out loud: separate process, stdio transport, `mcp>=2,<3`, 26 registered tools, contract checked in at `src/katagiri/tool_registry.py`.
+Say out loud: separate process, stdio transport, `mcp>=2,<3`, 33 registered tools, contract checked in at `src/katagiri/tool_registry.py`.
 
 **Step 2 — show the agent discovering both MCP connections.** In a second terminal:
 
@@ -54,7 +54,7 @@ Point at the transcript line where the frontmatter field value appears **as a li
 
 **Step 6 — run one complete workflow that uses the custom server.** The same command as step 4 continues: `start_session` returns exactly one prescribed action → the graph **branches on `action.kind`** → the chosen path runs (exercise / review / triage) → grade → `log_lesson` / `log_observations` → summary. Name the branch taken and why the server chose it.
 
-**Step 7 — show evidence that at least three custom tools are exposed.** Show the discovered tool list from step 2 plus `docs/assignment/tool-triage.md`: `coverage`, `find_i_plus_one`, `gen_exercise`, `build_sentences`, `triage_inbox` as substantive (≥2 beyond retrieval), `lookup` as the primary-data-source tool over vendored JMdict. Note that the model is bound to an allowlisted featured subset while the server exposes all 26.
+**Step 7 — show evidence that at least three custom tools are exposed.** Show the discovered tool list from step 2 plus `docs/assignment/tool-triage.md`: `coverage`, `find_i_plus_one`, `gen_exercise`, `build_sentences`, `triage_inbox` as substantive (≥2 beyond retrieval), `lookup` as the primary-data-source tool over vendored JMdict. Note that the model is bound to an allowlisted featured subset (11 tools) while the server exposes all 33.
 
 **Step 8 — explain one important custom tool contract and design decision.** One tool from `docs/assignment/tool-contracts.md` in full 8-row form, plus its "why this belongs at the MCP boundary" paragraph.
 
@@ -77,7 +77,7 @@ Then undo the injection exactly as documented in `docs/assignment/defence-script
 2. One goal-note frontmatter value is traced note → existing-server result → katagiri argument → output; variants A and B produce different outputs. *(SC-002)*
 3. ≥3 substantive custom tools shown exposed, ≥2 beyond retrieval, `lookup` named as the primary data source. *(SC-003)*
 4. All three failure injections give distinct readable reports; one kill-and-resume completes on Windows; failure is distinguishable from a successful empty result. *(SC-004)*
-5. Contract docs cover all 26 tools; the drift check is green and fails on an induced registry edit. *(SC-005)*
+5. Contract docs cover all 33 tools; the drift check is green and fails on an induced registry edit. *(SC-005)*
 6. A non-author reaches a successful start from the README alone. *(SC-006)*
 7. All 9 steps fit 10–15 minutes; per-segment timings recorded against the budget. *(SC-007)*
 8. `detect-secrets` green; no personal DB / vault / token reachable under the demo profile. *(SC-008)*
