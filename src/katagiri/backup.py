@@ -27,7 +27,7 @@ Scheduling: Katagiri does not create scheduled tasks — a personal tool should 
 install background jobs behind its owner's back. To run a daily snapshot at
 21:00, run this yourself (one line, from the repository root):
 
-    schtasks /Create /TN "Katagiri Daily Backup" /SC DAILY /ST 21:00 /F /TR "cmd /c cd /d C:\ProjectsC\RandomPr\Katagiri && uv run python -m katagiri.backup create"
+    schtasks /Create /TN "Katagiri Daily Backup" /SC DAILY /ST 21:00 /F /TR "cmd /c cd /d <path-to-your-katagiri-checkout> && uv run python -m katagiri.backup create"
 
 Check it with ``schtasks /Query /TN "Katagiri Daily Backup"`` and remove it with
 ``schtasks /Delete /TN "Katagiri Daily Backup" /F``.

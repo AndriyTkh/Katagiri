@@ -68,7 +68,7 @@ Scheduling: Katagiri does not create scheduled tasks — a personal tool should 
 install background jobs behind its owner's back. To catch up once a day at 22:30,
 run this yourself (one line, from the repository root):
 
-    schtasks /Create /TN "Katagiri Anki Sync" /SC DAILY /ST 22:30 /F /TR "cmd /c cd /d C:\ProjectsC\RandomPr\Katagiri && uv run python -m katagiri.anki_sync run"
+    schtasks /Create /TN "Katagiri Anki Sync" /SC DAILY /ST 22:30 /F /TR "cmd /c cd /d <path-to-your-katagiri-checkout> && uv run python -m katagiri.anki_sync run"
 
 Check it with ``schtasks /Query /TN "Katagiri Anki Sync"`` and remove it with
 ``schtasks /Delete /TN "Katagiri Anki Sync" /F``.

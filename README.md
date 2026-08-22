@@ -4,6 +4,14 @@ A personal English↔Japanese study tool, exposed as an **MCP server over stdio*
 Not a service: there is no network listener, no daemon, no multi-user story. It
 runs on one Windows machine and is driven by whatever MCP client is attached.
 
+**Windows only** — the server refuses to start on any other platform.
+
+**New checkout, want a coding agent to install it for you?** Paste the prompt
+in [`SETUP_PROMPT.md`](SETUP_PROMPT.md) into any agent with shell access to
+this clone. It downloads what can legally be auto-fetched, installs both uv
+projects, and tells you exactly which steps (API keys, Obsidian, Irodori
+materials) it can't do for you.
+
 ## Setup (uv)
 
 ```powershell
