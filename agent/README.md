@@ -16,6 +16,25 @@ It talks to two MCP servers:
 
 ## Setup
 
+One script does everything — checks `uv`, syncs `agent/.venv`, verifies the
+Obsidian plugin (and pulls the vault's API token + self-signed cert out of the
+plugin's own `data.json`, with consent), prompts for the OpenRouter key
+(hidden input, with instructions), and writes `agent/.env`:
+
+```powershell
+python agent/scripts/setup.py          # interactive; rerun any time, fills gaps only
+python agent/scripts/setup.py --yes    # non-interactive: defaults, skips secret prompts
+```
+
+The repo's `.mcp.json` points Claude Code (or any harness that reads it) at
+`setup.py --stdio-bootstrap`: registering the katagiri MCP connection **is**
+the setup — it runs the same steps (output on stderr; stdout stays a clean
+JSON-RPC stream) and then hands stdio to `katagiri.mcp_server`. A missing
+`OPENROUTER_API_KEY` is a warning there, not a failure — the MCP server
+itself doesn't need it, only the agent graph does.
+
+Manual fallback:
+
 ```powershell
 cd agent
 uv sync                 # creates agent/.venv, installs deps (Python 3.12)

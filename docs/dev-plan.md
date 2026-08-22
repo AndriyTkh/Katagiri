@@ -370,3 +370,19 @@ advanced difficulty modeling · event-log hash chain · remaining moonshots.
   reach `master` or any `006-*` lane, and TG-E5 (E-verify) stays blocked until D6 truly
   passes. No consumption-mix evidence exists post-reset; channel order default (mpv-first,
   US1) unchanged.
+- 2026-08-21 — specs/006 T042 (feature close, all of TG0–TG8 checked): learner metric read
+  read-only from the real event log (`recent_events`, unfiltered and per-type, 15 total events
+  since the 2026-08-20 reset): **dictation records this week: 0** (no `lesson_close` event
+  exists at all — every lesson so far was opened, never closed, so the reserved
+  `phase0-kana-dictation` slug has never fired); **pitch-marking records this week: 0** (same
+  reason — no closed lesson); **monologue records this month: 0** (no artifact of any kind in
+  the vault or log); **days over the new-word cap: 0** (only one `mining` event exists in the
+  whole log, 2026-08-20, 1 new word against the 8/day cap — the one day with any mining
+  activity is honestly under cap, not merely unmeasured). This is a straightforward honest
+  zero across all four figures, not a code failure: the learner has still not had a first
+  session (same gap `stop_gate_status`'s entry-gate sub-dict already reports as 1/10 study
+  days). 006-verify (T041) is green on fixtures; per quickstart.md §Learner metric, a green
+  006-verify with a failing/zero real-usage learner metric is recorded as-is rather than
+  smoothed over. Deferral register (F-02/F-03 revised, two new rows for STT and the
+  restore-CLI nicety) and the review-coverage table updated in decisions-ledger.md; **006 is
+  now fully closed — every task in specs/006-teaching-method/tasks.md is checked.**

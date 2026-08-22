@@ -78,45 +78,49 @@ g-desu-copula ──> g-wa-topic ──> g-o-object ──> g-masu-form
 
 Vocabulary: `people/family`, `food`, `numbers 1–10`, `time/days`, `transport`, `body`, core 50 verbs.
 
-External references (T028): the most defensible mapping evident from each
-node's own grammar point, not verified against the JF Standard's official
-can-do numbering, Irodori's official lesson index, or Tae Kim's exact section
-titles — say so plainly rather than citing a precise-looking id nobody checked.
+External references (T028): `irodori_lesson` and `jf_can_do` are now verified
+against the official Irodori Starter (A1) Table of Contents
+(`vendor/irodori/starter_contents_en.pdf`, read 2026-08-21) — exact lesson
+number, lesson title, grammar-note number, and can-do id, not a guessed
+mapping. `tae_kim_section` remains the pre-verification best-effort text from
+T028: no official Tae Kim section index has been checked against it yet, so
+treat those three lines as unverified until a similar pass is done for Tae
+Kim's Guide.
 
 ```yaml
 id: g-desu-copula
-jf_can_do: A1 Interpersonal - self-introduction (name, nationality) via です/だ
-irodori_lesson: Irodori I (Beginner 1), opening lessons - self-introduction
+jf_can_do: A1 Interpersonal - can-do 08 (Irodori Starter) - simple self-introduction, name and country/hometown
+irodori_lesson: Irodori Starter (A1) Lesson 3 "Nice to meet you." (Topic: About Myself) - Grammar Note ➊ Nです／N1はN2です
 tae_kim_section: Tae Kim, Essential Grammar - だ and です
 ---
 id: g-wa-topic
-jf_can_do: A1 Interpersonal - introducing a topic (Xは...) in self-intro exchanges
-irodori_lesson: Irodori I (Beginner 1), opening lessons - topic marker は
+jf_can_do: A1 Interpersonal - can-do 09/10 (Irodori Starter) - writing/asking your name and country using the topic marker は
+irodori_lesson: Irodori Starter (A1) Lesson 3 "Nice to meet you." (Topic: About Myself) - Grammar Note ➌ Nは？（お名前は？）
 tae_kim_section: Tae Kim, Essential Grammar - Particles, は
 ---
 id: g-o-object
-jf_can_do: A1 Interpersonal - stating what one does or wants using a direct object (Xを...)
-irodori_lesson: Irodori I (Beginner 1), early lessons - verbs with を objects
+jf_can_do: A1 Interpersonal - can-do 19 (Irodori Starter) - asking/answering what you eat for breakfast
+irodori_lesson: Irodori Starter (A1) Lesson 5 "I like udon." (Topic: My Favorite Foods) - Grammar Note ➍ NをV-ます（シリアルを食べます）
 tae_kim_section: Tae Kim, Essential Grammar - Particles, を
 ---
 id: g-masu-form
-jf_can_do: A1 Interpersonal/Informational - describing routine actions politely (-ます form)
-irodori_lesson: Irodori I (Beginner 1), daily-routine lessons - ます form
+jf_can_do: A1 Interpersonal - can-do 18 (Irodori Starter) - responding when offered a drink, e.g. what you want to drink
+irodori_lesson: Irodori Starter (A1) Lesson 5 "I like udon." (Topic: My Favorite Foods) - Grammar Note ➌ V-ますか？（マス-form）vs V-る？（dictionary-form）
 tae_kim_section: Tae Kim, Essential Grammar - Verb Basics, polite form (-ます)
 ---
 id: g-no-possessive
-jf_can_do: A1 Interpersonal - describing belonging or relations (XのY)
-irodori_lesson: Irodori I (Beginner 1), early lessons - の for possession and description
+jf_can_do: A1 Interpersonal - can-do 14 (Irodori Starter) - simple questions about a photograph, e.g. "who is that?"
+irodori_lesson: Irodori Starter (A1) Lesson 4 "I live in Tokyo." (Topic: About Myself) - Grammar Note ➍ N1のN2（ペットのジョンです）
 tae_kim_section: Tae Kim, Essential Grammar - Particles, の
 ---
 id: g-negation
-jf_can_do: A1 Interpersonal/Informational - saying what is not the case (negative です/-ません)
-irodori_lesson: Irodori I (Beginner 1) - negative forms introduced alongside affirmative ones
+jf_can_do: A1 Interpersonal - can-do 10 (Irodori Starter) - asking/answering name and country/hometown when meeting someone for the first time
+irodori_lesson: Irodori Starter (A1) Lesson 3 "Nice to meet you." (Topic: About Myself) - Grammar Note ➏ Nじゃないです（ベトナムじゃないです）
 tae_kim_section: Tae Kim, Essential Grammar - Negative Verbs and negation
 ---
 id: g-question-ka
-jf_can_do: A1 Interpersonal - asking simple yes/no questions (...か)
-irodori_lesson: Irodori I (Beginner 1), opening lessons - question marker か
+jf_can_do: A1 Interpersonal - can-do 10 (Irodori Starter) - asking/answering name and country/hometown when meeting someone for the first time
+irodori_lesson: Irodori Starter (A1) Lesson 3 "Nice to meet you." (Topic: About Myself) - Grammar Note ➍ Sか？（みなさんは、友だちですか？）
 tae_kim_section: Tae Kim, Essential Grammar - Question marker か
 ```
 
