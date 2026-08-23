@@ -250,8 +250,25 @@ PHASE_D_TOOLS: tuple[str, ...] = (
     "find_i_plus_one",
 )
 
+# Phase E (additive): managed local app startup / media-overlay tool batches.
+PHASE_E_TOOLS: tuple[str, ...] = (
+    "open_anki",
+    "media_now",
+    "media_context",
+    "screenshot_capture",
+    "screenshot_read",
+    "lyrics_now",
+    "lyrics_context",
+    "study_plan",
+)
+
 #: The whole contract as of Phase C: additive-only, and asserted as equality.
-CONTRACT_TOOLS = CONTRACT_TOOLS_THROUGH_B | frozenset(PHASE_C_TOOLS) | frozenset(PHASE_D_TOOLS)
+CONTRACT_TOOLS = (
+    CONTRACT_TOOLS_THROUGH_B
+    | frozenset(PHASE_C_TOOLS)
+    | frozenset(PHASE_D_TOOLS)
+    | frozenset(PHASE_E_TOOLS)
+)
 
 
 def _prose_arguments(
@@ -628,7 +645,14 @@ HTTP_CLIENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
 )
-HTTP_CLIENT_ALLOWLIST = frozenset({"obsidian_proxy.py"})
+#: Phase E's asbplayer integration is the other deliberate exception: both
+#: modules speak ``http.client`` strictly loopback-only — a health probe
+#: against the locally-running asbplayer app and its bridge's REST calls —
+#: never leaving 127.0.0.1, so the token-boundary property this file's
+#: docstring cares about is unaffected.
+HTTP_CLIENT_ALLOWLIST = frozenset(
+    {"obsidian_proxy.py", "asbplayer_launch.py", "media_asbplayer.py"}
+)
 
 #: Phase E's mokuro page-change bridge is the one deliberate exception to
 #: "no HTTP server anywhere in the package". mokuro's browser extension is a

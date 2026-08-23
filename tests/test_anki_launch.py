@@ -45,6 +45,22 @@ def test_find_anki_exe_none_when_nothing_found(tmp_path, monkeypatch):
     assert anki_launch.find_anki_exe() is None
 
 
+def test_find_anki_exe_does_not_create_config(tmp_path, monkeypatch):
+    """``find_anki_exe`` sits on the ``installer --check`` read-only path
+    (via ``_anki_manual_step_detail``); it must never write ``config.toml``
+    as a side effect of looking up ``anki_exe_path``."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("PROGRAMFILES", raising=False)
+    monkeypatch.setattr(anki_launch.shutil, "which", lambda name: None)
+    from katagiri import config as config_mod
+
+    config_mod.reset_config_cache()
+
+    anki_launch.find_anki_exe()
+
+    assert not (tmp_path / "Katagiri" / "config.toml").exists()
+
+
 def test_launch_anki_already_running(monkeypatch):
     monkeypatch.setattr(anki_launch, "anki_is_running", lambda: True)
 

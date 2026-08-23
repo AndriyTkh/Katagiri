@@ -46,6 +46,7 @@ MOKURO_BRIDGE_PORT: Final[int] = 8767
 _PATH_KEYS: Final = (
     "vault_path",
     "anki_data_dir",
+    "anki_exe_path",
     "scratch_root",
     "db_path",
     "screenshot_scratch_root",
@@ -87,6 +88,13 @@ _KEY_BLOCKS: Final[dict[str, str]] = {
     "anki_data_dir": """\
 # Anki data directory (the folder containing your Anki profiles).
 # anki_data_dir = ""
+""",
+    "anki_exe_path": """\
+# Exact anki.exe to launch, overriding the built-in autodetect (LOCALAPPDATA,
+# then Program Files, then PATH). Set this when multiple Anki versions are
+# installed and a specific one is required for add-on compatibility (e.g.
+# AnkiMorphs pinned to an older release than whatever is newest on PATH).
+# anki_exe_path = ""
 """,
     "scratch_root": """\
 # Scratch space for intermediate artefacts (temp exports, caches).
@@ -200,6 +208,7 @@ class Config:
     screenshot_scratch_root: Path
     vault_path: Path | None = None
     anki_data_dir: Path | None = None
+    anki_exe_path: Path | None = None
     obsidian_api_token: str | None = field(default=None, repr=False)
     obsidian_ca_bundle: Path | None = None
     asbplayer_bridge_dir: Path | None = None
@@ -410,6 +419,7 @@ def load_config(*, create_missing: bool = True) -> Config:
         ),
         vault_path=values["vault_path"],
         anki_data_dir=values["anki_data_dir"],
+        anki_exe_path=values["anki_exe_path"],
         obsidian_api_token=secrets["obsidian_api_token"],
         obsidian_ca_bundle=values["obsidian_ca_bundle"],
         asbplayer_bridge_dir=values["asbplayer_bridge_dir"],

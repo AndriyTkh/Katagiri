@@ -19,17 +19,38 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from katagiri.anki_snapshot import anki_is_running
+from katagiri.config import ConfigError, load_config
 
 WINGET_HINT: str = "winget install --id Anki.Anki -e --source winget"
 
 
 def find_anki_exe() -> Path | None:
-    """Best-effort locate ``anki.exe``: common install dirs, then PATH.
+    """Locate ``anki.exe``: configured override first, then autodetect.
 
-    Checks the per-user install location the modern Anki installer (and
-    winget) use by default, then the all-users ``Program Files`` location,
-    then falls back to whatever ``anki`` resolves to on PATH.
+    When multiple Anki versions are installed side by side (e.g. an add-on
+    like AnkiMorphs pinned to an older release than whatever is newest on
+    PATH), autodetect order alone cannot tell them apart. ``anki_exe_path``
+    in config.toml settles it explicitly; a configured path that no longer
+    exists falls through to autodetect rather than failing outright, since a
+    stale config entry should not be worse than having none.
+
+    Autodetect itself checks the per-user install location the modern Anki
+    installer (and winget) use by default, then the all-users
+    ``Program Files`` location, then falls back to whatever ``anki`` resolves
+    to on PATH.
+
+    Reads config with ``create_missing=False``: this function is on the
+    ``installer --check`` doctor path (via ``_anki_manual_step_detail``),
+    which must never write ``config.toml`` as a side effect of a read-only
+    check. An absent config file is treated the same as "no override
+    configured" -- exactly like a ``ConfigError`` from a malformed one.
     """
+    try:
+        configured = load_config(create_missing=False).anki_exe_path
+    except ConfigError:
+        configured = None
+    if configured is not None and configured.is_file():
+        return configured
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         exe = Path(local_appdata) / "Programs" / "Anki" / "anki.exe"

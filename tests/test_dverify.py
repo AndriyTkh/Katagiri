@@ -1333,4 +1333,3 @@ class TestCumulativeScenarios:
         assert opened["action"]["kind"] == expected["kind"], opened["action"]
         assert opened["action"]["instruction"] == expected["instruction"]
         assert opened["action"]["lesson_id"] == expected["lesson_id"]
-

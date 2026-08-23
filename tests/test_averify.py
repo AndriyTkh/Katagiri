@@ -70,7 +70,19 @@ from katagiri.db import open_db
 
 # The MCP checks below spawn the real server as a subprocess, so the whole
 # module belongs to the 'mcp' group and runs after the cheap unit groups.
-pytestmark = pytest.mark.mcp
+#
+# The module-scoped `mcp_client` fixture below hands out an *un-initialized*
+# client, and test_initialize_handshake_and_tools_list is the one test that
+# performs the `initialize` handshake on it; every other test in this module
+# reuses that same already-initialized client. Under `-n` with per-test
+# scheduling, xdist can send that one test to a different worker than the
+# rest — each worker builds its own module-scoped fixture instance (a
+# separate server subprocess), so a worker that never ran the handshake test
+# serves every other test an un-initialized client, which answers with
+# JSON-RPC -32602. Pinning the whole module to one xdist group keeps the
+# fixture instance (and the subprocess behind it) single so the handshake is
+# always seen before it's relied on.
+pytestmark = [pytest.mark.mcp, pytest.mark.xdist_group("averify-mcp")]
 
 FIXTURES = Path(__file__).parent / "fixtures" / "averify"
 VAULT = FIXTURES / "vault"
@@ -759,6 +771,16 @@ CONTRACT_TOOLS = frozenset(
         "lesson_memory",
         "coverage",
         "find_i_plus_one",
+        # Phase E (additive): the media overlay, lyrics, screenshots, Anki
+        # launch, and the D-44 curriculum outlook.
+        "media_now",
+        "media_context",
+        "lyrics_now",
+        "lyrics_context",
+        "screenshot_capture",
+        "screenshot_read",
+        "open_anki",
+        "study_plan",
     }
 )
 

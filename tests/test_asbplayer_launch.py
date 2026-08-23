@@ -104,3 +104,24 @@ def test_configured_bridge_starts_hidden_from_its_own_directory(tmp_path, monkey
     assert calls[0][1]["cwd"] == str(tmp_path)
     assert calls[0][1]["stdout"] is asbplayer_launch.subprocess.DEVNULL
     assert calls[0][1]["stderr"] is asbplayer_launch.subprocess.DEVNULL
+    assert calls[0][1]["env"]["HOST"] == "127.0.0.1"
+
+
+def test_configured_bridge_launch_preserves_explicit_host_env(tmp_path, monkeypatch):
+    (tmp_path / "main.go").write_text("package main\n", encoding="utf-8")
+    monkeypatch.setattr(asbplayer_launch, "bridge_is_healthy", lambda: False)
+    monkeypatch.setattr(asbplayer_launch, "bridge_port_is_occupied", lambda: False)
+    monkeypatch.setattr(asbplayer_launch, "get_config", lambda: _configured(tmp_path))
+    monkeypatch.setattr(asbplayer_launch.shutil, "which", lambda name: "C:/Go/bin/go.exe")
+    monkeypatch.setenv("HOST", "0.0.0.0")
+    calls = []
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            calls.append((argv, kwargs))
+
+    monkeypatch.setattr(asbplayer_launch.subprocess, "Popen", FakePopen)
+
+    asbplayer_launch.ensure_asbplayer_bridge()
+
+    assert calls[0][1]["env"]["HOST"] == "0.0.0.0"

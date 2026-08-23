@@ -143,6 +143,16 @@ CONTRACT_TOOLS = frozenset(
         "lesson_memory",
         "coverage",
         "find_i_plus_one",
+        # Phase E (additive): managed local app startup / media-overlay tool
+        # batches.
+        "open_anki",
+        "media_now",
+        "media_context",
+        "screenshot_capture",
+        "screenshot_read",
+        "lyrics_now",
+        "lyrics_context",
+        "study_plan",
     }
 )
 
@@ -250,7 +260,24 @@ HTTP_CLIENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
 )
-HTTP_CLIENT_ALLOWLIST = frozenset({"obsidian_proxy.py"})
+#: Phase E's asbplayer integration is the other deliberate exception: both
+#: modules speak ``http.client`` strictly loopback-only — a health probe
+#: against the locally-running asbplayer app and its bridge's REST calls —
+#: never leaving 127.0.0.1, so the token-boundary property this file's
+#: docstring cares about is unaffected.
+HTTP_CLIENT_ALLOWLIST = frozenset(
+    {"obsidian_proxy.py", "asbplayer_launch.py", "media_asbplayer.py"}
+)
+
+#: Phase E's mokuro page-change bridge (``MokuroBridgeServer``, module docstring
+#: E-T010) is the one deliberate exception to "no HTTP server anywhere in the
+#: package": it is a small, self-hosted localhost bridge that binds 127.0.0.1
+#: by default, validates the request's ``Origin`` header, and requires a
+#: shared secret (compared with :func:`hmac.compare_digest`, never logged or
+#: echoed) on every request — a browser userscript has no IPC pipe to speak
+#: through the way mpv's Lua scripting does, so a guarded loopback HTTP
+#: listener is the only transport available to it.
+HTTP_SERVER_ALLOWLIST = frozenset({"media_mokuro.py"})
 
 
 def package_sources() -> list[Path]:
@@ -580,6 +607,8 @@ def test_the_package_ships_no_http_server_construct_anywhere():
     """
     offences: list[str] = []
     for path in package_sources():
+        if path.name in HTTP_SERVER_ALLOWLIST:
+            continue
         text = path.read_text(encoding="utf-8")
         for label, pattern in HTTP_SERVER_PATTERNS:
             for match in pattern.finditer(text):

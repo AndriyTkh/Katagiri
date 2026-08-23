@@ -100,6 +100,7 @@ def test_missing_template_keys_appended_on_load(local_app_data):
     assert text.startswith(original)
     for key in (
         "anki_data_dir",
+        "anki_exe_path",
         "scratch_root",
         "db_path",
         "obsidian_api_token",
@@ -127,6 +128,7 @@ def test_commented_key_counts_as_present(local_app_data):
         '# obsidian_api_token = ""\n'
         '# vault_path = ""\n'
         '# anki_data_dir = ""\n'
+        '# anki_exe_path = ""\n'
         '# scratch_root = ""\n'
         '# db_path = ""\n'
         '# obsidian_ca_bundle = ""\n'

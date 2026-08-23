@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import zipfile
 from pathlib import Path
@@ -948,11 +949,36 @@ def real_jmdict(real_jmdict_template, tmp_path_factory):
     ``--public-build`` imports from ground zero. Writes made by tests below land
     in this module's copy and never touch the template. Skips, via the template
     fixture, when the vendored dictionary is absent.
+
+    ``db.open_db`` migrates on open, and a migration with pending user objects
+    writes a pre-migration backup under ``backup_dir_default()`` —
+    ``%LOCALAPPDATA%\\Katagiri\\backups`` — unless told otherwise. Left alone,
+    that resolves to the *real* per-user AppData directory, which every xdist
+    worker's own copy of this session fixture would share: concurrent workers
+    each migrating their own ``jmdict.db`` race to the same
+    ``jmdict.pre-migrate-1.bak`` (the exists-check-then-``VACUUM INTO`` in
+    :func:`katagiri.db._backup` is not atomic, and the filename does not
+    include a worker or process discriminator), so one worker's snapshot can
+    land mid-write of another's, raising "table event already exists".
+    ``LOCALAPPDATA`` is pointed at this fixture's own scratch dir — already
+    unique per worker via ``tmp_path_factory`` — for the duration of the
+    ``open_db`` call so the backup lands there instead of the shared real
+    directory.
     """
     path = real_jmdict_template.materialize(
         tmp_path_factory.mktemp("real_jmdict") / "jmdict.db"
     )
-    connection = db.open_db(path)
+    previous = os.environ.get("LOCALAPPDATA")
+    os.environ["LOCALAPPDATA"] = str(tmp_path_factory.mktemp("real_jmdict_appdata"))
+    config_mod.reset_config_cache()
+    try:
+        connection = db.open_db(path)
+    finally:
+        if previous is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = previous
+        config_mod.reset_config_cache()
     try:
         yield connection
     finally:

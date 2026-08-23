@@ -1729,6 +1729,9 @@ def _describe(resolve: Any) -> str:
         return f"<unavailable: {type(exc).__name__}>"
 
 
+_ASBPLAYER_BRIDGE_PORT: Final = 8766
+
+
 def main() -> None:
     """Entry point: stderr + file logging, then serve MCP over stdio."""
     # One positional argument, resolved from KATAGIRI_LOG_LEVEL.
@@ -1749,7 +1752,33 @@ def main() -> None:
     if bridge.launched:
         logger.info("started configured asbplayer bridge on loopback port 8766")
     elif bridge.already_running:
-        logger.info("reusing healthy asbplayer bridge on loopback port 8766")
+        # The bridge was already up before we checked, so unlike a fresh
+        # launch (which we started with HOST=127.0.0.1 ourselves) its actual
+        # bind address is unverified -- confirm it before repeating the
+        # loopback claim in the log.
+        try:
+            exposure = security_scan((_ASBPLAYER_BRIDGE_PORT,))
+        except RuntimeError as exc:
+            logger.info(
+                "reusing asbplayer bridge on port %d; could not verify its "
+                "loopback binding: %s",
+                _ASBPLAYER_BRIDGE_PORT,
+                exc,
+            )
+        else:
+            port_state = exposure["ports"][str(_ASBPLAYER_BRIDGE_PORT)]
+            if port_state["loopback_only"]:
+                logger.info(
+                    "reusing healthy asbplayer bridge on loopback port %d",
+                    _ASBPLAYER_BRIDGE_PORT,
+                )
+            else:
+                logger.warning(
+                    "asbplayer bridge on port %d is bound to %s (reachable from "
+                    "local network); restart it to bind loopback (HOST=127.0.0.1)",
+                    _ASBPLAYER_BRIDGE_PORT,
+                    ", ".join(port_state["bound_addresses"]) or "0.0.0.0",
+                )
     elif bridge.reason:
         logger.info("asbplayer bridge was not started: %s", bridge.reason)
 

@@ -137,18 +137,19 @@ def _unreachable_mpv_channel() -> MpvChannel:
 
 
 class FakeWsPeer:
+    """Despite the name (kept for grep-continuity with test_media_asbplayer.py's
+    history), this scripts the bridge's HTTP query surface
+    (``CommandClient.request``), not a WS peer — see media_asbplayer.py's
+    module docstring for why the real bridge is queried over plain HTTP."""
+
     def __init__(self, replies: dict[str, Any]) -> None:
         self.replies = replies
-        self._last_command: str | None = None
         self.closed = False
 
-    def send_text(self, text: str) -> None:
-        self._last_command = json.loads(text)["command"]
-
-    def recv_text(self, *, timeout: float) -> str | None:
-        if self._last_command is None or self._last_command not in self.replies:
-            return None
-        return json.dumps(self.replies[self._last_command])
+    def request(self, command: str) -> dict[str, Any]:
+        if command not in self.replies:
+            return {}
+        return json.loads(json.dumps(self.replies[command]))
 
     def close(self) -> None:
         self.closed = True
@@ -159,10 +160,14 @@ def _asbplayer_channel(replies: dict[str, Any]) -> AsbplayerChannel:
 
 
 def _unreachable_asbplayer_channel() -> AsbplayerChannel:
-    def _fail() -> FakeWsPeer:
-        raise OSError("asbplayer WS server unavailable")
+    class _Fail:
+        def request(self, command: str) -> dict[str, Any]:
+            raise OSError("asbplayer bridge unavailable")
 
-    return AsbplayerChannel(connect=_fail)
+        def close(self) -> None:
+            pass
+
+    return AsbplayerChannel(connect=_Fail)
 
 
 def _write_mokuro(path: Path, pages: list[list[list[str]]]) -> None:
@@ -286,8 +291,7 @@ def test_scenario_a_mpv_position_and_title_via_media_now(db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 BOUND_REPLY: dict[str, Any] = {
-    "url": "https://cdn.example.com/videos/ep03.mkv?token=SECRETTOKEN123&session=abc",
-    "title": "Show - ep03",
+    "media": [{"id": "ep03-token", "title": "Show - ep03", "active": True}]
 }
 
 SUBTITLES_REPLY: dict[str, Any] = {
@@ -312,7 +316,7 @@ def _scenario_b_asbplayer_window_from_anchor(conn, monkeypatch) -> None:
     assert now_result["ok"] is True
     assert now_result["active"] is True
     assert now_result["channel"] == "asbplayer"
-    assert now_result["media_id"] == "ep03.mkv"
+    assert now_result["media_id"] == "ep03-token"
     assert now_result["anchor_ms"] == 5000  # line B's start_ms, nearest to the mining event
     title = _envelope_field(now_result, "title")
     assert title["text"] == "Show - ep03"

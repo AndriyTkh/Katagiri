@@ -7,6 +7,7 @@ command or a guessed location.
 
 from __future__ import annotations
 
+import http.client
 import os
 import shutil
 import socket
@@ -15,15 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from katagiri.config import ConfigError, get_config
-from katagiri.media_asbplayer import (
-    AsbplayerClient,
-    AsbplayerError,
-    RawSocketWsPeer,
-    get_bound_media,
-)
 
 _HOST = "127.0.0.1"
 _PORT = 8766
+_HEALTH_TIMEOUT_S = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,16 +33,19 @@ class BridgeLaunchResult:
 
 
 def bridge_is_healthy() -> bool:
-    """Whether the fixed loopback port answers the expected asbplayer command."""
-    peer: RawSocketWsPeer | None = None
+    """Whether the fixed loopback port answers HTTP at all.
+
+    Any HTTP response — even an AnkiConnect-forwarding error — proves the
+    bridge process itself is up; only a failed connection means it is not.
+    """
+    conn = http.client.HTTPConnection(_HOST, _PORT, timeout=_HEALTH_TIMEOUT_S)
     try:
-        peer = RawSocketWsPeer(_HOST, _PORT)
-        get_bound_media(AsbplayerClient(peer))
-    except (AsbplayerError, OSError):
+        conn.request("GET", "/")
+        conn.getresponse().read()
+    except (OSError, http.client.HTTPException):
         return False
     finally:
-        if peer is not None:
-            peer.close()
+        conn.close()
     return True
 
 
@@ -111,10 +110,13 @@ def ensure_asbplayer_bridge() -> BridgeLaunchResult:
             "the configured asbplayer bridge.",
         )
 
+    child_env = dict(os.environ)
+    child_env.setdefault("HOST", "127.0.0.1")
     kwargs: dict[str, object] = {
         "cwd": str(bridge_dir),
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
+        "env": child_env,
     }
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", None)
     if os.name == "nt" and no_window is not None:

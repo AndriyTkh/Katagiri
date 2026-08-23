@@ -60,6 +60,14 @@ def test_find_obsidian_exe_checks_localappdata(tmp_path, monkeypatch):
     assert obsidian_launch.find_obsidian_exe() == exe
 
 
+def test_find_obsidian_exe_checks_localappdata_programs(tmp_path, monkeypatch):
+    exe = tmp_path / "Programs" / "Obsidian" / "Obsidian.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert obsidian_launch.find_obsidian_exe() == exe
+
+
 def test_find_obsidian_exe_falls_back_to_which(tmp_path, monkeypatch):
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setattr(obsidian_launch.shutil, "which", lambda name: "C:/on/path/obsidian.exe")
