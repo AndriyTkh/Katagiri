@@ -28,5 +28,5 @@ d3e3482de309122119b289c9f8b87cbef288e48fbfef800d7a354757fa756b9d  vendor/jlpt/n5
 # Tae Kim's Guide to Japanese Grammar (CC BY-NC-SA, committable with
 # attribution): scripts/fetch_taekim.py appended the entry below from a real
 # fetch of https://guidetojapanese.org/learn/grammar.
-4d6555cfdb71f3a0c749fccb22b57464b5dd4a762be5e113097ba93fe84fc36e  vendor/taekim/grammar-index.html
-d9c5fee0da284fe9206996e5373da21dd3d48333652851635a5587b3ea92df00  vendor/taekim/stateofbeing.html
+c5ae33659332f7154d86d39be0b5f64fa0a053f65afd5ff259ae418538a1e320  vendor/taekim/grammar-index.html
+884413b9dd3b88169c5bc460d62de1ee1fe1ea842578fd6e0d3974a67aea43a5  vendor/taekim/stateofbeing.html
