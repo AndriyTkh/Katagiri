@@ -27,8 +27,8 @@ of guessing or inventing a placeholder that looks real.
    https://docs.astral.sh/uv/getting-started/installation/) and stop until
    they confirm it's installed.
 
-2. Root project deps: from the repo root, run `install.bat` (or `install.ps1`
-   directly). This runs `uv sync` and then the interactive doctor at
+2. Root project deps: from the repo root, run `setup.bat`. This runs
+   `uv sync` and then the interactive doctor at
    `src/katagiri/installer.py`, which reports READY/MISSING/MANUAL STEP for
    every component. Read vendor/README.md and vendor/CHECKSUMS.sha256 before
    this doctor's vendor check will pass — see step 3.
@@ -68,7 +68,7 @@ of guessing or inventing a placeholder that looks real.
      them, just with a partial difficulty score. UniDic/kanjium/JMdict are
      not optional.
 
-4. Re-run `install.bat` (or `uv run python -m katagiri.installer` directly)
+4. Re-run `setup.bat` (or `uv run python -m katagiri.installer` directly)
    now that vendor data exists. Follow its interactive prompts: it writes
    `%LOCALAPPDATA%\Katagiri\config.toml`, imports JMdict/kanjium into the
    database, builds search indexes, and offers to register optional Windows
@@ -92,7 +92,7 @@ of guessing or inventing a placeholder that looks real.
      https://github.com/mortii/anki-morphs/releases/latest and extract it
      (it's a zip) into `%APPDATA%\Anki2\addons21\anki-morphs\`. Tell the
      human to restart Anki afterward so it loads the add-on.
-   - Re-run `install.bat` — the installer's doctor auto-detects
+   - Re-run `setup.bat` — the installer's doctor auto-detects
      `anki_data_dir` at its default location, saves it to config.toml, and
      runs the anki mirror sync, no manual path entry needed.
 

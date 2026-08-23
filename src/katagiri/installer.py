@@ -6,11 +6,16 @@ the derived JMdict/kanjium tables, an optional Anki mirror, the search
 indexes, an optional Yomitan overlay, the Obsidian bridge, optional scheduled
 tasks, and a backup rehearsal. Every step is idempotent and safe to re-run.
 
-Usage::
+Usage (``setup.bat`` at the repo root wraps ``uv sync`` + the first form)::
 
-    python -m katagiri.installer            # interactive wizard
+    python -m katagiri.installer            # interactive wizard + post-setup menu
     python -m katagiri.installer --yes       # accept defaults, no prompts, no schtasks
     python -m katagiri.installer --check     # doctor only: report, change nothing
+
+Interactive runs offer Retry/Skip/Abort on any failed step, then a post-setup
+menu to re-run steps, re-check status, or launch the MCP server (in a new
+console via ``run-mcp.bat``). The wizard always exits 0; ``--check`` is the
+mode whose exit code (1 on any MISSING component) is meant for scripting.
 
 Design notes for anyone editing this file:
 
@@ -1194,7 +1199,202 @@ def _print_step(n: int, total: int, name: str, result: StepResult) -> None:
     _log.info("step %d/%d %s: %s%s", n, total, name, result.status, suffix)
 
 
+class _WizardAborted(Exception):
+    """Raised when the operator picks [A]bort at a failed step.
+
+    Caught by ``_run_wizard_steps``, which still prints the doctor summary on
+    the way out -- an abort should leave the operator knowing exactly where
+    setup stands, not staring at a bare prompt.
+    """
+
+
+# Extra one-line guidance printed when a step fails interactively. Keyed by
+# STEP_LABELS entry; only steps whose most common failure is "the external
+# app isn't running / isn't wired up yet" need one -- for those, fixing the
+# external state and picking Retry is the expected recovery path.
+_RETRY_HINTS = {
+    STEP_LABELS[3]: (
+        "Start Anki once so its data directory exists (or set anki_data_dir "
+        "via the Config step), then Retry."
+    ),
+    STEP_LABELS[6]: (
+        "Start Obsidian with the 'Local REST API' plugin enabled (or set "
+        "vault_path so its key can be auto-discovered), then Retry."
+    ),
+}
+
+
+def _wizard_step_runners(
+    cfg_path: Path, repo_root: Path, *, assume_yes: bool
+) -> list[tuple[str, Any]]:
+    """The ten wizard steps as ``(label, thunk)`` pairs, in execution order.
+
+    Each thunk re-reads config.toml when invoked, so re-running a step (via
+    Retry or the post-setup menu) after the Config step changed a path sees
+    the new value instead of a stale snapshot.
+    """
+
+    def _cfg() -> RawConfig:
+        return read_raw_config(cfg_path)
+
+    return [
+        (STEP_LABELS[0], lambda: step_config(cfg_path, assume_yes=assume_yes)),
+        (STEP_LABELS[1], lambda: step_vendor(repo_root)),
+        (STEP_LABELS[2], lambda: step_jmdict(_cfg().db_path)),
+        (STEP_LABELS[3], lambda: step_anki(_cfg())),
+        (STEP_LABELS[4], lambda: step_search_indexes(_cfg())),
+        (STEP_LABELS[5], lambda: step_yomitan()),
+        (STEP_LABELS[6], lambda: step_obsidian(_cfg())),
+        (STEP_LABELS[7], lambda: step_schtasks(assume_yes=assume_yes)),
+        (STEP_LABELS[8], lambda: step_backup()),
+        (STEP_LABELS[9], lambda: step_irodori(_cfg().db_path)),
+    ]
+
+
+def _run_step_with_retry(
+    n: int, total: int, label: str, runner: Any, *, prompt: Any = input
+) -> StepResult:
+    """Run one step; on ACTION NEEDED, offer Retry / Skip / Abort.
+
+    Skip -- the default, and what EOF/Ctrl-C mean -- records the failure and
+    moves on, exactly like the old single-pass behavior. Retry re-runs the
+    same step (every step is idempotent, see module docstring). Abort raises
+    :class:`_WizardAborted`.
+    """
+    while True:
+        result = runner()
+        _print_step(n, total, label, result)
+        if result.status != "ACTION NEEDED":
+            return result
+        hint = _RETRY_HINTS.get(label)
+        if hint:
+            print(f"      {hint}")
+        try:
+            answer = prompt("      [R]etry / [S]kip / [A]bort setup? [S]: ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        answer = (answer or "").strip().lower()
+        if answer == "r":
+            continue
+        if answer == "a":
+            raise _WizardAborted
+        return result
+
+
+def _print_doctor_summary(cfg_path: Path, repo_root: Path) -> list[ComponentStatus]:
+    cfg = read_raw_config(cfg_path)
+    statuses = collect_doctor_statuses(cfg, repo_root)
+    print(f"\n[{TOTAL_STEPS}/{TOTAL_STEPS}] Doctor summary")
+    print(render_doctor_table(statuses))
+    return statuses
+
+
+def _launch_mcp_server(repo_root: Path) -> None:
+    """Open run-mcp.bat in a new console window and return immediately.
+
+    The MCP server is a stdio server: running it inside the installer's own
+    console would wedge this process on a JSON-RPC stdin nobody is driving.
+    A detached window makes it a visible smoke test instead, and lets the
+    installer exit (releasing the wizard lock) while the server runs.
+    """
+    bat = repo_root / "run-mcp.bat"
+    if not bat.exists():
+        print(f"run-mcp.bat not found at {bat}; start the server manually with: uv run katagiri-mcp")
+        return
+    # ``start`` treats its first quoted argument as the window title, so a
+    # title is always passed explicitly -- a repo path with spaces (which
+    # subprocess would quote) must never be eaten as the title.
+    subprocess.Popen(
+        ["cmd", "/c", "start", "Katagiri MCP", "cmd", "/k", str(bat)],
+        cwd=str(repo_root),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    print(f"Launched the MCP server in a new console window ({bat}).")
+    print(
+        "It speaks MCP over stdio -- normally your MCP client (e.g. Claude "
+        "Code) starts it; the new window is just a smoke test that it runs."
+    )
+    _log.info("launched MCP server console via %s", bat)
+
+
+_MENU = (
+    "\n[1-10] re-run a setup step   [A] run all steps again\n"
+    "[D] doctor summary           [C] edit config (re-run config step)\n"
+    "[L] launch MCP server        [Q] quit"
+)
+
+
+def _post_wizard_menu(
+    cfg_path: Path,
+    repo_root: Path,
+    runners: list[tuple[str, Any]],
+    statuses: list[ComponentStatus],
+    *,
+    prompt: Any = input,
+) -> None:
+    """Interactive post-setup menu (never reached under --yes/--check).
+
+    Returns when the operator quits ([Q], or EOF/Ctrl-C) or launches the MCP
+    server ([L]). The installer always exits 0 from here -- doctor problems
+    are surfaced in the table, and ``--check`` exists for a status exit code.
+    """
+    if all(s.status == "READY" for s in statuses):
+        print("\nAll components are READY.")
+        try:
+            answer = prompt("Launch MCP server now? [y/N]: ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if (answer or "").strip().lower() == "y":
+            _launch_mcp_server(repo_root)
+            return
+
+    print("\nSetup steps:")
+    for i, (label, _runner) in enumerate(runners, start=1):
+        print(f"  [{i}] {label}")
+
+    while True:
+        print(_MENU)
+        try:
+            choice = prompt("> ")
+        except (EOFError, KeyboardInterrupt):
+            return
+        choice = (choice or "").strip().lower()
+        if not choice:
+            continue
+        if choice == "q":
+            return
+        if choice == "l":
+            _launch_mcp_server(repo_root)
+            return
+        if choice == "d":
+            _print_doctor_summary(cfg_path, repo_root)
+            continue
+        if choice == "a":
+            try:
+                for i, (label, runner) in enumerate(runners, start=1):
+                    _run_step_with_retry(i, TOTAL_STEPS, label, runner, prompt=prompt)
+            except _WizardAborted:
+                print("  Stopped; back to the menu.")
+            _print_doctor_summary(cfg_path, repo_root)
+            continue
+        if choice == "c":
+            choice = "1"
+        if choice.isdigit() and 1 <= int(choice) <= len(runners):
+            i = int(choice)
+            label, runner = runners[i - 1]
+            try:
+                _run_step_with_retry(i, TOTAL_STEPS, label, runner, prompt=prompt)
+            except _WizardAborted:
+                print("  Stopped; back to the menu.")
+            continue
+        print(f"  Unrecognized choice: {choice!r}")
+
+
 def run_wizard(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> None:
+    # The lock covers the whole session, post-setup menu included: a menu
+    # re-run mutates config.toml and the database just like a first run does.
     lock_fh = _acquire_wizard_lock(cfg_path.parent / "installer.lock")
     try:
         _run_wizard_steps(cfg_path, repo_root, assume_yes=assume_yes)
@@ -1204,56 +1404,30 @@ def run_wizard(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> None:
 
 def _run_wizard_steps(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> None:
     print(WIZARD_PREAMBLE)
-    n = 1
+    runners = _wizard_step_runners(cfg_path, repo_root, assume_yes=assume_yes)
 
-    result = step_config(cfg_path, assume_yes=assume_yes)
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[0], result)
-    n += 1
+    aborted = False
+    for n, (label, runner) in enumerate(runners, start=1):
+        if assume_yes:
+            # Non-interactive: record the status and continue, no prompts --
+            # exactly the old behavior.
+            _print_step(n, TOTAL_STEPS, label, runner())
+            continue
+        try:
+            _run_step_with_retry(n, TOTAL_STEPS, label, runner)
+        except _WizardAborted:
+            aborted = True
+            print(f"\nSetup aborted at step {n} ({label}); current status below.")
+            _log.info("wizard aborted by operator at step %d (%s)", n, label)
+            break
 
-    cfg = read_raw_config(cfg_path)
-
-    result = step_vendor(repo_root)
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[1], result)
-    n += 1
-
-    result = step_jmdict(cfg.db_path)
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[2], result)
-    n += 1
-
-    result = step_anki(cfg)
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[3], result)
-    n += 1
-
-    combined = step_search_indexes(cfg)
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[4], combined)
-    n += 1
-
-    result = step_yomitan()
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[5], result)
-    n += 1
-
-    result = step_obsidian(cfg)
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[6], result)
-    n += 1
-
-    result = step_schtasks(assume_yes=assume_yes)
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[7], result)
-    n += 1
-
-    result = step_backup()
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[8], result)
-    n += 1
-
-    result = step_irodori(cfg.db_path)
-    _print_step(n, TOTAL_STEPS, STEP_LABELS[9], result)
-    n += 1
-
-    cfg = read_raw_config(cfg_path)
-    statuses = collect_doctor_statuses(cfg, repo_root)
-    print(f"\n[{n}/{TOTAL_STEPS}] Doctor summary")
-    print(render_doctor_table(statuses))
+    statuses = _print_doctor_summary(cfg_path, repo_root)
     print()
     print(EPILOGUE)
+
+    if assume_yes or aborted:
+        return
+    _post_wizard_menu(cfg_path, repo_root, runners, statuses)
 
 
 # ---------------------------------------------------------------------------
