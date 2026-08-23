@@ -106,17 +106,23 @@ _KEY_BLOCKS: Final[dict[str, str]] = {
 """,
     "obsidian_api_token": """\
 # API key for the Obsidian "Local REST API" plugin (Settings -> Local REST API).
-# This is a credential: Katagiri holds it so the agent never does, and uses it
-# only for GET-shaped vault reads against https://127.0.0.1:27124. It is never
-# logged, never returned by a tool, and never written back to this file.
-# Leave it unset and the Obsidian tools report themselves unconfigured.
+# Optional override: when unset, Katagiri auto-discovers the key from the
+# vault's own .obsidian/plugins/obsidian-local-rest-api/data.json — the
+# plugin's own settings store. This is a credential either way: Katagiri holds
+# it so the agent never does, and uses it only for GET-shaped vault reads
+# against https://127.0.0.1:27124. It is never logged, never returned by a
+# tool, and never written back to this file. With neither this key nor a
+# vault directory configured, the Obsidian tools report themselves
+# unconfigured.
 # obsidian_api_token = ""
 """,
     "obsidian_ca_bundle": """\
 # Optional PEM certificate bundle for Obsidian Local REST API's HTTPS endpoint.
-# Leave unset to use normal Windows/Python certificate verification. If the
-# plugin uses its local self-signed certificate, export that certificate as PEM
-# and set this to its absolute path; verification remains enabled.
+# Optional override: when unset, Katagiri auto-loads the plugin's own stored
+# certificate from the same data.json (on top of normal Windows/Python
+# certificate verification), and verification remains enabled either way. To
+# override, export the plugin's local certificate as PEM and set this to its
+# absolute path.
 # obsidian_ca_bundle = ""
 """,
     "asbplayer_bridge_dir": """\
