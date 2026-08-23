@@ -7,6 +7,10 @@ Usage
     python scripts/import_curriculum.py --topic g-desu-copula
     py -3 scripts/import_curriculum.py                       # Windows launcher
 
+    # Curriculum graph (item/item_edge) instead of vocab seeding:
+    python scripts/import_curriculum.py --curriculum-md --dry-run
+    python scripts/import_curriculum.py --curriculum-md --curriculum-path curriculum.md
+
 Why this exists
 ---------------
 The DB ships 20 grammar skeleton items (``g-desu-copula`` and friends) with no
@@ -20,9 +24,17 @@ extracts of it MAY live in this repository together with the attribution
 recorded in ``vendor/README.md``. Irodori may not, which is why
 :class:`IrodoriVocabSource` below is a deliberate stub.
 
+``--curriculum-md`` is a separate mode from the vocab seeding above: it is a
+thin CLI wrapper around ``katagiri.intelligence.import_curriculum``, which
+parses the vault's ``curriculum.md`` grammar graph (nodes/edges/T028
+attributes) into the ``item``/``item_edge`` tables. It shares nothing with the
+Tae Kim vocab flow except the argparse entry point and the DB connection.
+
 This is a one-time, by-hand import script. It is never imported or invoked by
-the katagiri package at runtime, takes no network access, and is idempotent:
-every write is ``INSERT OR IGNORE``, so a re-run leaves existing ids alone.
+the katagiri package at runtime, takes no network access (the curriculum-md
+mode still touches only the local DB and vault-configured file), and is
+idempotent: every write is ``INSERT OR IGNORE`` or an additive upsert, so a
+re-run leaves existing ids/edges/attributes alone.
 """
 
 from __future__ import annotations
@@ -224,6 +236,108 @@ def import_entries(
     }
 
 
+def _run_curriculum_md(args: argparse.Namespace) -> int:
+    """Handle ``--curriculum-md``: import curriculum.md's grammar graph.
+
+    A thin wrapper around ``katagiri.intelligence.import_curriculum`` -- all the
+    parsing, cycle detection and idempotent upserts live there. This just opens
+    the DB, calls it, and prints the result dict human-readably.
+    """
+    from katagiri.db import open_db
+    from katagiri.intelligence import import_curriculum
+
+    print("Katagiri curriculum graph importer")
+    print("=" * 60)
+    print(f"Mode:   {'DRY RUN (no writes)' if args.dry_run else 'writing to DB'}")
+    if args.curriculum_path:
+        print(f"Path:   {args.curriculum_path}")
+    print()
+
+    conn = open_db()
+    try:
+        result = import_curriculum(
+            conn,
+            path=args.curriculum_path,
+            dry_run=args.dry_run,
+        )
+    finally:
+        conn.close()
+
+    if not result.get("ok", False):
+        print(f"FAILED: {result.get('error', 'UNKNOWN_ERROR')}")
+        note = result.get("note")
+        if note:
+            print(note)
+        skipped = result.get("skipped")
+        if skipped:
+            print("Skipped:")
+            for line in skipped:
+                print(f"  {line}")
+        return 1
+
+    print(f"Curriculum file: {result['path']}")
+    print()
+
+    nodes = result["nodes"]
+    print("Nodes:")
+    print(f"  ids (mentioned, written):   {nodes['ids']}")
+    print(f"  declared in file:           {nodes['declared']}")
+    print(f"  items created:              {nodes['items_created']}")
+    print(f"  stubs created (id-only):    {nodes['stubs_created']}")
+    print(f"  levels filled in:           {nodes['levels_filled']}")
+    print(f"  unchanged:                  {nodes['unchanged']}")
+    print()
+
+    edges = result["edges"]
+    print("Edges:")
+    print(f"  parsed:                     {edges['parsed']}")
+    print(f"  written (not blocked):      {edges['written']}")
+    print(f"  created (new):              {edges['created']}")
+    print(f"  already present:            {edges['already_present']}")
+    if edges["by_type"]:
+        print(f"  by type:                    {edges['by_type']}")
+    print()
+
+    orphan_edges = result["orphan_edges"]
+    print(f"Orphan edges (in DB, not in file, never deleted): {len(orphan_edges)}")
+    for edge in orphan_edges:
+        print(f"  {edge['from_id']} -> {edge['to_id']} ({edge['edge_type']})")
+    print()
+
+    attrs = result["attributes"]
+    print("Attributes (T028 tags):")
+    print(f"  parsed:                     {attrs['parsed']}")
+    print(f"  created (new):              {attrs['created']}")
+    print(f"  already present:            {attrs['already_present']}")
+    if attrs["by_attr"]:
+        print(f"  by attr:                    {attrs['by_attr']}")
+    print()
+
+    orphan_attrs = result["orphan_attributes"]
+    print(f"Orphan attributes (in DB, not in file, never deleted): {len(orphan_attrs)}")
+    for orphan in orphan_attrs:
+        print(f"  {orphan['id']}  {orphan['attribute']}")
+    print()
+
+    skipped = result["skipped"]
+    if skipped:
+        print(f"Skipped ({len(skipped)}):")
+        for line in skipped:
+            print(f"  {line}")
+        print()
+
+    note = result.get("note")
+    if note:
+        print(note)
+        print()
+
+    if result["dry_run"]:
+        print("Dry run: nothing was written. Re-run without --dry-run to write.")
+    else:
+        print("Done: curriculum graph written to the database.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -240,12 +354,34 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="parse and report only; do not touch the database",
     )
+    parser.add_argument(
+        "--curriculum-md",
+        action="store_true",
+        help=(
+            "import the curriculum graph (item/item_edge) from curriculum.md via "
+            "katagiri.intelligence.import_curriculum, instead of seeding Tae Kim "
+            "vocab. --dry-run and --curriculum-path apply to this mode; --topic "
+            "is ignored."
+        ),
+    )
+    parser.add_argument(
+        "--curriculum-path",
+        default=None,
+        help=(
+            "override the curriculum.md path (default: the vault's copy, per "
+            "katagiri.intelligence.curriculum_path). Only used with "
+            "--curriculum-md."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # Japanese text in a cp1252 console raises UnicodeEncodeError otherwise.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+    if args.curriculum_md:
+        return _run_curriculum_md(args)
 
     print("Katagiri curriculum vocabulary importer")
     print("=" * 60)

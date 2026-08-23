@@ -2294,3 +2294,128 @@ def test_log_listening_refuses_a_malformed_timestamp(conn):
     assert answer["error"] == st.INVALID_TIMESTAMP
     assert answer["field"] == "ts"
     assert count(conn, "event") == 0
+
+
+# ---------------------------------------------------------------------------
+# study_plan: a read-only outlook over the curriculum's reachability, never a
+# second way to choose an action (start_session remains the single prescriber).
+# ---------------------------------------------------------------------------
+
+
+def seed_curriculum_tag(
+    conn: sqlite3.Connection, item_id: str, attr: str, value: str
+) -> None:
+    """A T028 (D-39) external-reference tag, written the way the importer does:
+    a row in ``settings`` under the attr's mapped key (see
+    ``CURRICULUM_ATTR_SETTINGS_KEYS`` in :mod:`katagiri.intelligence`)."""
+    settings_key = {
+        "jf_can_do": "curriculum_jf_can_do",
+        "irodori_lesson": "curriculum_irodori_lesson",
+        "tae_kim_section": "curriculum_tae_kim_section",
+    }[attr]
+    conn.execute(
+        "INSERT INTO settings (scope, key, value, updated_ts) VALUES (?, ?, ?, ?)",
+        (item_id, settings_key, value, "2026-08-01T00:00:00Z"),
+    )
+
+
+def test_study_plan_reports_mastered_reachable_and_blocked_statuses(conn):
+    seed_item(conn, "g-basic", kind="grammar", understanding=5)  # mastered
+    seed_item(conn, "g-new", kind="grammar")  # reachable, unmastered
+    seed_item(conn, "g-blocked", kind="grammar")  # unreachable
+    seed_edge(conn, "g-basic", "g-new")
+    seed_edge(conn, "g-new", "g-blocked")
+
+    plan = st.study_plan(conn, today=TODAY)
+
+    assert plan["ok"] is True
+    by_id = {node["id"]: node for node in plan["curriculum"]}
+    assert by_id["g-basic"]["mastered"] is True
+    assert by_id["g-basic"]["mastered_via"] is not None
+    assert by_id["g-new"]["mastered"] is False
+    assert by_id["g-new"]["reachable"] is True
+    assert by_id["g-blocked"]["mastered"] is False
+    assert by_id["g-blocked"]["reachable"] is False
+    assert any(
+        missing["id"] == "g-new" for missing in by_id["g-blocked"]["missing_prereqs"]
+    )
+    assert plan["counts"] == {
+        "total": 3,
+        "mastered": 1,
+        "reachable_now": 1,
+        "blocked": 1,
+    }
+
+
+def test_study_plan_orders_reachable_before_blocked_before_mastered(conn):
+    seed_item(conn, "g-root", kind="grammar", understanding=5)  # mastered
+    seed_item(conn, "g-far", kind="grammar")  # blocked (needs g-mid)
+    seed_item(conn, "g-mid", kind="grammar")  # reachable (blocks g-far)
+    seed_edge(conn, "g-root", "g-mid")
+    seed_edge(conn, "g-mid", "g-far")
+
+    plan = st.study_plan(conn, today=TODAY)
+
+    ids_in_order = [node["id"] for node in plan["curriculum"]]
+    assert ids_in_order.index("g-mid") < ids_in_order.index("g-far")
+    assert ids_in_order.index("g-far") < ids_in_order.index("g-root")
+
+
+def test_study_plan_include_mastered_false_omits_mastered_topics(conn):
+    seed_item(conn, "g-basic", kind="grammar", understanding=5)
+    seed_item(conn, "g-new", kind="grammar")
+    seed_edge(conn, "g-basic", "g-new")
+
+    plan = st.study_plan(conn, include_mastered=False, today=TODAY)
+
+    ids = [node["id"] for node in plan["curriculum"]]
+    assert "g-basic" not in ids
+    assert "g-new" in ids
+    # counts still report the full population, only the listing is filtered.
+    assert plan["counts"]["mastered"] == 1
+    assert plan["counts"]["total"] == 2
+
+
+def test_study_plan_empty_curriculum_returns_ok_with_zeroed_counts(conn):
+    plan = st.study_plan(conn, today=TODAY)
+
+    assert plan["ok"] is True
+    assert plan["curriculum"] == []
+    assert plan["counts"] == {
+        "total": 0,
+        "mastered": 0,
+        "reachable_now": 0,
+        "blocked": 0,
+    }
+    assert plan["note"]
+
+
+def test_study_plan_carries_the_same_caps_block_as_prescribe(conn):
+    seed_mining_events(conn, 3, day=TODAY)
+    seed_item(conn, "g-new", kind="grammar")
+
+    plan = st.study_plan(conn, today=TODAY)
+    action = st.prescribe(conn, today=TODAY)
+
+    assert plan["caps"] == action["caps"]
+    assert plan["caps"]["new_words_left"] == st.MAX_NEW_WORDS_PER_DAY - 3
+
+
+def test_study_plan_note_names_start_session_as_the_single_prescriber(conn):
+    plan = st.study_plan(conn, today=TODAY)
+
+    assert "start_session" in plan["note"]
+    assert "one action" in plan["note"] or "single prescriber" in plan["note"]
+
+
+def test_study_plan_carries_a_d39_tag_when_the_fixture_sets_one(conn):
+    seed_item(conn, "g-basic", kind="grammar", understanding=5)
+    seed_item(conn, "g-new", kind="grammar")
+    seed_edge(conn, "g-basic", "g-new")
+    seed_curriculum_tag(conn, "g-new", "irodori_lesson", "L3")
+
+    plan = st.study_plan(conn, today=TODAY)
+
+    by_id = {node["id"]: node for node in plan["curriculum"]}
+    assert by_id["g-new"]["attributes"]["irodori_lesson"] == "L3"
+    assert by_id["g-new"]["attributes"]["jf_can_do"] is None

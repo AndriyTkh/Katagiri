@@ -1308,7 +1308,18 @@ _PHASE_E_SPECS: Final[tuple[ToolSpec, ...]] = (
             "The subtitle/lyric window around the current playhead on the "
             "active media channel, enveloped."
         ),
-        args=(),
+        args=(
+            ArgSpec(
+                "manual_anchor_ms",
+                "int | None",
+                False,
+                "One-shot playhead override for asbplayer only, in "
+                "milliseconds. Precedence highest-first: this one-shot "
+                "override, then a live playhead asbplayer itself reports, "
+                "then the persistent set_manual_anchor override, then the "
+                "event-log-derived anchor. Defaults to None (no override).",
+            ),
+        ),
         output=(
             "{ok, active, note, channel, media_id, anchor_ms, "
             "lines[{text, start_ms, end_ms}]} — each line's 'text' is the "
@@ -1488,6 +1499,59 @@ _PHASE_E_ANKI_SPECS: Final[tuple[ToolSpec, ...]] = (
     ),
 )
 
+# D-44: the curriculum's reachability outlook, browsable on its own instead of
+# only surfacing one node at a time through start_session's curriculum rung.
+# Backed by session_tools.study_plan, which reuses grammar_reachability's own
+# verdict per node rather than recomputing anything — see that function's
+# docstring for the ordering and empty-curriculum contract this spec quotes.
+_PHASE_E_D44_SPECS: Final[tuple[ToolSpec, ...]] = (
+    ToolSpec(
+        name="study_plan",
+        summary=(
+            "Informational curriculum outlook: mastered/reachable/blocked per "
+            "node, counts, caps. Prescribes nothing — start_session stays the "
+            "single source of the one prescribed action."
+        ),
+        args=(
+            ArgSpec(
+                "include_mastered",
+                "bool",
+                False,
+                "Defaults to true. False omits mastered nodes from the "
+                "'curriculum' list entirely (they are still counted under "
+                "counts.mastered).",
+            ),
+            ArgSpec(
+                "today",
+                "str | None",
+                False,
+                "ISO date override, for testing — omit to use the real "
+                "today. Anchors the 'caps' block, same as start_session's "
+                "own 'today' argument.",
+            ),
+        ),
+        output=(
+            "{ok, curriculum[{id, kind, mastered, mastered_via, reachable, "
+            "unlock_ready, understanding, missing_prereqs, prereqs, "
+            "attributes}], counts{total, mastered, reachable_now, blocked}, "
+            "caps, note}"
+        ),
+        stability="experimental",
+        note=(
+            "D-44. Reads only — no row, no event. Ordered reachable-and-"
+            "unmastered first (ascending prereq closure size, the "
+            "curriculum rung's own tie-break), then blocked (ascending "
+            "missing-prereq count then closure size), then mastered last "
+            "(omitted entirely when include_mastered=False). An empty or "
+            "not-yet-imported curriculum (no item_edge rows, or a cyclic "
+            "stored graph) answers ok=True with an empty 'curriculum', "
+            "zeroed counts, and a note naming the condition, rather than "
+            "raising. 'note' always restates that start_session is the "
+            "single prescriber — this tool is a map, never a menu."
+        ),
+    ),
+)
+
 TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
     _PHASE_A_SPECS
     + _PHASE_B_SPECS
@@ -1496,6 +1560,7 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
     + _PHASE_E_SPECS
     + _PHASE_E_TG_E4_SPECS
     + _PHASE_E_ANKI_SPECS
+    + _PHASE_E_D44_SPECS
 )
 
 TOOL_SPECS_BY_NAME: Final[dict[str, ToolSpec]] = {

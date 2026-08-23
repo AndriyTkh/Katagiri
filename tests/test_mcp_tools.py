@@ -769,7 +769,7 @@ def test_the_phase_d_fragment_holds_exactly_the_registered_batches():
     assert len(tool_registry._PHASE_D_SPECS) == 11 + 3
     # Fragment concatenation, not replacement: the earlier phases are all still
     # declared and still registered. Phase E (E-T007, below) adds 2 more on top.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(D_US1_CONTRACT))
@@ -1910,10 +1910,11 @@ def test_t010_registers_zero_new_toolspecs():
     """T010's rule: surface entry_gate as additive output keys, not a new tool."""
     # 26 as of T010; E-T007 adds 2 more (media_now, media_context); T012 (TG-E4,
     # below) adds 4 more (lyrics_now, lyrics_context, screenshot_capture,
-    # screenshot_read); the anki fragment (below) adds 1 more (open_anki) —
-    # T010 itself still added none, which is the claim this test defends.
-    assert len(TOOL_SPECS) == 26 + 2 + 4 + 1
-    assert len(registered_tools()) == 26 + 2 + 4 + 1
+    # screenshot_read); the anki fragment (below) adds 1 more (open_anki);
+    # D-44 adds 1 more (study_plan) — T010 itself still added none, which is
+    # the claim this test defends.
+    assert len(TOOL_SPECS) == 26 + 2 + 4 + 1 + 1
+    assert len(registered_tools()) == 26 + 2 + 4 + 1 + 1
 
 
 # ---------------------------------------------------------------------------
@@ -1948,7 +1949,7 @@ def test_the_phase_e_fragment_holds_exactly_the_registered_batch():
     assert len(tool_registry._PHASE_E_SPECS) == 2
     # Fragment concatenation, not replacement: every earlier phase is still
     # declared and still registered. TG-E4 (T012, below) adds 4 more on top.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(E_US1_CONTRACT))
@@ -1980,6 +1981,9 @@ class _FakeMpvChannel:
             write_heartbeat(conn, self._moment.heartbeat_row())
         return self._moment
 
+    def media_now(self, **kwargs):
+        return self._moment
+
     def media_context(self, **kwargs):
         return self._context
 
@@ -1992,6 +1996,12 @@ def _envelope(text: str, *, locator: str = "mpv:ep01.mkv:sub"):
 
 def test_media_now_reports_inactive_when_nothing_is_playing(db, monkeypatch):
     monkeypatch.setattr(mcp_server, "MpvChannel", lambda: _FakeMpvChannel())
+    # media_now falls through mpv -> asbplayer -> mokuro (T012); a dev
+    # machine with a real asbplayer bridge running would otherwise leak a
+    # genuine moment into this "nothing playing anywhere" case, so every
+    # channel in the fallback chain has to be stubbed out, not just mpv.
+    monkeypatch.setattr(mcp_server, "AsbplayerChannel", lambda: _FakeMpvChannel())
+    monkeypatch.setattr(mcp_server, "MokuroChannel", lambda secret=None: _FakeMpvChannel())
 
     result = mcp_server.media_now()
 
@@ -2063,6 +2073,12 @@ def test_media_now_persists_the_probe_into_media_heartbeat(db, monkeypatch):
 
 def test_media_context_reports_inactive_when_nothing_is_playing(monkeypatch):
     monkeypatch.setattr(mcp_server, "MpvChannel", lambda: _FakeMpvChannel())
+    # media_context falls through mpv -> asbplayer -> mokuro (T012); a dev
+    # machine with a real asbplayer bridge running would otherwise leak a
+    # genuine window into this "nothing playing anywhere" case, so every
+    # channel in the fallback chain has to be stubbed out, not just mpv.
+    monkeypatch.setattr(mcp_server, "AsbplayerChannel", lambda: _FakeMpvChannel())
+    monkeypatch.setattr(mcp_server, "MokuroChannel", lambda secret=None: _FakeMpvChannel())
 
     result = mcp_server.media_context()
 
@@ -2170,7 +2186,7 @@ def test_the_phase_e_tg_e4_fragment_holds_exactly_the_registered_batch():
     assert len(tool_registry._PHASE_E_TG_E4_SPECS) == 4
     # Fragment concatenation, not replacement: every earlier phase (and
     # fragment) is still declared and still registered.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(E_TG_E4_CONTRACT))
@@ -2216,7 +2232,7 @@ def test_the_phase_e_anki_fragment_holds_exactly_the_registered_batch():
     assert len(tool_registry._PHASE_E_ANKI_SPECS) == 1
     # Fragment concatenation, not replacement: every earlier phase (and
     # fragment) is still declared and still registered.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(E_ANKI_CONTRACT))
@@ -2229,6 +2245,82 @@ def test_e_anki_contract_is_additive_only(name):
     present = set(spec.arg_names)
     assert optional <= present, (
         f"{name}: optional arguments {sorted(optional - present)} were dropped"
+    )
+
+
+# ---------------------------------------------------------------------------
+# D-44: the study-plan outlook — study_plan
+# ---------------------------------------------------------------------------
+#
+# session_tools.study_plan has its own unit tests. What is defended here is
+# only the registration: the spec and the adapter agree, the tool is
+# read-only (no event written), and it stays informational — start_session,
+# not this tool, is the single prescriber.
+
+D44_CONTRACT: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "study_plan": (frozenset(), frozenset({"include_mastered", "today"})),
+}
+
+
+def test_phase_e_d44_tools_are_registered_with_specs():
+    registered = registered_tools()
+    for name in D44_CONTRACT:
+        assert name in registered, f"{name} is declared in the spec but not registered"
+        spec = get_spec(name)
+        assert spec.stability == "experimental"
+        assert spec.note, "a D-44 tool must say why its shape may still change"
+
+
+def test_the_phase_e_d44_fragment_holds_exactly_the_registered_batch():
+    """The fragment is study_plan's additive batch; an accidental extra shows here."""
+    assert {spec.name for spec in tool_registry._PHASE_E_D44_SPECS} == set(
+        D44_CONTRACT
+    )
+    assert len(tool_registry._PHASE_E_D44_SPECS) == 1
+    # Fragment concatenation, not replacement: every earlier phase (and
+    # fragment) is still declared and still registered.
+    assert (
+        len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
+    )
+
+
+@pytest.mark.parametrize("name", sorted(D44_CONTRACT))
+def test_d44_contract_is_additive_only(name):
+    required, optional = D44_CONTRACT[name]
+    spec = get_spec(name)  # raises if the tool was removed or renamed
+    assert spec.required_args == required, (
+        f"{name}: required arguments changed — that is a breaking change"
+    )
+    present = set(spec.arg_names)
+    assert optional <= present, (
+        f"{name}: optional arguments {sorted(optional - present)} were dropped"
+    )
+
+
+def test_study_plan_reports_the_outlook_through_the_server_dispatch_path(db):
+    """Smoke test through the real adapter: shape, and no event written.
+
+    A freshly migrated database has no item_edge rows, so this exercises the
+    documented empty-curriculum branch — ok=True, an empty curriculum list,
+    zeroed counts, and a note — without needing a seeded grammar DAG.
+    """
+    before = len(mcp_server.recent_events(limit=100))
+
+    result = mcp_server.study_plan()
+
+    assert result["ok"] is True
+    assert result["curriculum"] == []
+    assert set(result["counts"]) == {"total", "mastered", "reachable_now", "blocked"}
+    assert result["counts"] == {
+        "total": 0,
+        "mastered": 0,
+        "reachable_now": 0,
+        "blocked": 0,
+    }
+    assert "caps" in result
+    assert "start_session" in result["note"]
+    assert len(mcp_server.recent_events(limit=100)) == before, (
+        "study_plan is a read; it must not append an event to answer"
     )
 
 

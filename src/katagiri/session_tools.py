@@ -190,6 +190,14 @@ OPEN_FIRST_LESSON_RATIONALE: Final = (
 #: step from six lessons ago is not continuity, it is archaeology.
 NEXT_STEP_LOOKBACK: Final = 5
 
+#: Carried on every :func:`study_plan` answer, so a caller reading the outlook
+#: never mistakes it for a second way to choose an action.
+STUDY_PLAN_NOTE: Final = (
+    "This is an informational outlook, not a prescription: start_session "
+    "remains the single prescriber, and its answer is always one action, "
+    "never a menu."
+)
+
 # ---------------------------------------------------------------------------
 # Caps
 # ---------------------------------------------------------------------------
@@ -1243,6 +1251,142 @@ def start_session(
         "opened_ts": opened_ts,
         "event_id": event_id,
         "action": action,
+    }
+
+
+def study_plan(
+    conn: sqlite3.Connection,
+    *,
+    include_mastered: bool = True,
+    today: str | None = None,
+) -> dict[str, Any]:
+    """The curriculum's reachability outlook, for browsing — never for picking.
+
+    Every grammar-kind ``item`` row gets one entry, each carrying the same
+    verdict :func:`katagiri.intelligence.grammar_reachability` already computes
+    for the curriculum rung (:func:`_curriculum_action`), plus its stored T028
+    tag dict (``jf_can_do``/``irodori_lesson``/``tae_kim_section``, D-39).
+    Nothing here is picked or prescribed: :func:`start_session` remains the
+    single source of "what to do now", and this function answers a different
+    question — "what does the whole map look like" — for a learner who wants
+    to see the shape of what is ahead without that becoming a menu to choose
+    from.
+
+    Ordering surfaces what is actionable first: reachable-and-unmastered
+    topics, ordered by ascending prereq closure size (the curriculum's own
+    idea of "next", same tie-break as the curriculum rung), then blocked
+    topics ordered by ascending missing-prereq count then closure size, then
+    mastered topics last (omitted entirely when ``include_mastered=False``).
+
+    An empty or not-yet-imported curriculum (no ``item_edge`` rows, or a
+    cyclic stored graph that cannot answer reachability) is not a failure: it
+    returns ``ok=True`` with an empty ``curriculum`` list, zeroed ``counts``,
+    and a ``note`` naming the condition.
+    """
+    from katagiri.intelligence import (
+        GRAMMAR_KIND,
+        _curriculum_tags_for,
+        grammar_reachability,
+        load_grammar_dag,
+    )
+
+    day = _today(today)
+    caps = _caps_block(conn, day)
+    empty_note = (
+        "The curriculum has not been imported (no item_edge rows), or the "
+        "stored graph has a cycle and cannot answer reachability. "
+        f"{STUDY_PLAN_NOTE}"
+    )
+
+    dag = load_grammar_dag(conn)
+    if dag.cycle is not None or (not dag.prereqs and not dag.unlocked_by):
+        return {
+            "ok": True,
+            "curriculum": [],
+            "counts": {
+                "total": 0,
+                "mastered": 0,
+                "reachable_now": 0,
+                "blocked": 0,
+            },
+            "caps": caps,
+            "note": empty_note,
+        }
+
+    rows = conn.execute(
+        "SELECT id FROM item WHERE kind = ? AND sealed = 0 ORDER BY id ASC",
+        (GRAMMAR_KIND,),
+    ).fetchall()
+    if not rows:
+        return {
+            "ok": True,
+            "curriculum": [],
+            "counts": {
+                "total": 0,
+                "mastered": 0,
+                "reachable_now": 0,
+                "blocked": 0,
+            },
+            "caps": caps,
+            "note": empty_note,
+        }
+
+    grammar_ids = [str(row["id"]) for row in rows]
+    verdicts = grammar_reachability(conn, grammar_ids, dag=dag)
+    tags = _curriculum_tags_for(conn, grammar_ids)
+
+    total = len(grammar_ids)
+    mastered_count = sum(1 for v in verdicts.values() if v["mastered"])
+    reachable_now = sum(
+        1 for v in verdicts.values() if not v["mastered"] and v["reachable"]
+    )
+    blocked_count = total - mastered_count - reachable_now
+
+    reachable_nodes = [
+        v for v in verdicts.values() if not v["mastered"] and v["reachable"]
+    ]
+    blocked_nodes = [
+        v for v in verdicts.values() if not v["mastered"] and not v["reachable"]
+    ]
+    mastered_nodes = [v for v in verdicts.values() if v["mastered"]]
+
+    reachable_nodes.sort(key=lambda v: (v["closure_size"], v["id"]))
+    blocked_nodes.sort(
+        key=lambda v: (len(v["missing_prereqs"]), v["closure_size"], v["id"])
+    )
+    mastered_nodes.sort(key=lambda v: v["id"])
+
+    ordered = [*reachable_nodes, *blocked_nodes]
+    if include_mastered:
+        ordered.extend(mastered_nodes)
+
+    curriculum = [
+        {
+            "id": v["id"],
+            "kind": v["kind"],
+            "mastered": v["mastered"],
+            "mastered_via": v["mastered_via"],
+            "reachable": v["reachable"],
+            "unlock_ready": v["unlock_ready"],
+            "understanding": v["understanding"],
+            "missing_prereqs": v["missing_prereqs"],
+            "prereqs": v["prereqs"],
+            "attributes": tags.get(v["id"], {}),
+        }
+        for v in ordered
+    ]
+
+    return {
+        "ok": True,
+        "curriculum": curriculum,
+        "counts": {
+            "total": total,
+            "mastered": mastered_count,
+            "reachable_now": reachable_now,
+            "blocked": blocked_count,
+        },
+        "caps": caps,
+        "note": STUDY_PLAN_NOTE,
     }
 
 

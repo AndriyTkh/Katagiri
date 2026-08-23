@@ -1504,3 +1504,42 @@ worksheet-specific instance of that compliance is on the record, rather than mer
 **Net effect**: no code changes from this filing. This entry and ledger row D-41 are the
 governance step FR-025 requires before T038 (the worksheet writer) and T039/T040 (the confinement/
 overwrite/round-trip tests and the read-back wiring check) are written.
+
+## `study_plan` tool + `import_curriculum` operator CLI (2026-08-23)
+
+Session date: 2026-08-23. Filed as ledger rows D-44 and D-45, two additive changes with no
+overlap between them beyond both touching the curriculum system.
+
+**D-44 — new MCP tool `study_plan`, experimental, read-only.** It returns the curriculum
+outlook: every curriculum node's mastered/reachable/blocked status, computed by the existing
+`load_grammar_dag`/`grammar_reachability` pair (`intelligence.py:1917,2031`), plus node counts and
+the existing caps block already surfaced elsewhere under D-36. Additive under D-24: it is a new
+ToolSpec, and no existing tool's contract changes. Why a new tool rather than riding an existing
+one: `lessons` (`mcp_server.py:995`, `session_tools.py:1519`) returns a bare list today, so there
+is no additive slot to hang a whole-DAG-status payload off of without changing what callers of
+`lessons` currently get back; `start_session` (`mcp_server.py:917`, `session_tools.py:1188`)
+already carries the D-36 caps block and stays the single prescriber of what to do next — that
+property (one action, never a menu) is exactly what `study_plan` must not disturb, since a full
+node-by-node outlook read alongside a single-action prescription is not itself a competing
+prescription. `study_plan`'s output is therefore explicitly informational: it names no next
+action and offers no menu to choose from, so it does not create a second "what do I do now"
+answer next to `start_session`'s. This is the first MCP-visible view of the whole study program —
+until now, curriculum state was visible only one prescribed action at a time, through whatever
+`start_session` chose to hand back.
+
+**D-45 — operator CLI: `scripts/import_curriculum.py` gains a `--curriculum-md` mode.** It
+invokes the existing `intelligence.import_curriculum` (`intelligence.py:1605`), including a
+`--dry-run` pass-through. The gap being filled: no invocation path existed at all for that
+importer outside test code (`tests/test_intelligence.py`, `tests/test_dverify.py`) — an operator
+who needed to rebuild the grammar DAG from an edited `curriculum.md` had no script to run. The
+deliberate MCP-side exclusion stays untouched: `test_the_curriculum_import_is_not_a_tool`
+(`tests/test_mcp_tools.py:1253`) asserts `"import_curriculum" not in registered_tools()`, on the
+reasoning that rewriting the grammar DAG that gates the whole i+1 reachability system (D-28) is an
+operator's job, never something an agent session should be able to trigger over MCP. Adding a CLI
+mode does not reach into that boundary — it is a second, human-operated entry point into the same
+already-tested importer function, run from a terminal, not from the agent's tool surface; nothing
+about it registers a tool or changes what `registered_tools()` returns.
+
+**Net effect**: no contract change on either side. `study_plan` is a new, additive, informational
+ToolSpec; the CLI mode is a new operator-only invocation path for code that already existed and
+was already tested, with the MCP exclusion for that same code left exactly as it was.

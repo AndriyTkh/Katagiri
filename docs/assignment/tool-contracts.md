@@ -543,7 +543,7 @@ Check for drift without writing anything:
 - **Name**: `media_context`
 - **Model-facing description**: The subtitle/lyric window around the current playhead on the active media channel, enveloped.
 - **Input schema**:
-  _none_
+  - `manual_anchor_ms` (`int | None`, optional) — One-shot playhead override for asbplayer only, in milliseconds. Precedence highest-first: this one-shot override, then a live playhead asbplayer itself reports, then the persistent set_manual_anchor override, then the event-log-derived anchor. Defaults to None (no override).
 - **Output schema**: {ok, active, note, channel, media_id, anchor_ms, lines[{text, start_ms, end_ms}]} — each line's 'text' is the same envelope shape as media_now's displayed_text/title; an empty 'lines' means nothing is currently displayed, not an error; active=false means the channel is unreachable or nothing is playing
 <!-- END GENERATED: media_context -->
 <!-- BEGIN HAND: media_context -->
@@ -633,3 +633,20 @@ Check for drift without writing anything:
 - **Side effects**: _TODO (T020)_
 - **Example**: _TODO (T020)_
 <!-- END HAND: open_anki -->
+
+<!-- BEGIN GENERATED: study_plan -->
+### `study_plan`
+
+- **Name**: `study_plan`
+- **Model-facing description**: Informational curriculum outlook: mastered/reachable/blocked per node, counts, caps. Prescribes nothing — start_session stays the single source of the one prescribed action.
+- **Input schema**:
+  - `include_mastered` (`bool`, optional) — Defaults to true. False omits mastered nodes from the 'curriculum' list entirely (they are still counted under counts.mastered).
+  - `today` (`str | None`, optional) — ISO date override, for testing — omit to use the real today. Anchors the 'caps' block, same as start_session's own 'today' argument.
+- **Output schema**: {ok, curriculum[{id, kind, mastered, mastered_via, reachable, unlock_ready, understanding, missing_prereqs, prereqs, attributes}], counts{total, mastered, reachable_now, blocked}, caps, note}
+<!-- END GENERATED: study_plan -->
+<!-- BEGIN HAND: study_plan -->
+- **Purpose**: D-44. Let a learner browse the whole curriculum's reachability outlook — which topics are mastered, which are reachable now, which are blocked and by what — without that browsing turning into a second way to pick what to study. `start_session` stays the single prescriber of the one next action; this tool only answers "what does the map look like".
+- **Error conditions**: Never raises for an empty or not-yet-imported curriculum (no `item_edge` rows, or a stored graph with a cycle grammar_reachability can't resolve) — it returns `ok=True` with an empty `curriculum` list, zeroed `counts`, and a `note` naming the condition, so a caller can tell "nothing to show yet" from a real failure.
+- **Side effects**: None — read-only. No row is written and no event is logged.
+- **Example**: `study_plan(include_mastered=False)` → `{"ok": true, "curriculum": [{"id": "te-form", "kind": "grammar", "mastered": false, "mastered_via": null, "reachable": true, "unlock_ready": true, "understanding": "partial", "missing_prereqs": [], "prereqs": ["masu-form"], "attributes": {"irodori_lesson": 6}}], "counts": {"total": 12, "mastered": 4, "reachable_now": 3, "blocked": 5}, "caps": {...}, "note": "This is an informational outlook, not a prescription: start_session remains the single prescriber, and its answer is always one action, never a menu."}`.
+<!-- END HAND: study_plan -->
