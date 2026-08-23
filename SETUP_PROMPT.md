@@ -34,7 +34,14 @@ of guessing or inventing a placeholder that looks real.
    this doctor's vendor check will pass — see step 3.
 
 3. Vendor data — download what you legally can, flag what you can't:
-   Read `vendor/README.md` in full first; it has the exact sources, licenses,
+   Easiest path: the installer wizard from step 2 offers to download every
+   missing vendor file itself when you answer "y" at its
+   "Download missing vendor files now ...? [y/N]" prompt (equivalently:
+   `uv run python -m katagiri.vendor_fetch`). It fetches from the official
+   sources, sanity-checks each file, verifies/pins checksums, and unpacks
+   UniDic — if you use it, skip the manual list below (Irodori excepted, see
+   its bullet). To acquire the files by hand instead, read
+   `vendor/README.md` in full first; it has the exact sources, licenses,
    and target paths for every file. Then:
    - `vendor/jmdict/` (jmdict-simplified English release, ~11 MB): download
      the zip named in vendor/CHECKSUMS.sha256's jmdict entry.

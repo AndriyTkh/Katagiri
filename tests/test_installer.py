@@ -546,7 +546,46 @@ def test_maybe_downgrade_anki_reports_winget_install_failure(tmp_path, monkeypat
 
     monkeypatch.setattr(installer, "_run", fake_run)
     detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=lambda _: "y")
-    assert detail == "Anki downgrade to 26.05 failed: access denied"
+    assert detail == (
+        "Anki downgrade to 26.05 failed: access denied; "
+        "AnkiMorphs stays broken until Anki <= 26.05"
+    )
+
+
+def test_maybe_downgrade_anki_failure_reason_falls_back_to_stdout(tmp_path, monkeypatch):
+    """winget reports most errors on stdout; the detail must never end in a
+    bare 'failed: ' (the empty-stderr bug seen in a real run)."""
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    _write_camel_wrapper(cfg.anki_data_dir)
+    monkeypatch.setattr(installer, "_installed_anki_version", lambda: (26, 8, 1))
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(
+            argv, 1, stdout="No version matches the given value: 26.05", stderr=""
+        )
+
+    monkeypatch.setattr(installer, "_run", fake_run)
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=lambda _: "y")
+    assert detail == (
+        "Anki downgrade to 26.05 failed: No version matches the given value: 26.05; "
+        "AnkiMorphs stays broken until Anki <= 26.05"
+    )
+
+
+def test_maybe_downgrade_anki_failure_reason_never_empty(tmp_path, monkeypatch):
+    cfg = _raw_config(tmp_path, anki_data_dir=tmp_path / "Anki2")
+    _write_camel_wrapper(cfg.anki_data_dir)
+    monkeypatch.setattr(installer, "_installed_anki_version", lambda: (26, 8, 1))
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 3, stdout="", stderr="")
+
+    monkeypatch.setattr(installer, "_run", fake_run)
+    detail = installer._maybe_downgrade_anki_for_ankimorphs(cfg, prompt=lambda _: "y")
+    assert detail == (
+        "Anki downgrade to 26.05 failed: winget exited 3; "
+        "AnkiMorphs stays broken until Anki <= 26.05"
+    )
 
 
 def test_installed_anki_version_parses_winget_list_output(monkeypatch):
@@ -587,6 +626,112 @@ def test_step_anki_folds_downgrade_detail_into_result(tmp_path, monkeypatch):
     result = installer.step_anki(cfg)
     assert result.status == "OK"
     assert result.detail == "synced; downgraded Anki to 26.05 for AnkiMorphs"
+
+
+# ---------------------------------------------------------------------------
+# Vendor download recovery (consent-gated, interactive wizard only)
+# ---------------------------------------------------------------------------
+
+
+def test_run_step_with_retry_offers_recovery_once_then_falls_through(monkeypatch):
+    """recover=True re-runs the step immediately; a still-failing step then
+    gets the plain R/S/A prompt, with no second recovery offer."""
+    runs = []
+    recover_calls = []
+
+    def runner():
+        runs.append(1)
+        return installer.StepResult("ACTION NEEDED", "still broken")
+
+    def recover():
+        recover_calls.append(1)
+        return True
+
+    prompts = []
+
+    def prompt(text):
+        prompts.append(text)
+        return "s"
+
+    result = installer._run_step_with_retry(
+        2, 11, "Vendor data", runner, prompt=prompt, recover=recover
+    )
+    assert result.status == "ACTION NEEDED"
+    assert len(runs) == 2  # initial run + one re-run after recovery
+    assert len(recover_calls) == 1  # never offered twice
+    assert len(prompts) == 1 and "[R]etry / [S]kip / [A]bort" in prompts[0]
+
+
+def test_run_step_with_retry_recovery_decline_goes_straight_to_rsa():
+    runs = []
+
+    def runner():
+        runs.append(1)
+        return installer.StepResult("ACTION NEEDED", "missing files")
+
+    result = installer._run_step_with_retry(
+        2, 11, "Vendor data", runner, prompt=lambda _t: "s", recover=lambda: False
+    )
+    assert result.status == "ACTION NEEDED"
+    assert len(runs) == 1
+
+
+def test_step_recovery_only_exists_for_the_vendor_step(tmp_path):
+    assert installer._step_recovery("Vendor data", tmp_path) is not None
+    for label in installer.STEP_LABELS:
+        if label != "Vendor data":
+            assert installer._step_recovery(label, tmp_path) is None
+
+
+def _write_vendor_manifest(tmp_path, lines):
+    vendor_dir = tmp_path / "vendor"
+    vendor_dir.mkdir(exist_ok=True)
+    (vendor_dir / "CHECKSUMS.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_vendor_download_recovery_decline_runs_no_fetch(tmp_path, monkeypatch):
+    from katagiri import vendor_fetch
+
+    _write_vendor_manifest(tmp_path, ["0" * 64 + "  vendor/kanjium/accents.txt"])
+
+    def boom(*a, **k):
+        raise AssertionError("fetch_missing must not run without consent")
+
+    monkeypatch.setattr(vendor_fetch, "fetch_missing", boom)
+    prompts = []
+
+    def prompt(text):
+        prompts.append(text)
+        return "n"
+
+    assert installer._vendor_download_recovery(tmp_path, prompt=prompt) is False
+    assert len(prompts) == 1
+    assert prompts[0].strip().startswith("Download missing vendor files now (")
+    assert "from official sources)? [y/N]:" in prompts[0]
+
+
+def test_vendor_download_recovery_consent_fetches_the_missing_list(tmp_path, monkeypatch):
+    from katagiri import vendor_fetch
+
+    _write_vendor_manifest(
+        tmp_path,
+        [
+            "0" * 64 + "  vendor/kanjium/accents.txt",
+            "1" * 64 + "  vendor/taekim/grammar-index.html",  # not fetchable
+        ],
+    )
+    fetched = []
+    monkeypatch.setattr(
+        vendor_fetch, "fetch_missing", lambda root, paths: fetched.append((root, paths)) or []
+    )
+    assert installer._vendor_download_recovery(tmp_path, prompt=lambda _t: "y") is True
+    assert fetched == [(tmp_path, ["vendor/kanjium/accents.txt"])]
+
+
+def test_vendor_download_recovery_nothing_fetchable_returns_false(tmp_path):
+    _write_vendor_manifest(tmp_path, ["1" * 64 + "  vendor/taekim/grammar-index.html"])
+    assert installer._vendor_download_recovery(tmp_path, prompt=None) is False
 
 
 def test_step_md_search_skips_when_vault_path_unset(tmp_path, monkeypatch):

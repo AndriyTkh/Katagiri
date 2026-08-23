@@ -9,9 +9,13 @@ This directory holds large third-party data files that Katagiri needs at runtime
 
 1. **No runtime downloads, ever.** Katagiri must never fetch data over the
    network while serving MCP requests. Acquisition is a deliberate, manual,
-   documented setup step performed by the operator. The one exception is the
-   Irodori Table of Contents PDF, fetched only from the installer wizard with
-   explicit operator consent at that prompt — see the Irodori section below.
+   documented setup step performed by the operator. Two exceptions, both
+   installer-only and gated on explicit operator consent at a prompt (never
+   under `--yes`, never at MCP runtime): the Irodori Table of Contents PDF
+   (see the Irodori section below), and the vendor files themselves — the
+   installer wizard (or `python -m katagiri.vendor_fetch`, run by hand) can
+   fetch the missing files in this directory from the official sources
+   documented below (`src/katagiri/vendor_fetch.py`).
 2. **Every file is checksummed.** After acquiring a component, record its
    SHA-256 in `vendor/CHECKSUMS.sha256`. That file *is* committed, so the repo
    pins exactly which bytes are expected.

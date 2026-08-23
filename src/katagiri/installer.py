@@ -855,6 +855,65 @@ def step_vendor(repo_root: Path) -> StepResult:
     return StepResult("OK" if status.status == "READY" else "ACTION NEEDED", status.detail)
 
 
+def _vendor_problem_relpaths(repo_root: Path) -> list[str]:
+    """Manifest-relative paths that are missing or fail their checksum.
+
+    Same walk as :func:`verify_vendor`, but returning the paths themselves so
+    the download recovery below can hand them to ``katagiri.vendor_fetch``.
+    """
+    manifest = repo_root / "vendor" / "CHECKSUMS.sha256"
+    try:
+        entries = _iter_checksum_entries(manifest.read_text(encoding="utf-8"))
+    except OSError:
+        return []
+    problems: list[str] = []
+    for digest, relpath in entries:
+        path = repo_root / relpath
+        if not path.exists():
+            problems.append(relpath)
+        elif hashlib.sha256(path.read_bytes()).hexdigest().lower() != digest:
+            problems.append(relpath)
+    return problems
+
+
+def _vendor_download_recovery(repo_root: Path, *, prompt: Any = input) -> bool:
+    """Offer to download the missing vendor files (consent-gated, Irodori
+    pattern -- see ``katagiri.vendor_fetch``'s module docstring).
+
+    Called only when the interactive vendor step reported ACTION NEEDED,
+    before the generic Retry/Skip/Abort prompt; never under ``--yes``.
+    Returns True when the operator consented and a fetch ran (the caller
+    should re-run the step to show the fresh result); False when there is
+    nothing fetchable or the operator declined.
+    """
+    from katagiri import vendor_fetch
+
+    fetchable = [
+        p
+        for p in _vendor_problem_relpaths(repo_root)
+        if p in vendor_fetch.ARTIFACTS_BY_RELPATH
+    ]
+    if not fetchable:
+        return False
+    print(
+        f"      {len(fetchable)} of the missing vendor file(s) can be downloaded "
+        "from their official sources (see vendor/README.md for sources and licenses)."
+    )
+    try:
+        answer = prompt(
+            "      Download missing vendor files now "
+            f"({vendor_fetch.format_size_estimate(fetchable)} from official sources)? [y/N]: "
+        )
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if (answer or "").strip().lower() != "y":
+        return False
+    failures = vendor_fetch.fetch_missing(repo_root, fetchable)
+    if failures:
+        print(f"      {len(failures)} download(s) failed; details above.")
+    return True
+
+
 def step_jmdict(db_path: Path) -> StepResult:
     count = _ro_query_scalar(db_path, "SELECT COUNT(*) FROM jmdict_entry")
     if count:
@@ -954,7 +1013,15 @@ def _maybe_downgrade_anki_for_ankimorphs(cfg: RawConfig, *, prompt: Any) -> str 
         timeout=300,
     )
     if proc.returncode != 0:
-        return f"Anki downgrade to {ANKIMORPHS_PINNED_ANKI_VERSION} failed: {_truncated(proc.stderr)}"
+        # winget reports most errors on stdout, not stderr -- fall back so the
+        # detail never ends in a bare "failed: " with no reason.
+        reason = _truncated(
+            (proc.stderr or "").strip() or (proc.stdout or "").strip()
+        ) or f"winget exited {proc.returncode}"
+        return (
+            f"Anki downgrade to {ANKIMORPHS_PINNED_ANKI_VERSION} failed: {reason}; "
+            f"AnkiMorphs stays broken until Anki <= {ANKIMORPHS_PINNED_ANKI_VERSION}"
+        )
     return f"downgraded Anki to {ANKIMORPHS_PINNED_ANKI_VERSION} for AnkiMorphs"
 
 
@@ -1252,7 +1319,7 @@ def _wizard_step_runners(
 
 
 def _run_step_with_retry(
-    n: int, total: int, label: str, runner: Any, *, prompt: Any = input
+    n: int, total: int, label: str, runner: Any, *, prompt: Any = input, recover: Any = None
 ) -> StepResult:
     """Run one step; on ACTION NEEDED, offer Retry / Skip / Abort.
 
@@ -1260,12 +1327,22 @@ def _run_step_with_retry(
     moves on, exactly like the old single-pass behavior. Retry re-runs the
     same step (every step is idempotent, see module docstring). Abort raises
     :class:`_WizardAborted`.
+
+    ``recover``, when given, is a step-specific recovery offer (currently only
+    the vendor step's consent-gated download) tried once, before the first
+    generic R/S/A prompt: returning True re-runs the step immediately; False
+    falls through to R/S/A.
     """
+    recovery_offered = False
     while True:
         result = runner()
         _print_step(n, total, label, result)
         if result.status != "ACTION NEEDED":
             return result
+        if recover is not None and not recovery_offered:
+            recovery_offered = True
+            if recover():
+                continue
         hint = _RETRY_HINTS.get(label)
         if hint:
             print(f"      {hint}")
@@ -1279,6 +1356,17 @@ def _run_step_with_retry(
         if answer == "a":
             raise _WizardAborted
         return result
+
+
+def _step_recovery(label: str, repo_root: Path, *, prompt: Any = input) -> Any:
+    """The ``recover`` hook for :func:`_run_step_with_retry`, per step label.
+
+    Only the vendor step has one: the consent-gated download offer. Every
+    other step returns None (plain R/S/A behavior).
+    """
+    if label == STEP_LABELS[1]:
+        return lambda: _vendor_download_recovery(repo_root, prompt=prompt)
+    return None
 
 
 def _print_doctor_summary(cfg_path: Path, repo_root: Path) -> list[ComponentStatus]:
@@ -1374,7 +1462,10 @@ def _post_wizard_menu(
         if choice == "a":
             try:
                 for i, (label, runner) in enumerate(runners, start=1):
-                    _run_step_with_retry(i, TOTAL_STEPS, label, runner, prompt=prompt)
+                    _run_step_with_retry(
+                        i, TOTAL_STEPS, label, runner, prompt=prompt,
+                        recover=_step_recovery(label, repo_root, prompt=prompt),
+                    )
             except _WizardAborted:
                 print("  Stopped; back to the menu.")
             _print_doctor_summary(cfg_path, repo_root)
@@ -1385,7 +1476,10 @@ def _post_wizard_menu(
             i = int(choice)
             label, runner = runners[i - 1]
             try:
-                _run_step_with_retry(i, TOTAL_STEPS, label, runner, prompt=prompt)
+                _run_step_with_retry(
+                    i, TOTAL_STEPS, label, runner, prompt=prompt,
+                    recover=_step_recovery(label, repo_root, prompt=prompt),
+                )
             except _WizardAborted:
                 print("  Stopped; back to the menu.")
             continue
@@ -1414,7 +1508,10 @@ def _run_wizard_steps(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> N
             _print_step(n, TOTAL_STEPS, label, runner())
             continue
         try:
-            _run_step_with_retry(n, TOTAL_STEPS, label, runner)
+            _run_step_with_retry(
+                n, TOTAL_STEPS, label, runner,
+                recover=_step_recovery(label, repo_root),
+            )
         except _WizardAborted:
             aborted = True
             print(f"\nSetup aborted at step {n} ({label}); current status below.")
