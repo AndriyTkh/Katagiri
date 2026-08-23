@@ -462,7 +462,7 @@ def verify_vendor(repo_root: Path) -> ComponentStatus:
 # ---------------------------------------------------------------------------
 
 
-def check_obsidian_connection(token: str) -> tuple[bool, str]:
+def check_obsidian_connection(token: str | None) -> tuple[bool, str]:
     """Ping obsidian-local-rest-api through ``katagiri.obsidian_proxy``.
 
     This module must not become a second HTTP client: ``obsidian_proxy`` is
@@ -475,24 +475,31 @@ def check_obsidian_connection(token: str) -> tuple[bool, str]:
     matching this module's rule that nothing but ``config`` is imported at top
     level.
 
-    Validated before anything is sent: an invalid token (a control character,
-    or a byte outside latin-1) is refused right here, the same check
-    ``obsidian_proxy`` itself would fail on, so no request is attempted and no
-    value-quoting exception has a chance to fire.
+    ``token`` is the *explicit* ``obsidian_api_token`` from config.toml, or
+    ``None`` when it isn't set -- in which case ``obsidian_proxy`` still tries
+    the ping, auto-discovering the key and TLS certificate from the plugin's
+    own ``data.json`` (see ``obsidian_proxy._token``/``_tls_context``). An
+    explicit token is validated before anything is sent: an invalid one (a
+    control character, or a byte outside latin-1) is refused right here, the
+    same check ``obsidian_proxy`` itself would fail on, so no request is
+    attempted and no value-quoting exception has a chance to fire. There is
+    nothing to validate for an auto-discovered key -- it never passes through
+    this function.
 
     ``config``'s cached accessor is reset first: this check exists to find out
-    whether *this run's* token works, and an lru_cache populated before
+    whether *this run's* credentials work, and an lru_cache populated before
     ``step_config`` wrote the file (or before an operator's own edit) would
-    silently ping with a stale one instead.
+    silently ping with stale ones instead.
     """
-    problem = validate_secret_value(token)
-    if problem is not None:
-        return (
-            False,
-            f"obsidian_api_token is invalid ({problem}); not sent. Re-copy "
-            "the token as plain text from Obsidian's Local REST API plugin "
-            "settings.",
-        )
+    if token:
+        problem = validate_secret_value(token)
+        if problem is not None:
+            return (
+                False,
+                f"obsidian_api_token is invalid ({problem}); not sent. Re-copy "
+                "the token as plain text from Obsidian's Local REST API plugin "
+                "settings.",
+            )
 
     from katagiri import obsidian_proxy
 
@@ -716,11 +723,13 @@ def probe_yomitan(cfg: RawConfig) -> ComponentStatus:
 
 
 def probe_obsidian(cfg: RawConfig) -> ComponentStatus:
-    if not cfg.obsidian_api_token:
+    if not cfg.obsidian_api_token and cfg.vault_path is None:
         return ComponentStatus(
             "obsidian bridge",
             "MANUAL STEP",
-            "obsidian_api_token not set; install the 'Local REST API' plugin",
+            "vault_path not set; install the 'Local REST API' plugin and set "
+            "vault_path so its key and certificate can be auto-discovered "
+            "(or set obsidian_api_token explicitly)",
         )
     ok, detail = check_obsidian_connection(cfg.obsidian_api_token)
     return ComponentStatus("obsidian bridge", "READY" if ok else "MANUAL STEP", detail)
@@ -1032,10 +1041,11 @@ def step_obsidian(cfg: RawConfig) -> StepResult:
     print("  Opening Obsidian so you know it's there -- it's your main notebook.")
     launch = obsidian_launch.launch_obsidian()
 
-    if not cfg.obsidian_api_token:
+    if not cfg.obsidian_api_token and cfg.vault_path is None:
         detail = (
-            "obsidian_api_token not set. Install the 'Local REST API' community plugin "
-            "in Obsidian, copy its API key, and re-run to set obsidian_api_token."
+            "vault_path not set. Install the 'Local REST API' community plugin "
+            "in Obsidian and set vault_path so its key and certificate can be "
+            "auto-discovered (or set obsidian_api_token explicitly)."
         )
         if launch.reason and not launch.already_running:
             detail = f"{detail} ({launch.reason})"

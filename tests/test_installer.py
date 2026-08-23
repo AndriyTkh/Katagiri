@@ -652,6 +652,75 @@ def test_step_obsidian_skips_when_token_unset(tmp_path, monkeypatch):
     assert result.status == "SKIP"
 
 
+def test_step_obsidian_attempts_connection_when_only_vault_path_set(tmp_path, monkeypatch):
+    """No explicit token but ``vault_path`` set must still ping -- the plugin's
+    key and certificate can be auto-discovered from its own data.json (see
+    ``obsidian_proxy._token``/``_tls_context``), so this must not take the
+    "not configured" SKIP branch the way an unset ``vault_path`` does."""
+    import katagiri.obsidian_launch as obsidian_launch_mod
+    import katagiri.obsidian_proxy as obsidian_proxy
+
+    monkeypatch.setattr(
+        obsidian_launch_mod,
+        "launch_obsidian",
+        lambda: obsidian_launch_mod.LaunchResult(
+            launched=False, already_running=True, path=None, reason=None
+        ),
+    )
+    calls = []
+
+    def fake_list_vault_dir():
+        calls.append(True)
+        return {
+            "ok": True,
+            "status": 200,
+            "error": None,
+            "note": "",
+            "files": [],
+            "file_count": 0,
+            "truncated": False,
+            "path": "",
+        }
+
+    monkeypatch.setattr(obsidian_proxy, "list_vault_dir", fake_list_vault_dir)
+    cfg = _raw_config(tmp_path, vault_path=tmp_path)
+    result = installer.step_obsidian(cfg)
+    assert calls == [True]
+    assert result.status == "OK"
+
+
+def test_probe_obsidian_manual_step_when_neither_token_nor_vault_path_set(tmp_path):
+    cfg = _raw_config(tmp_path)
+    status = installer.probe_obsidian(cfg)
+    assert status.status == "MANUAL STEP"
+    assert "vault_path" in status.detail
+
+
+def test_probe_obsidian_attempts_connection_when_only_vault_path_set(tmp_path, monkeypatch):
+    import katagiri.obsidian_proxy as obsidian_proxy
+
+    calls = []
+
+    def fake_list_vault_dir():
+        calls.append(True)
+        return {
+            "ok": True,
+            "status": 200,
+            "error": None,
+            "note": "",
+            "files": [],
+            "file_count": 0,
+            "truncated": False,
+            "path": "",
+        }
+
+    monkeypatch.setattr(obsidian_proxy, "list_vault_dir", fake_list_vault_dir)
+    cfg = _raw_config(tmp_path, vault_path=tmp_path)
+    status = installer.probe_obsidian(cfg)
+    assert calls == [True]
+    assert status.status == "READY"
+
+
 def test_step_obsidian_launches_obsidian_and_notes_when_not_found(tmp_path, monkeypatch):
     import katagiri.obsidian_launch as obsidian_launch_mod
 
