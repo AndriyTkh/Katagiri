@@ -12,27 +12,52 @@ this clone. It downloads what can legally be auto-fetched, installs both uv
 projects, and tells you exactly which steps (API keys, Obsidian, Irodori
 materials) it can't do for you.
 
-## Setup (uv)
+## Setup
+
+One entry point, re-runnable any time to check status, repair a step, or
+reconfigure:
+
+```
+setup.bat
+```
+
+Double-click it, or run it from a shell (`./setup.bat` in Git Bash,
+`cmd //c setup.bat` if MSYS path-mangles it). It runs `uv sync`, then the
+interactive installer: prompts for config, verifies/imports vendor data
+(offers to download what's missing from official sources, on your consent),
+syncs Anki, builds search indexes, checks the Obsidian bridge, and offers to
+launch the MCP server when everything's ready. Failed steps offer
+`[R]etry / [S]kip / [A]bort`; the post-run menu lets you re-run any single
+step, edit config, or re-check the doctor summary.
+
+Non-interactive modes (used by CI and scripting):
 
 ```powershell
-uv sync                 # create .venv and install deps (Python 3.12)
-uv run pytest -q        # tests
-uv run pre-commit install   # optional: enable the hygiene + secret-scan hooks
+setup.bat --check    # doctor only: report status, no changes, exit 1 if anything's missing
+setup.bat --yes      # accept defaults, skip prompts, skip scheduled tasks and downloads
+uv run pytest -q     # tests, once uv sync has run
 ```
 
 ## Running the MCP server
 
 The server speaks JSON-RPC on **stdout**, so nothing else may write there:
 all logging goes to **stderr only** (see `src/katagiri/logging_setup.py`).
-Launch it with `PYTHONUTF8=1` so Japanese text survives the Windows console
-codepage.
 
-```powershell
-$env:PYTHONUTF8 = "1"; uv run python -m katagiri.mcp_server
+Normally an MCP client launches it (`.mcp.json` at the repo root wires this
+up, using the interpreter at `.venv\Scripts\python.exe`), or `setup.bat`'s
+post-run menu starts it for you. To run it standalone (e.g. a smoke test):
+
+```
+run-mcp.bat
 ```
 
-`.mcp.json` at the repo root wires this up for MCP clients, using the
-interpreter at `.venv\Scripts\python.exe`.
+which is equivalent to:
+
+```powershell
+$env:PYTHONUTF8 = "1"; uv run katagiri-mcp
+```
+
+(`PYTHONUTF8=1` so Japanese text survives the Windows console codepage.)
 
 ## Configuration
 
