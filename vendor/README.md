@@ -9,7 +9,9 @@ This directory holds large third-party data files that Katagiri needs at runtime
 
 1. **No runtime downloads, ever.** Katagiri must never fetch data over the
    network while serving MCP requests. Acquisition is a deliberate, manual,
-   documented setup step performed by the operator.
+   documented setup step performed by the operator. The one exception is the
+   Irodori Table of Contents PDF, fetched only from the installer wizard with
+   explicit operator consent at that prompt — see the Irodori section below.
 2. **Every file is checksummed.** After acquiring a component, record its
    SHA-256 in `vendor/CHECKSUMS.sha256`. That file *is* committed, so the repo
    pins exactly which bytes are expected.
@@ -138,19 +140,21 @@ different tanos artefact, the loader's contract is "one file per level, named
 
 ### Irodori (Japan Foundation)
 
-* **Source**: the official Japan Foundation Irodori distribution. **Not pinned
-  here** — `scripts/fetch_irodori.py` carries a `TODO` for the operator to
-  confirm the exact page and fill it in; this document deliberately does not
-  guess a URL either.
+* **Source**: the official Japan Foundation Irodori distribution
+  (`irodori.jpf.go.jp`).
 * **License**: custom Japan Foundation terms. Non-commercial text extraction is
   acceptable; the textbook's illustrations are untouchable; **no
-  redistribution**. Because of this, **the PDF/MP3 files are never committed to
-  this repository, under any circumstance** — stricter than every other row in
-  this document, and stricter than the `vendor/*` gitignore rule needs to be for
-  anything else here.
-* **Version pinned**: none. Files are hand-acquired and hand-verified per
-  operator, not pinned to a release; `CHECKSUMS.sha256` carries no entry for
-  them until you have real local files to check.
+  redistribution**. Because of this, **the lesson PDF/MP3 files are never
+  committed to this repository, under any circumstance** — stricter than every
+  other row in this document, and stricter than the `vendor/*` gitignore rule
+  needs to be for anything else here.
+* **Version pinned**: the lesson materials themselves are hand-acquired and
+  hand-verified per operator, not pinned to a release — see below. The one
+  exception is the Table of Contents PDF (lesson titles, can-do goals, short
+  word lists — not the lesson content itself), which the installer can fetch
+  automatically.
+
+**Lesson PDFs/MP3s** (hand-acquired, as before):
 
 1. Acquire the lesson PDF(s)/MP3(s) yourself, by hand, from the official Japan
    Foundation Irodori site (or whatever other means you already have the rights
@@ -161,6 +165,19 @@ different tanos artefact, the loader's contract is "one file per level, named
    which files are new. Review its output and append digests yourself — the
    script never downloads, scrapes, or writes `CHECKSUMS.sha256`; it only reads
    files you already placed locally.
+
+**Table of Contents / starter study schedule** (automated, consent-gated):
+
+The installer wizard (`python -m katagiri.installer`) can, with your explicit
+yes at the prompt, download the TOC PDF from the URL pinned in
+`katagiri.irodori_import.TOC_URL`, verify/pin its digest into
+`CHECKSUMS.sha256`, and seed a per-lesson `home_topic` (`irodori-l01` ..
+`irodori-l18`) of word items from its "Kanji Words" lists, so a fresh install
+has something real to study without you acquiring anything by hand. This is
+the one deliberate exception to "no runtime downloads, ever" — it only runs
+from the installer, gated on consent, never from the MCP server at request
+time. Re-run `python -m katagiri.installer` to install it later if you skip it
+the first time.
 
 ### Tae Kim's Guide to Japanese Grammar
 

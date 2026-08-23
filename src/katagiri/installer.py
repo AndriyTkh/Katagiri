@@ -53,7 +53,7 @@ from katagiri import config as config_mod
 # shared log file once the ``__main__`` block has configured it.
 _log = logging.getLogger("katagiri.installer")
 
-TOTAL_STEPS = 10
+TOTAL_STEPS = 11
 
 MPV_CONF_LINE = r"input-ipc-server=\\.\pipe\mpv-katagiri"
 
@@ -94,6 +94,7 @@ STEP_LABELS = (
     "Obsidian bridge check",
     "Scheduled tasks (optional)",
     "Backup rehearsal",
+    "Irodori study schedule (optional)",
 )
 
 
@@ -381,6 +382,10 @@ def backup_create_argv() -> list[str]:
 
 def backup_verify_argv(snapshot_path: str) -> list[str]:
     return _module_argv("katagiri.backup", "verify", snapshot_path)
+
+
+def irodori_import_argv() -> list[str]:
+    return _module_argv("katagiri.irodori_import", "all")
 
 
 def _subprocess_env() -> dict[str, str]:
@@ -742,6 +747,20 @@ def probe_backup(cfg: RawConfig) -> ComponentStatus:
     return ComponentStatus("backup", "MISSING", "no snapshot yet")
 
 
+def probe_irodori(db_path: Path) -> ComponentStatus:
+    count = _ro_query_scalar(
+        db_path, "SELECT COUNT(*) FROM item WHERE home_topic LIKE 'irodori-l%'"
+    )
+    if count:
+        return ComponentStatus("irodori study schedule", "READY", f"{count} word(s) seeded")
+    # Optional and consent-gated (like scheduled tasks): "not installed" is not
+    # a problem to flag via doctor_exit_code, just a MANUAL STEP the operator
+    # can opt into later by re-running the wizard.
+    return ComponentStatus(
+        "irodori study schedule", "MANUAL STEP", "optional, not installed (declined or skipped)"
+    )
+
+
 def collect_doctor_statuses(cfg: RawConfig, repo_root: Path) -> list[ComponentStatus]:
     return [
         probe_config(cfg.config_file),
@@ -754,6 +773,7 @@ def collect_doctor_statuses(cfg: RawConfig, repo_root: Path) -> list[ComponentSt
         probe_obsidian(cfg),
         probe_schtasks(),
         probe_backup(cfg),
+        probe_irodori(cfg.db_path),
     ]
 
 
@@ -1121,6 +1141,46 @@ def step_backup() -> StepResult:
     )
 
 
+def step_irodori(db_path: Path, *, prompt: Any = input) -> StepResult:
+    """Offer to seed a starter study schedule from the Irodori Table of Contents.
+
+    Always asks -- even under ``--yes`` -- same as
+    ``_maybe_downgrade_anki_for_ankimorphs``: this reaches out to the network
+    (fetching the official, freely published Japan Foundation TOC PDF, never
+    the copyrighted lesson content itself; see
+    ``katagiri.irodori_import``/``vendor/README.md``), which no other default
+    step in this wizard does, so it needs its own explicit yes regardless of
+    ``--yes``. Declining or hitting EOF/Ctrl-C skips silently -- this is
+    optional flavor content, not required setup.
+    """
+    count = _ro_query_scalar(
+        db_path, "SELECT COUNT(*) FROM item WHERE home_topic LIKE 'irodori-l%'"
+    )
+    if count:
+        return StepResult("OK", f"already seeded ({count} word(s))")
+
+    print(
+        "  Irodori is a free Japanese textbook published by the Japan Foundation.\n"
+        "  This can download its table of contents (lesson titles + word lists, not\n"
+        "  the copyrighted lesson content) from irodori.jpf.go.jp and seed a starter\n"
+        "  study schedule from it."
+    )
+    try:
+        answer = prompt("  Download it and seed a starter study schedule? [y\\N]: ")
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if (answer or "").strip().lower() != "y":
+        return StepResult("SKIP", "declined")
+
+    proc = _run(irodori_import_argv())
+    if proc.returncode == 0:
+        return StepResult("OK", "seeded")
+    return StepResult(
+        "ACTION NEEDED",
+        f"irodori_import exited {proc.returncode}: {_truncated(proc.stderr)}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Wizard runner
 # ---------------------------------------------------------------------------
@@ -1182,6 +1242,10 @@ def _run_wizard_steps(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> N
 
     result = step_backup()
     _print_step(n, TOTAL_STEPS, STEP_LABELS[8], result)
+    n += 1
+
+    result = step_irodori(cfg.db_path)
+    _print_step(n, TOTAL_STEPS, STEP_LABELS[9], result)
     n += 1
 
     cfg = read_raw_config(cfg_path)
