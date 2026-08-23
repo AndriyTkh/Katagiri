@@ -37,8 +37,16 @@ def test_config_created_with_commented_defaults(local_app_data):
     assert cfg.anki_data_dir is None
 
     text = cfg_path.read_text(encoding="utf-8")
-    for key in ("vault_path", "anki_data_dir", "scratch_root", "db_path"):
+    for key in ("vault_path", "anki_data_dir", "scratch_root"):
         assert f"# {key}" in text, f"{key} should be present but commented out"
+
+    # db_path is the one key written active (uncommented), with the absolute
+    # resolved path baked in at config-creation time -- so a sandboxed launcher
+    # with a redirected %LOCALAPPDATA% can't silently re-derive it and create a
+    # fresh empty DB.
+    expected_db_path = (local_app_data / "Katagiri" / "katagiri.db").as_posix()
+    assert f'db_path = "{expected_db_path}"' in text
+    assert f'# db_path = "{expected_db_path}"' not in text
 
 
 def test_config_is_cached_and_resettable(local_app_data):
@@ -102,7 +110,6 @@ def test_missing_template_keys_appended_on_load(local_app_data):
         "anki_data_dir",
         "anki_exe_path",
         "scratch_root",
-        "db_path",
         "obsidian_api_token",
         "obsidian_ca_bundle",
         "asbplayer_bridge_dir",
@@ -110,6 +117,10 @@ def test_missing_template_keys_appended_on_load(local_app_data):
         "mokuro_shared_secret",
     ):
         assert f"# {key} = " in text, f"missing commented block for {key}"
+    # db_path's appended block is active (uncommented), unlike every other key.
+    expected_db_path = (cfg_dir / "katagiri.db").as_posix()
+    assert f'db_path = "{expected_db_path}"' in text
+    assert f'# db_path = "{expected_db_path}"' not in text
     # The active key is not duplicated by a commented copy.
     assert text.count("vault_path") == 1
 

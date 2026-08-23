@@ -101,8 +101,12 @@ _KEY_BLOCKS: Final[dict[str, str]] = {
 # scratch_root = "{scratch_root}"
 """,
     "db_path": """\
-# SQLite database used for Katagiri's own state.
-# db_path = "{db_path}"
+# SQLite database used for Katagiri's own state. Written active (not
+# commented) with the absolute path resolved at config-creation time: a
+# sandboxed launcher with a redirected %LOCALAPPDATA% (e.g. an MSIX-sandboxed
+# Codex) must not silently re-derive this path and create a fresh empty DB.
+# Edit only to relocate the database file.
+db_path = "{db_path}"
 """,
     "obsidian_api_token": """\
 # API key for the Obsidian "Local REST API" plugin (Settings -> Local REST API).
