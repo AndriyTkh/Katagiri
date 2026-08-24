@@ -24,6 +24,19 @@ reachability) with detect + guide-to-install flow; Chrome forbids silent extensi
 installs, so scope is presence check + Web Store handoff + re-check. Deferred until 007
 ships (decided 2026-08-24).
 
+Planned (not yet specified): `009-asbplayer-bridge-in-process` — replace the Go
+WebSocket bridge (`asbplayer_launch.py` runs `go run main.go` from the configured
+checkout; requires Go on PATH) with a Python WS server inside Katagiri hosting
+`ws://127.0.0.1:8766/ws` directly. Feasibility audit 2026-08-24 (local bridge source,
+490 LOC, stock upstream 1.20.2 + one local commit `37495e22` = F-05 playback-state +
+HOST bind): positive — protocol is 6 server→client JSON commands correlated by
+messageId (5s timeout), 5 thin HTTP endpoints, app-level text "PING"/"PONG";
+~300-line Python (`websockets` + aiohttp/httpx) covers it. MUST carry over: the
+bridge's AnkiConnect proxy on `POST /` with addNote-intercept mining (extension may
+point its Anki URL at :8766) and exact header/body passthrough. Open item: upstream
+issue #1087 / playback-state merge status not yet confirmed (research interrupted).
+Deferred until 007 ships (decided 2026-08-24).
+
 Phase A closed pre-migration; record in docs/dev-plan.md, docs/audit-log.md, closed beads.
 Historical bead IDs survive in tasks as `[was: kata-*]` for traceability.
 
