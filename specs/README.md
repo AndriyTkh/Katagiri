@@ -17,12 +17,14 @@ state as live for those phases only. Once `kata-bvf` closes, beads becomes a rea
 | `005-mcp-assignment` | **spec-kit tasks.md** | — (no beads history) |
 | `006-teaching-method` | **spec-kit tasks.md** | — (no beads history) |
 | `007-setup-observability` | **spec-kit tasks.md** | — (no beads history) |
+| `008-browser-companion-check` | **spec-kit tasks.md** | — (no beads history) |
 
-Planned (not yet specified): `008-browser-companion-check` — installer doctor detection of
-learner-installed browser companions (Yomitan/asbplayer extensions, mokuro userscript
-reachability) with detect + guide-to-install flow; Chrome forbids silent extension
-installs, so scope is presence check + Web Store handoff + re-check. Deferred until 007
-ships (decided 2026-08-24).
+`008-browser-companion-check` — installer doctor detection of learner-installed browser
+companions (Yomitan/asbplayer extensions, mokuro bridge readiness) with a detect +
+guide-to-install flow. Chrome forbids silent extension installs, so scope is presence
+check + Web Store handoff + re-check; no MCP tool, no schema change. Specified
+2026-08-24 (spec/plan/research/quickstart/tasks; no data-model, no holdout — plan.md
+§Deliberate omissions records why).
 
 Planned (not yet specified): `009-asbplayer-bridge-in-process` — replace the Go
 WebSocket bridge (`asbplayer_launch.py` runs `go run main.go` from the configured
