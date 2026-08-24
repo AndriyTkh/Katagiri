@@ -5,6 +5,7 @@ description = "Personal English-Japanese study MCP server (stdio only)."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "aiohttp>=3.10,<4",
     "fugashi>=1.5.2",
     "mcp>=2,<3",
     "pypdf>=6.16.2",
