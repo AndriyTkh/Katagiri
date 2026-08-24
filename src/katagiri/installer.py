@@ -48,7 +48,7 @@ import tomllib
 import urllib.parse
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from katagiri import config as config_mod
 
@@ -766,6 +766,54 @@ def probe_irodori(db_path: Path) -> ComponentStatus:
     )
 
 
+_COMPANION_FALLBACK_NAMES: Final = ("Yomitan", "asbplayer", "mokuro page-change bridge")
+
+
+def probe_companions(cfg: RawConfig) -> list[ComponentStatus]:
+    """Browser companion doctor rows: Yomitan, asbplayer, mokuro bridge (008).
+
+    ``katagiri.companions`` is imported lazily, inside this function, mirroring
+    :func:`probe_anki` / :func:`_anki_manual_step_detail`'s precedent --
+    installer.py's top-level import rule is "config only".
+
+    Status mapping is load-bearing: ``present`` -> ``READY``; ``absent`` or
+    ``undetermined`` -> ``MANUAL STEP`` -- **never** ``MISSING``, because
+    :func:`doctor_exit_code` returns 1 on any ``MISSING`` row and spec 008's
+    SC-004 requires ``--check`` exit codes to stay byte-identical to pre-008
+    for every companion state (a browser companion is optional and its
+    absence is a manual follow-up, not an installer failure). Any exception
+    out of the detector -- a companion library bug, an unreadable profile
+    tree the module itself failed to guard -- is caught here and reported as
+    an ``undetermined``-shaped ``MANUAL STEP`` row instead of crashing the
+    doctor on a browser it did not expect (FR-009: ``--check`` stays
+    read-only and prompt-free even on that path).
+
+    Detail text carries the evidence (profile path / reason / port state),
+    truncated with :func:`_truncated` to fit :func:`render_doctor_table`.
+    """
+    try:
+        from katagiri.companions import (
+            EXTENSION_QUERIES,
+            VERDICT_PRESENT,
+            detect_extensions,
+            mokuro_companion_status,
+        )
+
+        rows: list[ComponentStatus] = []
+        extension_rows, _scan = detect_extensions(EXTENSION_QUERIES)
+        for row in extension_rows:
+            status = "READY" if row.verdict == VERDICT_PRESENT else "MANUAL STEP"
+            rows.append(ComponentStatus(row.name, status, _truncated(row.detail)))
+
+        mokuro_row = mokuro_companion_status(cfg)
+        mokuro_status = "READY" if mokuro_row.verdict == VERDICT_PRESENT else "MANUAL STEP"
+        rows.append(ComponentStatus(mokuro_row.name, mokuro_status, _truncated(mokuro_row.detail)))
+        return rows
+    except Exception as exc:  # noqa: BLE001 - the doctor must never crash on this probe
+        detail = _truncated(f"companion detection failed unexpectedly: {exc}")
+        return [ComponentStatus(name, "MANUAL STEP", detail) for name in _COMPANION_FALLBACK_NAMES]
+
+
 def collect_doctor_statuses(cfg: RawConfig, repo_root: Path) -> list[ComponentStatus]:
     return [
         probe_config(cfg.config_file),
@@ -779,6 +827,7 @@ def collect_doctor_statuses(cfg: RawConfig, repo_root: Path) -> list[ComponentSt
         probe_schtasks(),
         probe_backup(cfg),
         probe_irodori(cfg.db_path),
+        *probe_companions(cfg),
     ]
 
 
