@@ -35,9 +35,14 @@ HOST bind): positive — protocol is 6 server→client JSON commands correlated 
 messageId (5s timeout), 5 thin HTTP endpoints, app-level text "PING"/"PONG";
 ~300-line Python (`websockets` + aiohttp/httpx) covers it. MUST carry over: the
 bridge's AnkiConnect proxy on `POST /` with addNote-intercept mining (extension may
-point its Anki URL at :8766) and exact header/body passthrough. Open item: upstream
-issue #1087 / playback-state merge status not yet confirmed (research interrupted).
-Deferred until 007 ships (decided 2026-08-24).
+point its Anki URL at :8766) and exact header/body passthrough. Upstream research
+closed 2026-08-24: repo moved to github.com/asbplayer/asbplayer; v1.20.2 is still the
+latest release (no releases since); issue #1087 is an OPEN unmerged proposal (WS media
+targeting / note updates / event subscription / capability handshake — no playback-state
+overlap, no linked PRs), so 1.20.2 + local commit 37495e22 remains the correct protocol
+baseline. Caveat: no canonical WS protocol doc could be fetched, so "no other drift" is
+best-effort from release notes; re-check #1087 before 009 ships. Deferred until 007
+ships (007 shipped 2026-08-24; 009 unblocked, runs after 008).
 
 Phase A closed pre-migration; record in docs/dev-plan.md, docs/audit-log.md, closed beads.
 Historical bead IDs survive in tasks as `[was: kata-*]` for traceability.
@@ -66,7 +71,8 @@ Historical bead IDs survive in tasks as `[was: kata-*]` for traceability.
   the next group starts. No task spans groups. Checkbox flips happen in the same session as
   the completing merge.
 - **Worktree lanes.** Tasks marked with a `wt/...` lane run in a git worktree branched from
-  **`master`** (this repo has no `main` branch) at their taskgroup start. A lane edits only its
+  the default branch — **`main`** since 2026-08 (older feature docs may still say `master`) —
+  at their taskgroup start. A lane edits only its
   lane-owned files (listed in each feature's Workfile & conflict map). Lanes are conflict-free
   by construction.
 - **Worktree bootstrap (Windows, this repo).** (a) `.venv/` is gitignored — a fresh worktree
