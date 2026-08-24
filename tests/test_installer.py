@@ -1267,6 +1267,47 @@ def test_probe_backup_ready_when_snapshot_exists(tmp_path):
     assert status.status == "READY"
 
 
+def test_probe_asbplayer_bridge_ready_when_healthy(tmp_path, monkeypatch):
+    import katagiri.asbplayer_launch as asbplayer_launch_mod
+
+    monkeypatch.setattr(asbplayer_launch_mod, "bridge_is_healthy", lambda: True)
+    cfg = _raw_config(tmp_path)
+    status = installer.probe_asbplayer_bridge(cfg)
+    assert status.status == "READY"
+    assert "obsolete" not in status.detail
+
+
+def test_probe_asbplayer_bridge_manual_step_when_not_running(tmp_path, monkeypatch):
+    import katagiri.asbplayer_launch as asbplayer_launch_mod
+
+    monkeypatch.setattr(asbplayer_launch_mod, "bridge_is_healthy", lambda: False)
+    monkeypatch.setattr(asbplayer_launch_mod, "bridge_port_is_occupied", lambda: False)
+    cfg = _raw_config(tmp_path)
+    status = installer.probe_asbplayer_bridge(cfg)
+    assert status.status == "MANUAL STEP"
+
+
+def test_probe_asbplayer_bridge_manual_step_when_occupied_unhealthy(tmp_path, monkeypatch):
+    import katagiri.asbplayer_launch as asbplayer_launch_mod
+
+    monkeypatch.setattr(asbplayer_launch_mod, "bridge_is_healthy", lambda: False)
+    monkeypatch.setattr(asbplayer_launch_mod, "bridge_port_is_occupied", lambda: True)
+    cfg = _raw_config(tmp_path)
+    status = installer.probe_asbplayer_bridge(cfg)
+    assert status.status == "MANUAL STEP"
+    assert "occupied" in status.detail
+
+
+def test_probe_asbplayer_bridge_flags_obsolete_config_key(tmp_path, monkeypatch):
+    import katagiri.asbplayer_launch as asbplayer_launch_mod
+
+    monkeypatch.setattr(asbplayer_launch_mod, "bridge_is_healthy", lambda: True)
+    cfg = _raw_config(tmp_path, asbplayer_bridge_dir=tmp_path / "asbplayer")
+    status = installer.probe_asbplayer_bridge(cfg)
+    assert status.status == "READY"
+    assert "obsolete" in status.detail
+
+
 def test_probe_yomitan_missing_when_no_dict(tmp_path):
     cfg = _raw_config(tmp_path)
     status = installer.probe_yomitan(cfg)

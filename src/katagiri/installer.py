@@ -143,6 +143,7 @@ class RawConfig:
     anki_data_dir: Path | None = None
     obsidian_api_token: str | None = None
     mokuro_shared_secret: str | None = None
+    asbplayer_bridge_dir: Path | None = None
 
 
 def _repo_root() -> Path:
@@ -214,6 +215,7 @@ def read_raw_config(cfg_path: Path) -> RawConfig:
         anki_data_dir=_path("anki_data_dir"),
         obsidian_api_token=_secret("obsidian_api_token"),
         mokuro_shared_secret=_secret("mokuro_shared_secret"),
+        asbplayer_bridge_dir=_path("asbplayer_bridge_dir"),
     )
 
 
@@ -771,6 +773,42 @@ def probe_irodori(db_path: Path) -> ComponentStatus:
     )
 
 
+def probe_asbplayer_bridge(cfg: RawConfig) -> ComponentStatus:
+    """asbplayer bridge doctor row (009): hosted in-process by Katagiri.
+
+    Unlike the browser-companion rows below, this one is a Katagiri-managed
+    server rather than a detected third-party install: it is only up while
+    Katagiri's MCP server is running, so "not answering right now" is a
+    manual-check state, not an installer failure -- this maps to
+    READY/MANUAL STEP only, **never** MISSING (008's exit-code discipline,
+    :func:`doctor_exit_code`). Also flags ``asbplayer_bridge_dir`` if it is
+    still set in config.toml: post-009 that key is obsolete-but-accepted
+    (FR-014) -- the bridge no longer runs from a checkout directory.
+    """
+    from katagiri.asbplayer_launch import bridge_is_healthy, bridge_port_is_occupied
+
+    if bridge_is_healthy():
+        status, detail = (
+            "READY",
+            "loopback :8766, hosted in-process by Katagiri (up only while it runs)",
+        )
+    elif bridge_port_is_occupied():
+        status, detail = (
+            "MANUAL STEP",
+            "port 8766 occupied but not answering a health check; not managed by Katagiri",
+        )
+    else:
+        status, detail = (
+            "MANUAL STEP",
+            "not running; starts in-process automatically when Katagiri's MCP server runs",
+        )
+
+    if cfg.asbplayer_bridge_dir is not None:
+        detail = f"{detail}; obsolete 'asbplayer_bridge_dir' set in config.toml (ignored)"
+
+    return ComponentStatus("asbplayer bridge", status, detail)
+
+
 _COMPANION_FALLBACK_NAMES: Final = ("Yomitan", "asbplayer", "mokuro page-change bridge")
 
 
@@ -832,6 +870,7 @@ def collect_doctor_statuses(cfg: RawConfig, repo_root: Path) -> list[ComponentSt
         probe_schtasks(),
         probe_backup(cfg),
         probe_irodori(cfg.db_path),
+        probe_asbplayer_bridge(cfg),
         *probe_companions(cfg),
     ]
 

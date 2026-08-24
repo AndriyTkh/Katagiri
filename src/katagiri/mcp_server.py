@@ -2030,7 +2030,7 @@ def main() -> None:
 
     bridge = ensure_asbplayer_bridge()
     if bridge.launched:
-        logger.info("started configured asbplayer bridge on loopback port 8766")
+        logger.info("hosted asbplayer bridge in-process on loopback port 8766")
     elif bridge.already_running:
         # The bridge was already up before we checked, so unlike a fresh
         # launch (which we started with HOST=127.0.0.1 ourselves) its actual
