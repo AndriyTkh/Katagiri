@@ -356,3 +356,85 @@ change is a stop-and-replan trigger, not something to absorb quietly.**
   audited against D-10's vendoring/pinning posture. TG1's ledger row should record the
   pinned range actually chosen, and the gate should confirm `uv sync` resolves it on this
   machine without a build step.
+
+---
+
+## 2026-08-24 — Upstream re-check, second pass (T008)
+
+Re-verified against `github.com/asbplayer/asbplayer` on GitHub (web) and by fetching
+`origin/main` into the local checkout at `C:/ProjectsC/RandomPr/asbplayer`. **No stop-and-replan
+trigger.** Findings below refine, and in one place correct, R8 — R8 itself is left unedited per
+T008's instructions.
+
+**(a) Latest release tag.** Still **v1.20.2** (`570f441d`,
+https://github.com/asbplayer/asbplayer/releases). No `v1.20.3` or later exists. `git describe
+--tags origin/main` resolves to `v1.20.0-20-g6eba875e` — cosmetic (a lightweight-tag quirk on
+this branch's ancestry), not evidence of a newer release; the releases page is authoritative
+and agrees with R8.
+
+**(b) Issue #1087.** Still **open, unmerged**
+(https://github.com/asbplayer/asbplayer/issues/1087), opened 2026-07-17 by mcgrizzz, no linked
+PRs, no successor issue found. It bundles four asks: media targeting for
+`seek-timestamp`/`mine-subtitle`, note-targeted updates via `noteId`, an opt-in `subscribe`
+command for event notifications, and a capability/version-detection handshake. **Correction to
+how R8 should be read**: the first two asks — media targeting and `noteId` — are **already
+merged and already reflected in R1.3/R1.5 of this document**, via commit `920988cc`
+("WebSocket API: media targeting for seek-timestamp/mine-subtitle and note targeting ...
+(#1090)", 2026-08-04), which merged to `main` *before* the `v1.20.2` tag (`570f441d`,
+2026-08-22) and is therefore already inside the commit this feature is scoped against — it is
+not new drift, and R1 already carries it (the `mediaId`/`noteId` rows in R1.3's table). The
+**remaining two asks — `subscribe` and the capability handshake — are not merged and have no
+PR**, confirming R8's core claim still holds: no capability handshake exists upstream. `#1087`
+should be read going forward as "half-delivered by an earlier, already-baselined PR, with the
+protocol-shape-changing half (subscribe/handshake) still unmerged."
+
+**(c) `main.go` / `common/web-socket-client/` drift since `570f441d`.** **No changes.**
+`git fetch origin main` pulled `570f441d..6eba875e` (10 commits, 2026-08-22 to present);
+`git log --oneline 570f441d..origin/main -- scripts/web-socket-server/main.go
+common/web-socket-client/` returns **empty**. All 10 new upstream commits are docs/UI/subtitle-
+detection fixes (Stremio, Jimaku auto-locate, Firefox CSP, holdable-button, iframe flicker,
+Netflix fullscreen-subtitle) unrelated to the WebSocket bridge or its wire envelope.
+
+**(d) Canonical protocol document.** **Correction to R8/R1's premise**: a protocol reference
+**already exists** in the upstream tree — `docs/docs/reference/external-api.md` — and it
+already existed at the pinned commit `570f441d` (confirmed via `git show 570f441d:docs/docs/
+reference/external-api.md`), i.e. before this feature's research phase started; R8's "no
+canonical WebSocket protocol document could be fetched" undersold what was in-repo (it may
+simply not have been checked, or was checked only as a live rendered site rather than the repo
+source). Diffed `570f441d` against `origin/main` for that file: **three cosmetic wording
+changes only** (`"requires extension v1.20.0 or later"` → `"requires extension v1.20.0+"`,
+and dropping two "(unreleased)" qualifiers now that those commands have shipped) — no new
+commands, no `subscribe`, no capability/handshake language (`grep -in
+"subscribe\|capabilit\|handshake"` on the current `origin/main` copy: no matches). Read
+against R1: the doc's own transcription of `mine-subtitle`, `seek-timestamp`, and
+`get-bound-media` (mediaId/noteId semantics, "streaming media only" scoping for `noteId`)
+**matches R1.3 verbatim in substance**. **Recommendation, not required by this task**: a
+follow-up could cite `docs/docs/reference/external-api.md` as a secondary source alongside the
+`main.go` line citations, since it now exists and agrees — but R1's line-cited transcription
+remains the authority per this document's own header and needs no rewrite.
+
+**Local checkout drift** (`C:/ProjectsC/RandomPr/asbplayer`, in-scope per T008's explicit ask):
+`git log --oneline -3` shows HEAD unchanged at `37495e22` (the same commit R1's header cites,
+still `origin/main`'s `HOST`-bind fix, not yet pushed — `git log --oneline origin/main -3`
+lists `570f441d`/`14aac7f9`/`93c3e1d3`, i.e. `37495e22` is a local-only commit, not upstream).
+`git status --short`, however, shows the working tree is **dirty**: uncommitted modifications
+to `common/src/message.ts`, `common/web-socket-client/web-socket-client.ts`,
+`docs/docs/reference/external-api.md`, `extension/src/services/binding.ts` (+ its test), and
+`extension/src/services/web-socket-client-binding.ts`, plus one untracked file
+(`scripts/web-socket-server/cli/playback-state`). Inspecting the diff: it adds a **new,
+uncommitted, unmerged** `request-playback-state` WebSocket message/response pair
+(`RequestPlaybackStateMessage`, `RequestPlaybackStateResponse { timestampMs, playing }`) and
+extension-side wiring — this looks like **local exploratory work for a different, related
+effort** (plausibly the `playback-state` CLI helper referenced in an untracked file, or the
+"playback-state-live-anchor" plan `docs/superpowers/plans/playback-state-live-anchor.md`
+already mentioned in R1.4). **This is not an upstream merge and does not touch `main.go`**, so
+it is not a protocol-freeze concern by itself, but it means the local checkout is not a clean
+mirror of any commit and should not be treated as reproducible; anyone re-running this check
+should `git stash` or note the dirty state first. No `main.go` changes are implicated by this
+diff (`git diff --stat` for the dirty tree lists no `main.go` line).
+
+**Verdict: no stop-and-replan.** No capability handshake, event subscription, or wire-envelope
+change has merged upstream since the 2026-08-24 (first) check. `main.go` is byte-identical in
+content since `570f441d`/`37495e22`. The only thing worth carrying forward is the correction
+above: R1.3's `mediaId`/`noteId` fields are the already-merged half of #1087, not independent
+findings, and the still-open half of #1087 (subscribe/capability) is confirmed still absent.

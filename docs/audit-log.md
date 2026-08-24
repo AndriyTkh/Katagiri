@@ -1795,3 +1795,13 @@ not a constitution amendment — matching how D-49 treated 008's Principle VII q
 user's escalation-1 answer is later read as wanting Principle VI to name this second exception
 explicitly in the constitution text, that is a separate amendment filed the normal way
 (ledger row first), not implied by this row or by D-50.
+
+## 2026-08-24 — 009 T008 upstream re-check (second pass)
+
+No stop-and-replan: v1.20.2 still latest, `main.go`/web-socket-client unchanged upstream since
+`570f441d`, issue #1087's subscribe/capability-handshake half still open and unmerged (its
+media-targeting half was already merged pre-`570f441d` and already reflected in research.md
+R1.3); local asbplayer checkout HEAD unmoved at `37495e22` but working tree is dirty with
+unrelated, unmerged local `request-playback-state` exploration. Full findings in
+specs/009-asbplayer-bridge-in-process/research.md ("2026-08-24 — Upstream re-check, second
+pass (T008)").
