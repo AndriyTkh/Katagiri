@@ -56,16 +56,20 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import platform
 import re
 import sqlite3
 import subprocess
 import sys
 import time
+import tomllib
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, Final
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 
 # The logic layer below needs these; the modules that only back an adapter are
 # imported in the adapter block that uses them, next to their delimiter comment.
@@ -82,6 +86,7 @@ from katagiri.applog import (
     setup_logging,
     truncated_repr,
 )
+from katagiri import config as config_mod
 from katagiri.config import MOKURO_BRIDGE_PORT
 from katagiri.db import database_path, open_db, resolve_alias
 from katagiri.tool_registry import redact
@@ -565,6 +570,214 @@ def security_scan(ports: tuple[int, ...] = HARDENED_PORTS) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Logic: connection status (007, D-46)
+# ---------------------------------------------------------------------------
+#
+# Every question here is one you ask when some *other* tool answered oddly: is
+# this the install I think it is, is its config where I think it is, is its
+# database reachable, and which client is on the other end of the pipe. So the
+# block answers with flags instead of exceptions (FR-006) — a diagnostic that
+# raises on a broken install cannot describe the breakage it exists to name —
+# and it never writes: no config is created, no database file is materialised,
+# no event is appended.
+
+TRANSPORT: Final = "stdio"
+STATUS_UNKNOWN: Final = "unknown"
+_DB_PROBE_TIMEOUT_S: Final = 2.0
+_SECRET_SET: Final = "set"
+_SECRET_UNSET: Final = "unset"
+
+# Mirrors ``config._SECRET_KEYS`` (private there). Presence only: the map says
+# whether the operator set each credential, never a character of its value.
+CONNECTION_SECRET_FIELDS: Final[tuple[str, ...]] = (
+    "obsidian_api_token",
+    "mokuro_shared_secret",
+)
+
+# The instance-root override (007 D9 / T011). Read through ``config`` when that
+# module names it, so this stays one source of truth once T011 lands, with the
+# literal as the fallback for the interim.
+_DATA_HOME_ENV_VAR: Final = "KATAGIRI_DATA_HOME"
+
+# ``config._defaults()`` derives the default database from the config file's own
+# directory. Repeated as a literal because this block must still answer when
+# nothing could be loaded at all.
+_DEFAULT_DB_FILE_NAME: Final = "katagiri.db"
+
+
+def _describe_path(resolve: Any) -> str:
+    """``str`` of whatever ``resolve()`` returns, or ``"unknown"`` if it cannot.
+
+    Path resolution reads the environment and can legitimately fail (no
+    ``LOCALAPPDATA``, a rejected ``KATAGIRI_DATA_HOME``). A diagnostic reports
+    that as an unresolved path, not as a failed call.
+    """
+    try:
+        return str(resolve())
+    except Exception:  # noqa: BLE001 - any failure is "could not resolve"
+        return STATUS_UNKNOWN
+
+
+def data_home_source() -> str:
+    """``"env"`` when the instance root came from the environment, else ``"default"``."""
+    env_var = getattr(config_mod, "DATA_HOME_ENV_VAR", _DATA_HOME_ENV_VAR)
+    return "env" if os.environ.get(env_var, "").strip() else "default"
+
+
+def entry_point() -> str:
+    """How this process was started: ``python -m`` module name, or ``argv[0]``.
+
+    ``__main__.__spec__`` is set only for ``-m`` execution, so its absence is
+    exactly the console-script (``katagiri-mcp.exe``) case, where ``argv[0]`` is
+    the launcher path the operator actually invoked.
+    """
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    module = getattr(spec, "name", None)
+    if module:
+        return f"{module} (python -m)"
+    argv0 = sys.argv[0] if sys.argv else ""
+    return argv0 or STATUS_UNKNOWN
+
+
+def _config_view(config_file: Path | None) -> tuple[str, dict[str, str]]:
+    """The database path and credential-presence flags, read-only.
+
+    The process-wide cached ``Config`` is preferred when it is the config for
+    *this* resolved file: it is what the other tools actually use, and reading
+    it costs no I/O. Otherwise the file is parsed here directly rather than
+    through :func:`config.load_config`, which would create a missing config and
+    append template blocks to an old one — both writes, and this tool promises
+    none.
+    """
+    if config_file is not None:
+        cached = None
+        try:
+            if config_mod.get_config.cache_info().currsize:
+                candidate = config_mod.get_config()
+                if candidate.config_file == config_file:
+                    cached = candidate
+        except Exception:  # noqa: BLE001 - a broken config is a reportable state
+            cached = None
+        if cached is not None:
+            return (
+                str(cached.db_path),
+                {
+                    field: (
+                        _SECRET_SET
+                        if (getattr(cached, field, None) or "")
+                        else _SECRET_UNSET
+                    )
+                    for field in CONNECTION_SECRET_FIELDS
+                },
+            )
+
+    raw: dict[str, Any] = {}
+    if config_file is not None:
+        try:
+            raw = tomllib.loads(config_file.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError, ValueError):
+            raw = {}
+
+    configured_db = raw.get("db_path")
+    if isinstance(configured_db, str) and configured_db.strip():
+        db_path = str(Path(configured_db.strip()))
+    elif config_file is not None:
+        db_path = str(config_file.parent / _DEFAULT_DB_FILE_NAME)
+    else:
+        db_path = STATUS_UNKNOWN
+
+    secrets = {
+        field: (
+            _SECRET_SET
+            if isinstance(raw.get(field), str) and raw[field].strip()
+            else _SECRET_UNSET
+        )
+        for field in CONNECTION_SECRET_FIELDS
+    }
+    return db_path, secrets
+
+
+def _database_reachable(db_path: str) -> bool:
+    """Can this database be opened read-only right now? Bounded, and never raises.
+
+    ``mode=ro`` is what makes the probe safe: it refuses to create the file and
+    cannot write a journal, so "absent" and "locked" both come back as False
+    without leaving anything behind.
+    """
+    if db_path == STATUS_UNKNOWN:
+        return False
+    try:
+        uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=_DB_PROBE_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - absent, locked, or not a database
+        return False
+    try:
+        conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        return True
+    except Exception:  # noqa: BLE001 - opened but unreadable is still unavailable
+        return False
+    finally:
+        conn.close()
+
+
+def client_identity(context: Context | None) -> dict[str, str]:
+    """The client's ``initialize`` self-description, or the unknown fallback.
+
+    Verified against mcp 2.0.0: the per-request context carries the
+    ``ServerSession``, whose ``client_params`` is the stored
+    ``InitializeRequestParams``, whose ``client_info`` is the handshake's
+    ``clientInfo``. Nothing on the wire is parsed, and a client that named
+    itself nowhere (or an SDK that stopped storing it) degrades to "unknown"
+    rather than raising.
+    """
+    try:
+        params = context.request_context.session.client_params  # type: ignore[union-attr]
+        info = params.client_info  # type: ignore[union-attr]
+        name = (info.name or "").strip()
+        version = (info.version or "").strip()
+    except Exception:  # noqa: BLE001 - no context, no handshake, no identity
+        return {"name": STATUS_UNKNOWN, "version": ""}
+    if not name:
+        return {"name": STATUS_UNKNOWN, "version": ""}
+    return {"name": name, "version": version}
+
+
+def connection_report(client_info: dict[str, str] | None = None) -> dict[str, Any]:
+    """Which install answered, and where its config, database and log live."""
+    config_file_text = _describe_path(config_mod.config_path)
+    config_file = None if config_file_text == STATUS_UNKNOWN else Path(config_file_text)
+    try:
+        config_exists = config_file is not None and config_file.exists()
+    except OSError:
+        config_exists = False
+
+    db_path, secrets = _config_view(config_file)
+    return {
+        "status": "ok",
+        "katagiri_version": __version__,
+        "python_version": platform.python_version(),
+        "transport": TRANSPORT,
+        "entry_point": entry_point(),
+        "pid": os.getpid(),
+        "cwd": os.getcwd(),
+        "data_home": _describe_path(config_mod.config_dir),
+        "data_home_source": data_home_source(),
+        "config_path": config_file_text,
+        "config_exists": config_exists,
+        "db_path": db_path,
+        "db_available": _database_reachable(db_path),
+        "log_file_path": _describe_path(log_file_path),
+        "client_info": (
+            dict(client_info)
+            if client_info
+            else {"name": STATUS_UNKNOWN, "version": ""}
+        ),
+        "secrets": secrets,
+        "changed_anything": False,
+    }
+
+
+# ---------------------------------------------------------------------------
 # MCP adapter — thin wrappers only, one logic call each
 # ---------------------------------------------------------------------------
 #
@@ -591,6 +804,50 @@ def ping() -> dict[str, str]:
         "katagiri_version": __version__,
         "python": platform.python_version(),
     }
+
+
+@server.tool(
+    name="connection_status",
+    title="Connection status",
+    description=(
+        "Which Katagiri install is answering, and where its state lives: "
+        "version, Python, transport, entry point, pid, cwd, the resolved data "
+        "home (and whether an environment override chose it), the config, "
+        "database and log-file paths with existence/reachability flags, the "
+        "connected client's self-reported name and version, and a set/unset "
+        "flag per configured credential — never a credential value. Read-only, "
+        "and it reports a missing config or an unreachable database as a flag "
+        "instead of an error."
+    ),
+)
+def connection_status(context: Context | None = None) -> dict[str, Any]:
+    logger.debug("connection_status called")
+    identity = client_identity(context)
+    report = connection_report(identity)
+    logger.info(
+        "connection_status: client %s %s, pid %s, data home %s",
+        identity["name"],
+        identity["version"] or "(no version)",
+        report["pid"],
+        report["data_home"],
+    )
+    # redact() blanks every secret-named key, and by design that includes both
+    # the "secrets" wrapper and each of its member keys (tool_registry's
+    # SECRET_WORDS). The presence map is therefore re-derived after the walk
+    # from the flags this module produced — it can only ever be "set"/"unset",
+    # so there is nothing in it to leak — while every other field still passes
+    # through redact() as defense in depth.
+    # ``changed_anything`` rides along only to keep the contract's field order
+    # once "secrets" is put back.
+    presence = report.pop("secrets")
+    changed_anything = report.pop("changed_anything")
+    payload = redact(report)
+    payload["secrets"] = {
+        field: (_SECRET_SET if flag == _SECRET_SET else _SECRET_UNSET)
+        for field, flag in presence.items()
+    }
+    payload["changed_anything"] = changed_anything
+    return payload
 
 
 # --- the known set: katagiri.known ------------------------------------------

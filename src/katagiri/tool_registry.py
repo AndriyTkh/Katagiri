@@ -1552,6 +1552,40 @@ _PHASE_E_D44_SPECS: Final[tuple[ToolSpec, ...]] = (
     ),
 )
 
+# Infrastructure, not a study phase: 007's setup-observability tool. D-46. It
+# answers "which install am I talking to, and is its config/DB/log where I
+# think it is" — the questions every other tool's failure mode raises first —
+# and lives in its own fragment so the phase fragments stay a record of study
+# capability rather than of plumbing.
+_INFRA_007_SPECS: Final[tuple[ToolSpec, ...]] = (
+    ToolSpec(
+        name="connection_status",
+        summary=(
+            "Which Katagiri install answered: version, process, resolved data "
+            "home, config/DB/log paths, and the connected client's identity."
+        ),
+        args=(),
+        output=(
+            "{status, katagiri_version, python_version, transport, entry_point, "
+            "pid, cwd, data_home, data_home_source ('default'|'env'), "
+            "config_path, config_exists, db_path, db_available, log_file_path, "
+            "client_info{name, version}, secrets{field: 'set'|'unset'}, "
+            "changed_anything}"
+        ),
+        stability="stable",
+        note=(
+            "D-46. Read-only and never raises: a missing config answers "
+            "config_exists false with the default paths it would use, an "
+            "absent or locked database answers db_available false (the check "
+            "is a bounded read-only open attempt), and a client that named "
+            "itself in no handshake answers client_info {'unknown', ''}. "
+            "'secrets' carries presence flags only — never a value — and "
+            "every path is this process's own resolution, so two side-by-side "
+            "instances are distinguishable by 'data_home' alone."
+        ),
+    ),
+)
+
 TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
     _PHASE_A_SPECS
     + _PHASE_B_SPECS
@@ -1561,6 +1595,7 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
     + _PHASE_E_TG_E4_SPECS
     + _PHASE_E_ANKI_SPECS
     + _PHASE_E_D44_SPECS
+    + _INFRA_007_SPECS
 )
 
 TOOL_SPECS_BY_NAME: Final[dict[str, ToolSpec]] = {
