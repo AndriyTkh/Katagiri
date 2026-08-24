@@ -280,7 +280,16 @@ order below avoids that entirely by putting T005 after the lane's merge.
 
 ## Taskgroup TG3: Gate (serial-on-main, dedicated testing agent)
 
-- [ ] T009 [Gate] Run `specs/008-browser-companion-check/quickstart.md` §1–§7 in order and
+- [x] T009 [Gate] (gate cleared 2026-08-24, zero fix cycles: §1 15 passed; §2 13 passed; §3
+      `-k "readonly or no_install or exit_code"` selected 5, all passed — non-empty; §4 real-machine
+      read-only `--check` exit 0, observed verdicts: Yomitan READY (Chrome/Default, enabled state
+      unknown), asbplayer MANUAL STEP (not found in Chrome/Edge profiles; Firefox variant not covered),
+      mokuro MANUAL STEP (secret unset, port 8767 free = expected outside a session) — §4's optional
+      "install one absent companion then re-check" sub-step NOT performed (requires a real extension
+      install, outside read-only gate scope; the re-check flip is covered by T007's scripted-stdin
+      tests instead); §5 diff vs main on test_bverify/test_cverify empty, no allowlist change, 25
+      passed/3 env skips; §6 no companion ToolSpec, tool count 35 unchanged, 189 passed; §7 full
+      suite 2139 passed/10 expected env skips in 93.44s) Run `specs/008-browser-companion-check/quickstart.md` §1–§7 in order and
       record the outcome here. The load-bearing steps, called out because a green suite
       alone does not prove them: (a) §3's `-k "readonly or no_install or exit_code"`
       selection must be **non-empty** — zero selected tests means the boundary is untested
