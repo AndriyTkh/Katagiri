@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import getpass
 import json
+import logging
+import os
 import re
 import shutil
 import socket
@@ -52,6 +54,9 @@ _t0 = time.monotonic()
 _step_t = _t0
 
 # --- paths (script lives at <repo>/agent/scripts/setup.py) ----------------
+# Moved ahead of the bootstrap.log section (research.md D9): resolving the
+# KATAGIRI_DATA_HOME override for the logger needs ENV_FILE before parse_env
+# (defined further down, in the ".env parsing / writing" section) exists.
 SCRIPT = Path(__file__).resolve()
 AGENT_DIR = SCRIPT.parent.parent
 REPO_ROOT = AGENT_DIR.parent
@@ -66,10 +71,91 @@ OBSIDIAN_PORT = 27124
 PLUGIN_MIN_VERSION = (5, 1)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 
+
+# --- bootstrap.log: self-contained file logging (research.md D4, D9) ------
+# Deliberately NOT importing katagiri here: this script must still record a
+# failure even when the package is broken or not yet synced - that's exactly
+# the failure mode it exists to catch. Best-effort: an unwritable log dir
+# degrades to stderr-only (via the existing say/warn/ok console output),
+# never crashes the setup.
+_LOG_PHASE = "startup"
+
+
+def _read_env_file_value(path: Path, key: str) -> str:
+    """Minimal standalone .env line reader, used only to resolve
+    KATAGIRI_DATA_HOME before the logger exists (i.e. before parse_env() is
+    defined/usable and before main() does its real env merge)."""
+    try:
+        if not path.exists():
+            return ""
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            if k.strip() == key:
+                return v.strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _resolve_data_home() -> str | None:
+    """KATAGIRI_DATA_HOME, process env > agent/.env (research.md D9). An
+    already-set process env var wins so a client can inject it via
+    .mcp.json; only fall back to .env when the process env is unset/blank.
+    Installer writes the value posix-style (forward slashes) - Path()
+    accepts that natively on Windows, so no separator conversion is needed."""
+    override = os.environ.get("KATAGIRI_DATA_HOME", "").strip()
+    if override:
+        return override
+    override = _read_env_file_value(ENV_FILE, "KATAGIRI_DATA_HOME").strip()
+    return override or None
+
+
+def _init_bootstrap_logger() -> logging.Logger | None:
+    try:
+        data_home = _resolve_data_home()
+        if data_home:
+            log_dir = Path(data_home) / "logs"
+        else:
+            base = os.environ.get("LOCALAPPDATA")
+            if not base:
+                return None
+            log_dir = Path(base) / "Katagiri" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logger = logging.getLogger("katagiri.bootstrap.setup")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        if not logger.handlers:
+            handler = logging.FileHandler(log_dir / "bootstrap.log", encoding="utf-8")
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s | pid=%(process)d | %(message)s")
+            )
+            logger.addHandler(handler)
+        return logger
+    except OSError:
+        return None
+
+
+_BOOTSTRAP_LOGGER = _init_bootstrap_logger()
+
+
+def _log_line(outcome: str, msg: str) -> None:
+    """Mirror one console line into bootstrap.log as `phase | outcome | detail`.
+    No-op (stderr-only degrade) when the log dir couldn't be opened."""
+    if _BOOTSTRAP_LOGGER is None:
+        return
+    try:
+        _BOOTSTRAP_LOGGER.info(f"phase={_LOG_PHASE} | outcome={outcome} | detail={msg}")
+    except OSError:
+        pass
+
 # Variables that are CORRECT when blank on the current setup. The setup
 # never nags about these; the comments explain when they'd ever be filled.
 OK_BLANK = {
     "KATAGIRI_CONFIG": "only the demo profile sets this (docs/assignment/demo-setup.md)",
+    "KATAGIRI_DATA_HOME": "only side-by-side/testing instances set this (installer --data-home)",
     "OBSIDIAN_STDIO_COMMAND": "only used if OBSIDIAN_TRANSPORT=stdio (it isn't)",
     "OBSIDIAN_STDIO_ARGS": "only used if OBSIDIAN_TRANSPORT=stdio (it isn't)",
     "OBSIDIAN_CA_BUNDLE": "alternative to OBSIDIAN_VERIFY_TLS=false; filled if you export the cert below",
@@ -85,6 +171,7 @@ VAR_ORDER = [
     "KATAGIRI_PYTHON",
     "KATAGIRI_MODULE",
     "KATAGIRI_CONFIG",
+    "KATAGIRI_DATA_HOME",
     "OBSIDIAN_TRANSPORT",
     "OBSIDIAN_MCP_URL",
     "OBSIDIAN_API_TOKEN",
@@ -105,23 +192,37 @@ DEFAULT_LANGSMITH_PROJECT = "katagiri-agent"
 
 def say(msg: str) -> None:
     print(msg, flush=True, file=_OUT)
+    _log_line("info", msg)
 
 
 def header(msg: str) -> None:
-    global _step_t
+    global _step_t, _LOG_PHASE
     now = time.monotonic()
     if now - _step_t > 0.5:
         say(f"      ({now - _step_t:.1f}s)")
     _step_t = now
+    _LOG_PHASE = msg
     say(f"\n=== {msg} ===")
 
 
 def warn(msg: str) -> None:
-    say(f"  [!] {msg}")
+    line = f"  [!] {msg}"
+    print(line, flush=True, file=_OUT)
+    _log_line("warn", msg)
 
 
 def ok(msg: str) -> None:
-    say(f"  [ok] {msg}")
+    line = f"  [ok] {msg}"
+    print(line, flush=True, file=_OUT)
+    _log_line("ok", msg)
+
+
+def fail(msg: str) -> None:
+    """Failure recorded before the server exec handoff - the critical record
+    (data-model.md BootstrapLogRecord)."""
+    line = f"[fatal] {msg}"
+    print(line, flush=True, file=_OUT)
+    _log_line("fail", msg)
 
 
 def ask_yn(prompt: str, default: bool = True) -> bool:
@@ -181,6 +282,12 @@ def write_env(values: dict[str, str]) -> None:
         "# Blank = your normal %LOCALAPPDATA%\\Katagiri config. Only the demo",
         "# profile (docs/assignment/demo-setup.md) points this elsewhere.",
         f"KATAGIRI_CONFIG={values.get('KATAGIRI_CONFIG', '')}",
+        "# Absolute path to an alternate instance root (side-by-side installs /",
+        "# testing checkouts). Blank = the normal per-machine",
+        "# %LOCALAPPDATA%\\Katagiri home. Written by the installer's",
+        "# --data-home flag (posix-style slashes); preserved verbatim here so",
+        "# a rerun of this script never silently drops it (D-46 bugfix, T013).",
+        f"KATAGIRI_DATA_HOME={values.get('KATAGIRI_DATA_HOME', '')}",
         "",
         "# --- Obsidian Local REST API connection ---",
         f"OBSIDIAN_TRANSPORT={values.get('OBSIDIAN_TRANSPORT', 'streamable_http')}",
@@ -498,17 +605,22 @@ def step_report(env: dict[str, str], problems: list[str]) -> int:
 
 def launch_server(env: dict[str, str]) -> int:
     """--stdio-bootstrap tail: hand stdio over to the katagiri MCP server."""
-    import os
+    global _LOG_PHASE
+    _LOG_PHASE = "server exec handoff"
 
     python = env.get("KATAGIRI_PYTHON", "")
     module = env.get("KATAGIRI_MODULE", "katagiri.mcp_server")
     if not python or not Path(python).exists():
-        say(f"[fatal] KATAGIRI_PYTHON not found: {python!r} - run `uv sync` at repo root")
+        fail(f"KATAGIRI_PYTHON not found: {python!r} - run `uv sync` at repo root")
         return 2
     child_env = dict(os.environ)
     child_env["PYTHONUTF8"] = "1"
-    if env.get("KATAGIRI_CONFIG"):
-        child_env["KATAGIRI_CONFIG"] = env["KATAGIRI_CONFIG"]
+    # Instance-env passthrough (research.md D9): forward from agent/.env,
+    # but an already-set process env var wins - a client may inject these
+    # via .mcp.json, and that must not be clobbered by the .env value.
+    for key in ("KATAGIRI_CONFIG", "KATAGIRI_DATA_HOME"):
+        if not os.environ.get(key) and env.get(key):
+            child_env[key] = env[key]
     say(f"[bootstrap] launching {module} ...")
     # stdin/stdout inherited untouched: they carry the MCP JSON-RPC stream.
     proc = subprocess.run([python, "-m", module], env=child_env, cwd=str(REPO_ROOT))
@@ -521,7 +633,7 @@ def main() -> int:
     say(f"  vault: {VAULT_DIR}")
 
     if not AGENT_DIR.is_dir() or not (AGENT_DIR / "pyproject.toml").exists():
-        say(f"[fatal] agent/ project not found at {AGENT_DIR} - run from the Katagiri repo")
+        fail(f"agent/ project not found at {AGENT_DIR} - run from the Katagiri repo")
         return 2
 
     env = parse_env(ENV_FILE)
