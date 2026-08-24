@@ -288,7 +288,7 @@ exist.
 
 ### Research (parallel to everything, no shared files)
 
-- [ ] T008 [in-progress: serial-main] [P] [US1] **Re-check upstream before the protocol freeze ships** (research.md
+- [x] T008 [P] [US1] (commit b69f094, 2026-08-24 second pass: v1.20.2 still latest; #1087 open/unmerged, its media-targeting half was already in 570f441d via #1090; main.go + web-socket-client unchanged upstream; upstream external-api.md agrees with R1.3; local checkout HEAD still 37495e22 but working tree dirty with unrelated uncommitted request-playback-state exploration — no main.go impact. NO stop-and-replan) **Re-check upstream before the protocol freeze ships** (research.md
       R8). Verify at `github.com/asbplayer/asbplayer`: (a) the latest release tag — is
       1.20.2 still current? (b) issue **#1087** — still open and unmerged, or did it (or a
       successor carrying a capability handshake / media targeting / event subscription)
