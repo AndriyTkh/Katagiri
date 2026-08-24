@@ -342,7 +342,7 @@ exist.
       (post-T006), specs/009-asbplayer-bridge-in-process/spec.md (US3, US4, FR-011..FR-014),
       specs/009-asbplayer-bridge-in-process/research.md (R5).
 
-- [ ] T009 [in-progress: serial-main] [US3/US4] **HOT FILE — one task, serial-on-main.** Update
+- [x] T009 [commit 0ed182d; startup wording + installer doctor row (D-50, READY/MANUAL STEP only) + 4 installer tests; stdio contract intact unedited] [US3/US4] **HOT FILE — one task, serial-on-main.** Update
       `src/katagiri/mcp_server.py`'s startup block (`mcp_server.py:2011-2063`) for the
       hosted bridge, and keep the diff to log wording plus, at most, the obsolete-key
       notice. Specifically: the `launched` branch says the bridge is **hosted in-process**
@@ -369,7 +369,7 @@ exist.
       src/katagiri/installer.py:769-800 (`collect_doctor_statuses`, `doctor_exit_code`) —
       only if taking the optional row.
 
-- [ ] T010 [Gate] **Apply the approved allowlist exemptions — BLOCKED until T001's
+- [x] T010 [commit ff71e15; server+client entries + D-50 provenance comments in both files; bverify+cverify 25 passed / 3 env skips; diff = allowlist additions only] [Gate] **Apply the approved allowlist exemptions — BLOCKED until T001's
       escalations 1 and 2 have recorded answers in `docs/decisions-ledger.md`.** Add
       `asbplayer_bridge.py` to `HTTP_SERVER_ALLOWLIST` (`tests/test_bverify.py:301`,
       `tests/test_cverify.py:688`) and, if escalation 2 was approved, to
