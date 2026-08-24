@@ -311,7 +311,7 @@ exist.
 
 ### Serial-on-main track (strict order T007 → T009 → T010)
 
-- [ ] T007 [in-progress: serial-main] [US1/US3/US4] Rewrite `src/katagiri/asbplayer_launch.py` to host the bridge, and
+- [x] T007 [commit fa834b7; 58 passed launch+bridge; stdio contract test intact unedited; new public stop_asbplayer_bridge() + atexit] [US1/US3/US4] Rewrite `src/katagiri/asbplayer_launch.py` to host the bridge, and
       rewrite `tests/test_asbplayer_launch.py` with it (both in one task — the test file is
       a point-for-point mirror of the module's contract and splitting them would leave the
       tree red between two commits). **Keep every public name and signature**:
@@ -342,7 +342,7 @@ exist.
       (post-T006), specs/009-asbplayer-bridge-in-process/spec.md (US3, US4, FR-011..FR-014),
       specs/009-asbplayer-bridge-in-process/research.md (R5).
 
-- [ ] T009 [US3/US4] **HOT FILE — one task, serial-on-main.** Update
+- [ ] T009 [in-progress: serial-main] [US3/US4] **HOT FILE — one task, serial-on-main.** Update
       `src/katagiri/mcp_server.py`'s startup block (`mcp_server.py:2011-2063`) for the
       hosted bridge, and keep the diff to log wording plus, at most, the obsolete-key
       notice. Specifically: the `launched` branch says the bridge is **hosted in-process**
