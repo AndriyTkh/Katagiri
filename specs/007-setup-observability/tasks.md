@@ -290,7 +290,10 @@ task, escalate to orchestrator (do not fix inside the lane).
 
 ## Taskgroup TG3: Gate (serial-on-master, dedicated testing agent)
 
-- [ ] T015 [Gate] [US4] Validation gate, in order:
+- [x] T015 [Gate] [US4] (gate cleared 2026-08-24 after fix cycle 1: step1 2111 passed/10
+      env skips in 87.74s ≤ +10% of 132s baseline; step2 exactly 77792d9+4cedd6e+f06de86
+      [D-48-authorized]; step3 holdout 38 passed/1 allowed SDK skip; step4 mutation demo
+      pass+reverted; step5 0 holdout tests in default collection) Validation gate, in order:
       1. `uv run pytest -n auto --dist loadgroup` — green; wall-clock vs pre-007
          baseline ≤ +10% (SC-006; baseline ~132s per CLAUDE.md).
       2. `git log --oneline -- specs/007-setup-observability/holdout/` — only the two
@@ -313,6 +316,24 @@ task, escalate to orchestrator (do not fix inside the lane).
       **Read**: specs/007-setup-observability/quickstart.md,
       specs/007-setup-observability/holdout/MANIFEST.md (run instructions only — the
       gate agent may read holdout, it implements nothing).
+
+- [x] T019 [US3] (gate-filed, fix cycle 1; commit d36121a) Logs do not follow
+      `--data-home`: applog's run_cli opens the FileHandler under the default home before
+      installer main() parses the flag; config/db/backups/scratch relocate but logs/ lands
+      in %LOCALAPPDATA%\Katagiri. Fix so a flag-only (no env var) `--data-home` run puts
+      logs under the override and writes nothing to the default home.
+- [x] T020 [US3] (gate-filed, fix cycle 1; commit d36121a) Empty/blank
+      KATAGIRI_DATA_HOME rejection leaks a raw Python traceback: ConfigError from
+      config_dir() propagates uncaught through installer main() → run_cli → runpy. Exit
+      nonzero with the clean message only (no "Traceback (most recent call last)").
+- [x] T021 [Gate] (gate-filed, fix cycle 1; landed as **D-48**, commit f06de86) Holdout pid-identity failures
+      (test_stability_connection field-types, test_stability_logging instance-identity)
+      are environmental, not implementation: .venv\Scripts\python.exe is a launcher shim,
+      so Popen.pid names the shim while the interpreter's os.getpid() (reported truthfully
+      by connection_status and the log) is its child. Empirically confirmed with a minimal
+      Popen probe outside Katagiri. **USER DECISION 2026-08-24: amend the two pid asserts
+      only (shim-aware — accept reported pid == Popen.pid OR a direct child of it,
+      captured while the server is alive); rest of holdout stays frozen.**
 
 **Checkpoint**: feature complete. Push to remote after TG3 (orchestrator).
 
