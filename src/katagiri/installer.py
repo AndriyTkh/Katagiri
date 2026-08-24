@@ -1373,6 +1373,7 @@ def _print_doctor_summary(cfg_path: Path, repo_root: Path) -> list[ComponentStat
     cfg = read_raw_config(cfg_path)
     statuses = collect_doctor_statuses(cfg, repo_root)
     print(f"\n[{TOTAL_STEPS}/{TOTAL_STEPS}] Doctor summary")
+    print(f"Data home: {config_mod.config_dir()}")
     print(render_doctor_table(statuses))
     return statuses
 
@@ -1547,17 +1548,89 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="accept defaults, skip prompts, skip scheduled tasks",
     )
+    parser.add_argument(
+        "--data-home",
+        metavar="PATH",
+        default=None,
+        help=(
+            "resolve config.toml/db/logs under PATH for this run instead of "
+            "%%LOCALAPPDATA%%\\Katagiri (side-by-side instances, D-46); creates "
+            "PATH if missing and persists KATAGIRI_DATA_HOME=PATH into this "
+            "checkout's agent/.env so later runs (installer, MCP server) pick "
+            "up the same instance"
+        ),
+    )
     return parser
+
+
+def _resolve_data_home(raw: str) -> Path:
+    """Validate and create ``--data-home``'s target directory.
+
+    Absolute-only, same rule ``config.config_dir()`` enforces for
+    ``KATAGIRI_DATA_HOME`` (D-46): a relative or empty value could silently
+    resolve underneath whatever directory the installer happens to be run
+    from, which is exactly the "points a side-by-side instance at the real
+    study database" failure that override exists to prevent.
+    """
+    path = Path(raw)
+    if not raw or not path.is_absolute():
+        raise config_mod.ConfigError(
+            f"--data-home must be an absolute path, got {raw!r}."
+        )
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _persist_data_home_env(repo_root: Path, data_home: Path) -> None:
+    """Append/update ``KATAGIRI_DATA_HOME=<data_home>`` in ``agent/.env``.
+
+    ``agent/.env`` is the untracked, per-checkout file ``agent/scripts/setup.py``
+    already reads for instance wiring (``KATAGIRI_PYTHON``, ``KATAGIRI_MODULE``,
+    ``KATAGIRI_CONFIG`` -- research.md D9); this keeps ``--data-home`` in the
+    same place rather than touching the tracked ``.mcp.json``. Every other line
+    is preserved verbatim: only the ``KATAGIRI_DATA_HOME=`` line is replaced in
+    place if present, or appended if the file has none (or does not exist yet).
+    """
+    env_path = repo_root / "agent" / ".env"
+    new_line = f"KATAGIRI_DATA_HOME={data_home.as_posix()}"
+
+    existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    lines = existing.splitlines()
+    pattern = re.compile(r"^KATAGIRI_DATA_HOME=")
+    for i, line in enumerate(lines):
+        if pattern.match(line):
+            lines[i] = new_line
+            break
+    else:
+        lines.append(new_line)
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    cfg_path = config_mod.config_path()
     repo_root = _repo_root()
+
+    if args.data_home:
+        try:
+            data_home = _resolve_data_home(args.data_home)
+        except config_mod.ConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        # Set before any config access below so config_dir()/config_path()
+        # (and everything derived from them: db_path, logs_dir()) resolve
+        # under PATH for the rest of this run -- T011's KATAGIRI_DATA_HOME
+        # seam in katagiri.config.config_dir().
+        os.environ["KATAGIRI_DATA_HOME"] = str(data_home)
+        _persist_data_home_env(repo_root, data_home)
+
+    cfg_path = config_mod.config_path()
 
     if args.check:
         cfg = read_raw_config(cfg_path)
         statuses = collect_doctor_statuses(cfg, repo_root)
+        print(f"Data home: {config_mod.config_dir()}")
         print(render_doctor_table(statuses))
         code = doctor_exit_code(statuses)
         _log.info("doctor finished with exit code %d", code)
