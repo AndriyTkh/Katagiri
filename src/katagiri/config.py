@@ -178,7 +178,35 @@ def local_app_data() -> Path:
 
 
 def config_dir() -> Path:
-    """Directory holding ``config.toml`` — ``%LOCALAPPDATA%\\Katagiri``."""
+    """Directory holding ``config.toml`` — ``%LOCALAPPDATA%\\Katagiri``.
+
+    Honors the ``KATAGIRI_DATA_HOME`` environment variable as an override:
+    when set, it replaces ``%LOCALAPPDATA%\\Katagiri`` as the instance root
+    for everything derived from this directory — ``config.toml``'s default
+    location (unless ``KATAGIRI_CONFIG`` overrides that separately) and,
+    transitively, ``logs_dir()`` (``config_dir() / "logs"``,
+    applog.py:107-114 — no change needed there). The value must be an
+    absolute path; an empty or relative value raises ``ConfigError`` rather
+    than silently falling back to the default home, because a silent
+    fallback here could point a side-by-side test instance at the real
+    study database (D-46). Precedence, highest first: ``KATAGIRI_CONFIG``
+    (file-specific, D-22) > ``KATAGIRI_DATA_HOME`` (this override) >
+    default ``%LOCALAPPDATA%\\Katagiri``. When the variable is unset,
+    behavior is unchanged: ``local_app_data()`` still runs and can still
+    raise if ``LOCALAPPDATA`` is missing.
+    """
+    override = os.environ.get("KATAGIRI_DATA_HOME")
+    if override is not None:
+        override_path = Path(override) if override else None
+        if override_path is None or not override_path.is_absolute():
+            raise ConfigError(
+                "KATAGIRI_DATA_HOME must be an absolute path, got "
+                f"{override!r}. Katagiri will not silently fall back to "
+                "the default %LOCALAPPDATA%\\Katagiri home, since that "
+                "could point a side-by-side instance at the real study "
+                "database."
+            )
+        return override_path
     return local_app_data() / APP_DIR_NAME
 
 
