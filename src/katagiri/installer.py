@@ -58,7 +58,7 @@ from katagiri import config as config_mod
 # shared log file once the ``__main__`` block has configured it.
 _log = logging.getLogger("katagiri.installer")
 
-TOTAL_STEPS = 11
+TOTAL_STEPS = 12
 
 MPV_CONF_LINE = r"input-ipc-server=\\.\pipe\mpv-katagiri"
 
@@ -100,6 +100,7 @@ STEP_LABELS = (
     "Scheduled tasks (optional)",
     "Backup rehearsal",
     "Irodori study schedule (optional)",
+    "Browser companion check (optional)",
 )
 
 
@@ -1302,6 +1303,98 @@ def step_irodori(db_path: Path, *, prompt: Any = input) -> StepResult:
     )
 
 
+def _detect_companion_statuses(cfg: RawConfig) -> list[Any]:
+    """Detect Yomitan/asbplayer/mokuro, in catalog order; exception-safe.
+
+    Mirrors :func:`probe_companions`'s safety net (an unexpected detector bug
+    or unreadable profile tree must not crash the installer -- 008 spec
+    FR-009/FR-011) but returns the richer ``CompanionStatus`` rows (verdict +
+    a name step_companions can pair back to ``COMPANION_CATALOG`` for the
+    handoff text) instead of probe_companions's doctor-table
+    ``ComponentStatus`` shape.
+    """
+    try:
+        from katagiri.companions import EXTENSION_QUERIES, detect_extensions, mokuro_companion_status
+
+        extension_rows, _scan = detect_extensions(EXTENSION_QUERIES)
+        return [*extension_rows, mokuro_companion_status(cfg)]
+    except Exception as exc:  # noqa: BLE001 - detection must never crash the wizard step
+        from katagiri.companions import COMPANION_CATALOG, VERDICT_UNDETERMINED, CompanionStatus
+
+        detail = _truncated(f"companion detection failed unexpectedly: {exc}")
+        return [
+            CompanionStatus(entry.name, VERDICT_UNDETERMINED, detail) for entry in COMPANION_CATALOG
+        ]
+
+
+def _companion_step_detail(statuses: list[Any]) -> str:
+    return "; ".join(f"{s.name}: {s.verdict}" for s in statuses)
+
+
+def _report_companion_statuses(statuses: list[Any]) -> bool:
+    """Print each companion's verdict, then the handoff for any absent one.
+
+    Returns True when every companion is ``present``. Handoff text is only
+    printed for the ``absent`` verdict (spec FR-005: "for every companion
+    reported absent") -- ``undetermined`` rows are reported as-is, since
+    telling the operator to install something we could not actually check
+    for would misstate what was found (spec US3).
+    """
+    from katagiri.companions import COMPANION_CATALOG, VERDICT_ABSENT, VERDICT_PRESENT, render_handoff
+
+    catalog_by_name = {entry.name: entry for entry in COMPANION_CATALOG}
+    all_present = True
+    for s in statuses:
+        detail = f" ({s.detail})" if s.detail else ""
+        print(f"  {s.name}: {s.verdict}{detail}")
+        if s.verdict != VERDICT_PRESENT:
+            all_present = False
+    for s in statuses:
+        if s.verdict == VERDICT_ABSENT:
+            entry = catalog_by_name.get(s.name)
+            if entry is not None:
+                print(render_handoff(entry))
+    return all_present
+
+
+def step_companions(cfg: RawConfig, *, assume_yes: bool, prompt: Any = input) -> StepResult:
+    """Browser companion check: report + handoff, with a re-check/skip loop.
+
+    Katagiri never installs a browser extension or userscript (spec FR-006):
+    this step only ever prints verdicts and, for anything absent, the
+    catalog's install URL(s) and numbered manual steps (FR-005) -- the
+    operator does the install themselves, in their own browser, then asks
+    this step to look again.
+
+    Under ``--yes`` the report/handoff is printed exactly once with no
+    prompt and no wait (FR-008); an absent *optional* companion must never
+    turn an unattended install into ACTION NEEDED, so under ``--yes`` this
+    step can only ever finish OK (everything present) or SKIP (something
+    still needs the operator -- surfaced in the summary, not treated as a
+    failure). Interactively, re-check (US2 acceptance 2) re-runs only the
+    detection above -- no earlier wizard step -- and skip (US2 acceptance 3)
+    ends the step with the outcome so far.
+    """
+    statuses = _detect_companion_statuses(cfg)
+    all_present = _report_companion_statuses(statuses)
+
+    if assume_yes:
+        return StepResult("OK" if all_present else "SKIP", _companion_step_detail(statuses))
+
+    while not all_present:
+        try:
+            answer = prompt("  [R]e-check / [S]kip? [S]: ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if (answer or "").strip().lower() == "r":
+            statuses = _detect_companion_statuses(cfg)
+            all_present = _report_companion_statuses(statuses)
+            continue
+        return StepResult("SKIP", _companion_step_detail(statuses))
+
+    return StepResult("OK", _companion_step_detail(statuses))
+
+
 # ---------------------------------------------------------------------------
 # Wizard runner
 # ---------------------------------------------------------------------------
@@ -1343,7 +1436,7 @@ _RETRY_HINTS = {
 def _wizard_step_runners(
     cfg_path: Path, repo_root: Path, *, assume_yes: bool
 ) -> list[tuple[str, Any]]:
-    """The ten wizard steps as ``(label, thunk)`` pairs, in execution order.
+    """The eleven wizard steps as ``(label, thunk)`` pairs, in execution order.
 
     Each thunk re-reads config.toml when invoked, so re-running a step (via
     Retry or the post-setup menu) after the Config step changed a path sees
@@ -1364,6 +1457,7 @@ def _wizard_step_runners(
         (STEP_LABELS[7], lambda: step_schtasks(assume_yes=assume_yes)),
         (STEP_LABELS[8], lambda: step_backup()),
         (STEP_LABELS[9], lambda: step_irodori(_cfg().db_path)),
+        (STEP_LABELS[10], lambda: step_companions(_cfg(), assume_yes=assume_yes)),
     ]
 
 
@@ -1466,7 +1560,7 @@ def _launch_mcp_server(repo_root: Path) -> None:
 
 
 _MENU = (
-    "\n[1-10] re-run a setup step   [A] run all steps again\n"
+    "\n[1-11] re-run a setup step   [A] run all steps again\n"
     "[D] doctor summary           [C] edit config (re-run config step)\n"
     "[L] launch MCP server        [Q] quit"
 )
