@@ -337,12 +337,12 @@ def _ro_query_scalar(db_path: Path, sql: str, params: tuple[Any, ...] = ()) -> A
     uri = f"file:{urllib.parse.quote(db_path.as_posix())}?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True, timeout=2)
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:
         return None
     try:
         row = conn.execute(sql, params).fetchone()
         return row[0] if row else None
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:
         return None
     finally:
         conn.close()
@@ -1355,6 +1355,7 @@ def _run_step_with_retry(
             continue
         if answer == "a":
             raise _WizardAborted
+        _log.info("step %d/%d %s: operator chose Skip after ACTION NEEDED", n, total, label)
         return result
 
 
@@ -1375,6 +1376,13 @@ def _print_doctor_summary(cfg_path: Path, repo_root: Path) -> list[ComponentStat
     print(f"\n[{TOTAL_STEPS}/{TOTAL_STEPS}] Doctor summary")
     print(f"Data home: {config_mod.config_dir()}")
     print(render_doctor_table(statuses))
+    # Mirror each component's end state to the shared log: the console table
+    # is often long gone by the time a run needs to be reconstructed, and
+    # unlike each step's own attempt(s) (see _print_step), this final state
+    # previously existed only on stdout.
+    for s in statuses:
+        detail = f" ({s.detail})" if s.detail else ""
+        _log.info("doctor %s: %s%s", s.name, s.status, detail)
     return statuses
 
 

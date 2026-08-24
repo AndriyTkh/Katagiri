@@ -21,17 +21,14 @@ default db path (``<LOCALAPPDATA>/Katagiri/katagiri.db``) *before* invoking
 the installer, so ``step_jmdict`` / ``probe_jmdict`` see existing entries and
 skip the real (~20s) import subprocess entirely.
 
-FR-010 log gaps found while writing this suite (see the two ``NOTE`` blocks
-below, and the T005 return message): the interactive R/S/A prompt logs a
-step's raw result *before* asking Retry/Skip/Abort, so the ACTION NEEDED line
-is written whether the operator ends up retrying or skipping -- picking
-Skip produces no distinguishing log line of its own (only Abort does, at
-``_run_wizard_steps``'s ``except _WizardAborted`` handler). And the final
-per-component doctor summary table (``_print_doctor_summary``) is printed to
-stdout only; it never goes through ``_log``, so the end state of an
-interactive run is not reconstructable from the log file alone -- only each
-step's own attempt(s) are. Both are read-only observations; per task
-instructions, installer.py is not touched here.
+FR-010 log gaps found while writing the T005 suite (see the T005 return
+message) have since been fixed under T016: a scripted Skip after ACTION
+NEEDED now writes its own ``_log`` line (distinct from Abort's), and
+``_print_doctor_summary`` mirrors every per-component end state (READY/
+MISSING/MANUAL STEP) to the log, not just stdout. ``_ro_query_scalar`` also
+now catches ``sqlite3.DatabaseError`` (the parent of ``OperationalError``),
+so a corrupted-but-present db file makes ``--check`` report MISSING instead
+of crashing -- see ``test_check_detects_precondition_broken_after_install``.
 """
 
 from __future__ import annotations
@@ -235,16 +232,6 @@ def test_check_detects_precondition_broken_after_install(real_jmdict_template, t
     Removes only the sandbox's own jmdict db (never the real one, never the
     vendored zip) after a successful install, then re-runs --check and
     confirms the regression is caught and named.
-
-    NOTE: a *corrupted-but-present* db file (e.g. truncated/non-sqlite bytes)
-    is not handled gracefully here -- ``_ro_query_scalar`` (installer.py
-    ~328-348) only catches ``sqlite3.OperationalError``, not the
-    ``sqlite3.DatabaseError`` ("file is not a database") a corrupted file
-    raises, so ``--check`` crashes with an unhandled traceback instead of
-    reporting MISSING. Confirmed interactively; not asserted here per the
-    "don't edit installer.py, report the gap" instruction -- using a missing
-    file instead exercises the same MISSING-detection path without hitting
-    that crash.
     """
     env, cfg_path, db_path = _sandbox_env(tmp_path)
     _seed_jmdict(real_jmdict_template, db_path)
@@ -262,6 +249,36 @@ def test_check_detects_precondition_broken_after_install(real_jmdict_template, t
     after = _run_installer(["--check"], env)
     assert after.returncode == 1
     assert re.search(r"^jmdict/kanjium import\s+MISSING", after.stdout, re.MULTILINE)
+
+
+def test_check_handles_corrupted_db_file_gracefully(real_jmdict_template, tmp_path):
+    """T016: a corrupted-but-present db file must report MISSING, not crash.
+
+    Previously ``_ro_query_scalar`` only caught ``sqlite3.OperationalError``,
+    not the ``sqlite3.DatabaseError`` ("file is not a database") a corrupted
+    file raises, so ``--check`` crashed with an unhandled traceback. Fixed by
+    broadening the except clause to ``sqlite3.DatabaseError`` (the parent of
+    ``OperationalError``). Overwrites the sandbox's own db file (never the
+    real one, never the vendored zip) with garbage bytes after a successful
+    install, then confirms --check degrades to a graceful MISSING with a
+    non-zero exit and no traceback in stderr.
+    """
+    env, cfg_path, db_path = _sandbox_env(tmp_path)
+    _seed_jmdict(real_jmdict_template, db_path)
+
+    setup = _run_installer(["--yes"], env, timeout=_FULL_WIZARD_TIMEOUT)
+    assert setup.returncode == 0, setup.stdout + setup.stderr
+
+    # Corrupt the precondition in place: overwrite with non-sqlite bytes,
+    # rather than deleting it -- this exercises the DatabaseError path
+    # ("file is not a database") instead of the missing-file path.
+    db_path.write_bytes(b"not a sqlite database, just garbage bytes\x00\x01\x02")
+
+    after = _run_installer(["--check"], env)
+    assert after.returncode == 1, after.stdout + after.stderr
+    assert re.search(r"^jmdict/kanjium import\s+MISSING", after.stdout, re.MULTILINE)
+    assert "Traceback" not in after.stderr
+    assert "Traceback" not in after.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +317,37 @@ def test_interactive_skip_continues_and_shows_in_final_summary(real_jmdict_templ
     assert re.search(r"^anki mirror\s+MISSING\s+not synced yet", proc.stdout, re.MULTILINE)
     # Never aborted.
     assert "Setup aborted" not in proc.stdout
+
+    # T016: a scripted Skip now leaves its own distinguishing log line,
+    # separate from the plain step-outcome line _print_step already writes.
+    log_text = _log_path(env["LOCALAPPDATA"]).read_text(encoding="utf-8")
+    assert re.search(
+        r"step 4/\d+ Anki sync: operator chose Skip after ACTION NEEDED", log_text
+    ), f"log missing distinguishing Skip line\n---\n{log_text}"
+
+
+def test_yes_and_check_log_doctor_end_state_per_component(real_jmdict_template, tmp_path):
+    """T016: the final doctor table's per-component end state must also reach the log.
+
+    Previously only each step's own attempt(s) were logged (via _print_step);
+    the doctor summary table itself was stdout-only. Confirm both a --yes run
+    and a --check run mirror every row (name/status/detail) into katagiri.log.
+    """
+    env, cfg_path, db_path = _sandbox_env(tmp_path)
+    _seed_jmdict(real_jmdict_template, db_path)
+
+    setup = _run_installer(["--yes"], env, timeout=_FULL_WIZARD_TIMEOUT)
+    assert setup.returncode == 0, setup.stdout + setup.stderr
+
+    log_text = _log_path(env["LOCALAPPDATA"]).read_text(encoding="utf-8")
+    assert "doctor config: READY" in log_text
+    assert "doctor jmdict/kanjium import: READY" in log_text
+
+    check = _run_installer(["--check"], env)
+    assert check.returncode == 0, check.stdout + check.stderr
+    log_text_after_check = _log_path(env["LOCALAPPDATA"]).read_text(encoding="utf-8")
+    assert "doctor config: READY" in log_text_after_check
+    assert "doctor jmdict/kanjium import: READY" in log_text_after_check
 
 
 def test_interactive_abort_logs_step_number(real_jmdict_template, tmp_path):
