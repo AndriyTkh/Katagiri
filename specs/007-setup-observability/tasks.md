@@ -52,7 +52,7 @@ task, escalate to orchestrator (do not fix inside the lane).
 
 ## Taskgroup TG1: Governance (serial, blocks everything)
 
-- [ ] T001 [Gate] File decisions-ledger row **D-39** in `docs/decisions-ledger.md`:
+- [x] T001 [Gate] (landed as **D-46**, ledger had advanced past D-39; commit 8faec0e) File decisions-ledger row **D-39** in `docs/decisions-ledger.md`:
       (a) additive `connection_status` ToolSpec (26 → 27 tools) with D-24 contract-diff
       justification — read-only diagnostic, no secret values, presence flags only,
       contract in specs/007-setup-observability/contracts/connection_status.md;
@@ -80,7 +80,7 @@ task, escalate to orchestrator (do not fix inside the lane).
 
 ### Serial-on-master track (strict order T002 → T003 → T004)
 
-- [ ] T002 [US2] Implement `connection_status`: new `_INFRA_007_SPECS` fragment tuple
+- [x] T002 [merged: 4ae918b; tool count landed 34→35, brief's 26→27 was stale] [US2] Implement `connection_status`: new `_INFRA_007_SPECS` fragment tuple
       in `src/katagiri/tool_registry.py` concatenated into `TOOL_SPECS`; logic function
       + thin `@server.tool` adapter (redact()-wrapped) in `src/katagiri/mcp_server.py`
       next to `ping`. Output per contract, exactly. Degraded states never raise
@@ -103,7 +103,7 @@ task, escalate to orchestrator (do not fix inside the lane).
       src/katagiri/config.py:180-225 + 440-443, src/katagiri/db.py:88-90,
       src/katagiri/applog.py:107-119, pyproject.toml:1-20 (version + mcp pin).
 
-- [ ] T003 [US3] Server lifecycle logging in `src/katagiri/mcp_server.py`: add pid to
+- [x] T003 [merged: 39a205d; client-connected line via first-call latch] [US3] Server lifecycle logging in `src/katagiri/mcp_server.py`: add pid to
       the startup log lines; after initialize handshake, log one INFO line
       `client connected: name=<x> version=<y> pid=<pid>` (reuse T002's clientInfo
       accessor); confirm per-tool-call lines (`_LoggedMCPServer.call_tool`) untouched.
@@ -114,7 +114,7 @@ task, escalate to orchestrator (do not fix inside the lane).
       main), specs/007-setup-observability/data-model.md (§Server lifecycle records),
       T002's completion notes.
 
-- [ ] T004 [US2] Tests for the tool: new `tests/test_connection_status.py` — over-the-wire
+- [x] T004 [merged: ab68cef; config-write-on-boot behaviors pinned as in-process unit tests, rest over the wire] [US2] Tests for the tool: new `tests/test_connection_status.py` — over-the-wire
       call via the per-file-mirrored `_StdioClient` pattern (spawn in sandbox, handshake,
       tools/call): every contract field present + typed; paths point inside the sandbox;
       `db_available` false when sandbox has no DB; canary secret planted in sandbox
@@ -130,7 +130,7 @@ task, escalate to orchestrator (do not fix inside the lane).
 
 ### Lane `wt/007-install-tests` [P] [US1]
 
-- [ ] T005 [P] [US1] `tests/test_installer_setup.py` (general group): subprocess runs of
+- [x] T005 [merged: 22d79f3; FR-010 gaps filed as T016] [P] [US1] `tests/test_installer_setup.py` (general group): subprocess runs of
       `python -m katagiri.installer` with `LOCALAPPDATA` + `KATAGIRI_CONFIG` sandboxed,
       `PYTHONUTF8=1`: `--yes` completes with stdin closed, writes config, prints
       per-step summary, logs steps to sandbox katagiri.log (FR-010 verification — if a
@@ -150,7 +150,7 @@ task, escalate to orchestrator (do not fix inside the lane).
       tests/conftest.py:3-84 + 109-143 (groups, jmdict template fixture),
       specs/007-setup-observability/spec.md (US1 + edge cases).
 
-- [ ] T006 [P] [US1] `tests/test_launch_chain.py` (mcp group): spawn
+- [x] T006 [merged: 0b2e5bf; first attempt hung on stderr pipe-buffer deadlock, retried with tree-kill + stderr pump] [P] [US1] `tests/test_launch_chain.py` (mcp group): spawn
       `python agent/scripts/setup.py --stdio-bootstrap` exactly as `.mcp.json` does
       (env `PYTHONUTF8=1`, sandboxed LOCALAPPDATA), initialize handshake completes,
       stdout carries only JSON-RPC frames (every non-empty line parses as JSON),
@@ -162,7 +162,7 @@ task, escalate to orchestrator (do not fix inside the lane).
 
 ### Lane `wt/007-bootstrap` [P] [US3]
 
-- [ ] T007 [P] [US3] File logging for `agent/scripts/setup.py`: self-contained stdlib
+- [x] T007 [merged: 959ea46] [P] [US3] File logging for `agent/scripts/setup.py`: self-contained stdlib
       FileHandler appending to `%LOCALAPPDATA%\Katagiri\logs\bootstrap.log`
       (create dirs; NO import of katagiri — research.md D4); every `say()/warn()/ok()`
       line mirrored with timestamp + pid + phase; failure before server exec is
@@ -174,7 +174,7 @@ task, escalate to orchestrator (do not fix inside the lane).
       specs/007-setup-observability/data-model.md (§BootstrapLogRecord),
       specs/007-setup-observability/research.md (D4).
 
-- [ ] T008 [P] [US3] `tests/test_bootstrap_log.py`: sandboxed bootstrap run writes
+- [x] T008 [merged: 92c37eb] [P] [US3] `tests/test_bootstrap_log.py`: sandboxed bootstrap run writes
       bootstrap.log with phase lines; forced pre-exec failure (env override pointing
       at a nonexistent server module) is reconstructible from the file alone; canary
       secret in env never appears in the log; unwritable logs dir → process still
@@ -185,7 +185,7 @@ task, escalate to orchestrator (do not fix inside the lane).
 
 ### Lane `wt/007-bootstrap` (continued, after T008)
 
-- [ ] T013 [P] [US5] Instance-env passthrough in `agent/scripts/setup.py`: read
+- [x] T013 [merged: 8b412a9; also fixed launch_server KATAGIRI_CONFIG env-clobber bug] [P] [US5] Instance-env passthrough in `agent/scripts/setup.py`: read
       `KATAGIRI_DATA_HOME` and `KATAGIRI_CONFIG` from `agent/.env` (same mechanism as
       `KATAGIRI_PYTHON`/`KATAGIRI_MODULE` today) and forward them into the server's
       environment at exec; already-set process env wins over `.env` (client may inject
@@ -197,7 +197,7 @@ task, escalate to orchestrator (do not fix inside the lane).
 
 ### Lane `wt/007-instances` [P] [US5]
 
-- [ ] T011 [P] [US5] `KATAGIRI_DATA_HOME` in `src/katagiri/config.py`: `config_dir()`
+- [x] T011 [merged: b96ca41] [P] [US5] `KATAGIRI_DATA_HOME` in `src/katagiri/config.py`: `config_dir()`
       returns `Path($KATAGIRI_DATA_HOME)` when set — absolute path required; empty or
       relative value raises `ConfigError` with an explicit message (NEVER silently
       fall back to the default home — that would risk the real study DB). Docstring
@@ -208,7 +208,7 @@ task, escalate to orchestrator (do not fix inside the lane).
       **Read**: src/katagiri/config.py:160-200, src/katagiri/applog.py:100-120,
       specs/007-setup-observability/research.md (D9).
 
-- [ ] T012 [US5] Installer `--data-home PATH` in `src/katagiri/installer.py`: resolves
+- [x] T012 [merged: 8d4d6f6] [US5] Installer `--data-home PATH` in `src/katagiri/installer.py`: resolves
       the whole run (config, db path written into config.toml, logs) under PATH —
       implement by setting `KATAGIRI_DATA_HOME` in the process env early in `main()`
       (before any config access), so every step inherits it through T011's seam;
@@ -222,7 +222,7 @@ task, escalate to orchestrator (do not fix inside the lane).
       src/katagiri/config.py (post-T011), specs/007-setup-observability/research.md
       (D9), agent/scripts/setup.py:1-60 (the .env format it must stay compatible with).
 
-- [ ] T014 [US5] `tests/test_instances.py` (general group; mcp-group marks only where
+- [x] T014 [merged: 004f54d] [US5] `tests/test_instances.py` (general group; mcp-group marks only where
       a real server is spawned): env var isolates config+logs into a fresh home;
       installer `--data-home` puts config/db/logs under the home AND persists the key
       into a sandboxed `agent/.env` copy (never the real one); default run untouched
@@ -240,7 +240,7 @@ task, escalate to orchestrator (do not fix inside the lane).
 
 ### Lane `wt/007-docs` [P]
 
-- [ ] T009 [P] [US1/US3/US5] `docs/setup-observability.md` (FR-013, operator-facing,
+- [x] T009 [merged: 77c8a97] [P] [US1/US3/US5] `docs/setup-observability.md` (FR-013, operator-facing,
       ~1 page): where logs live (katagiri.log, bootstrap.log, what each records), how
       to read a failed install from logs alone, how to run the install tests, how to
       call `connection_status` and read its fields for cross-client diagnosis
@@ -254,6 +254,22 @@ task, escalate to orchestrator (do not fix inside the lane).
       **Read**: specs/007-setup-observability/quickstart.md,
       specs/007-setup-observability/contracts/connection_status.md,
       specs/007-setup-observability/data-model.md, README.md.
+
+- [x] T016 [merged: 9208db7] [US1] (filed by orchestrator 2026-08-24 per T005 FR-010 findings) installer.py
+      log-observability fixes, serial-on-master AFTER wt/007-instances merges:
+      (a) `_run_step_with_retry` (~1321-1358): log an explicit line when operator picks
+      Skip (and Retry), not just Abort — a scripted Skip currently leaves no
+      distinguishing record (log shows only "ACTION NEEDED");
+      (b) `_print_doctor_summary` (~1372-1377): mirror the per-component doctor table
+      through `_log` so end-state (READY/MISSING/MANUAL STEP) is reconstructible from
+      the log alone;
+      (c) `_ro_query_scalar` (~328-348): catch `sqlite3.DatabaseError` (not just
+      OperationalError) so a corrupted DB file makes `--check` report MISSING instead
+      of crashing with a traceback. Then un-NOTE/extend
+      `test_check_detects_precondition_broken_after_install` to use a corrupted file.
+      **Model**: sonnet-high. **Write**: src/katagiri/installer.py,
+      tests/test_installer_setup.py (extend only).
+      **Read**: T005 findings above, src/katagiri/installer.py:328-348 + 1321-1377.
 
 **Checkpoint**: all TG2 tasks merged to master + full suite green → TG3.
 

@@ -1,7 +1,7 @@
 # Tool Contract: connection_status
 
 **Stability**: stable once merged (constitution VII — additive-only afterwards).
-**Ledger**: D-39 (filed before implementation).
+**Ledger**: D-46 (filed before implementation; planned as D-39, ledger had advanced).
 
 ## Registration
 
