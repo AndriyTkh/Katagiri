@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import getpass
 import json
+import logging
+import os
 import re
 import shutil
 import socket
@@ -50,6 +52,49 @@ _OUT = sys.stderr if STDIO_BOOTSTRAP else sys.stdout
 
 _t0 = time.monotonic()
 _step_t = _t0
+
+# --- bootstrap.log: self-contained file logging (research.md D4) ----------
+# Deliberately NOT importing katagiri here: this script must still record a
+# failure even when the package is broken or not yet synced - that's exactly
+# the failure mode it exists to catch. Best-effort: an unwritable log dir
+# degrades to stderr-only (via the existing say/warn/ok console output),
+# never crashes the setup.
+_LOG_PHASE = "startup"
+
+
+def _init_bootstrap_logger() -> logging.Logger | None:
+    try:
+        base = os.environ.get("LOCALAPPDATA")
+        if not base:
+            return None
+        log_dir = Path(base) / "Katagiri" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logger = logging.getLogger("katagiri.bootstrap.setup")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        if not logger.handlers:
+            handler = logging.FileHandler(log_dir / "bootstrap.log", encoding="utf-8")
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s | pid=%(process)d | %(message)s")
+            )
+            logger.addHandler(handler)
+        return logger
+    except OSError:
+        return None
+
+
+_BOOTSTRAP_LOGGER = _init_bootstrap_logger()
+
+
+def _log_line(outcome: str, msg: str) -> None:
+    """Mirror one console line into bootstrap.log as `phase | outcome | detail`.
+    No-op (stderr-only degrade) when the log dir couldn't be opened."""
+    if _BOOTSTRAP_LOGGER is None:
+        return
+    try:
+        _BOOTSTRAP_LOGGER.info(f"phase={_LOG_PHASE} | outcome={outcome} | detail={msg}")
+    except OSError:
+        pass
 
 # --- paths (script lives at <repo>/agent/scripts/setup.py) ----------------
 SCRIPT = Path(__file__).resolve()
@@ -105,23 +150,37 @@ DEFAULT_LANGSMITH_PROJECT = "katagiri-agent"
 
 def say(msg: str) -> None:
     print(msg, flush=True, file=_OUT)
+    _log_line("info", msg)
 
 
 def header(msg: str) -> None:
-    global _step_t
+    global _step_t, _LOG_PHASE
     now = time.monotonic()
     if now - _step_t > 0.5:
         say(f"      ({now - _step_t:.1f}s)")
     _step_t = now
+    _LOG_PHASE = msg
     say(f"\n=== {msg} ===")
 
 
 def warn(msg: str) -> None:
-    say(f"  [!] {msg}")
+    line = f"  [!] {msg}"
+    print(line, flush=True, file=_OUT)
+    _log_line("warn", msg)
 
 
 def ok(msg: str) -> None:
-    say(f"  [ok] {msg}")
+    line = f"  [ok] {msg}"
+    print(line, flush=True, file=_OUT)
+    _log_line("ok", msg)
+
+
+def fail(msg: str) -> None:
+    """Failure recorded before the server exec handoff - the critical record
+    (data-model.md BootstrapLogRecord)."""
+    line = f"[fatal] {msg}"
+    print(line, flush=True, file=_OUT)
+    _log_line("fail", msg)
 
 
 def ask_yn(prompt: str, default: bool = True) -> bool:
@@ -498,12 +557,13 @@ def step_report(env: dict[str, str], problems: list[str]) -> int:
 
 def launch_server(env: dict[str, str]) -> int:
     """--stdio-bootstrap tail: hand stdio over to the katagiri MCP server."""
-    import os
+    global _LOG_PHASE
+    _LOG_PHASE = "server exec handoff"
 
     python = env.get("KATAGIRI_PYTHON", "")
     module = env.get("KATAGIRI_MODULE", "katagiri.mcp_server")
     if not python or not Path(python).exists():
-        say(f"[fatal] KATAGIRI_PYTHON not found: {python!r} - run `uv sync` at repo root")
+        fail(f"KATAGIRI_PYTHON not found: {python!r} - run `uv sync` at repo root")
         return 2
     child_env = dict(os.environ)
     child_env["PYTHONUTF8"] = "1"
@@ -521,7 +581,7 @@ def main() -> int:
     say(f"  vault: {VAULT_DIR}")
 
     if not AGENT_DIR.is_dir() or not (AGENT_DIR / "pyproject.toml").exists():
-        say(f"[fatal] agent/ project not found at {AGENT_DIR} - run from the Katagiri repo")
+        fail(f"agent/ project not found at {AGENT_DIR} - run from the Katagiri repo")
         return 2
 
     env = parse_env(ENV_FILE)
