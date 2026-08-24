@@ -148,7 +148,7 @@ exist.
 
 ### Serial-on-main, first (unblocks the lane's worktree)
 
-- [ ] T002 [US1] Add the `aiohttp` runtime dependency to `pyproject.toml` with the pinned
+- [x] T002 [US1] (commit 457c6e2; aiohttp==3.14.3 + aiohappyeyeballs/aiosignal/frozenlist/multidict/propcache/yarl, all wheels, no conflicts; smoke 15 passed) Add the `aiohttp` runtime dependency to `pyproject.toml` with the pinned
       range the T001 ledger row records, run `uv sync`, and report the **full resolved
       transitive addition** (versions included) plus whether any package needed a build
       rather than a wheel (research.md O-6). Change nothing else in `pyproject.toml` — the
@@ -162,7 +162,7 @@ exist.
 
 ### Lane `wt/009-bridge` [P] (strict order T003 → T004 → T005 → T006)
 
-- [ ] T003 [P] [US1] Create `src/katagiri/asbplayer_bridge.py` — the transport core.
+- [ ] T003 [in-progress: wt/009-bridge] [P] [US1] Create `src/katagiri/asbplayer_bridge.py` — the transport core.
       An `aiohttp` `web.Application` served on a **private asyncio loop running on a daemon
       thread**, with `start(host, port)` returning the bound address and an explicit
       `stop()` that closes the site and joins the thread (plan.md decision 9; FR-012 — a
@@ -288,7 +288,7 @@ exist.
 
 ### Research (parallel to everything, no shared files)
 
-- [ ] T008 [P] [US1] **Re-check upstream before the protocol freeze ships** (research.md
+- [ ] T008 [in-progress: serial-main] [P] [US1] **Re-check upstream before the protocol freeze ships** (research.md
       R8). Verify at `github.com/asbplayer/asbplayer`: (a) the latest release tag — is
       1.20.2 still current? (b) issue **#1087** — still open and unmerged, or did it (or a
       successor carrying a capability handshake / media targeting / event subscription)
@@ -391,7 +391,7 @@ exist.
 
 ### Lane `wt/009-docs` [P]
 
-- [ ] T011 [P] [US3/US4] `docs/asbplayer-bridge.md` (FR-018, operator-facing, ~1 page):
+- [x] T011 [merged: 4c57a37] [P] [US3/US4] (lane commit 3a9a851; 7 sections, README untouched — no docs index exists) `docs/asbplayer-bridge.md` (FR-018, operator-facing, ~1 page):
       what the bridge is and what it is for (the extension's WebSocket peer plus an
       AnkiConnect proxy); that **Katagiri now hosts it in-process** — no Go, no second
       checkout, and **it is up only while Katagiri is running**, with the plain consequence
