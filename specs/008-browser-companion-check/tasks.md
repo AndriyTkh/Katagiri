@@ -55,7 +55,7 @@ order below avoids that entirely by putting T005 after the lane's merge.
 
 ## Taskgroup TG1: Governance (serial, blocks everything)
 
-- [ ] T001 [Gate] File the 008 decisions-ledger row in `docs/decisions-ledger.md`
+- [x] T001 [Gate] (landed as **D-49**; commit 3136028) File the 008 decisions-ledger row in `docs/decisions-ledger.md`
       (**expected D-49 — CONFIRM the actual next number at execution time**:
       `grep '^| D-' docs/decisions-ledger.md | tail -3`; this draft was written when D-48
       was last, and 007's T001 drafted D-39 but landed as D-46, so a stale number is the
@@ -95,7 +95,7 @@ order below avoids that entirely by putting T005 after the lane's merge.
 
 ### Lane `wt/008-companions` [P] (strict order T002 → T003 → T004)
 
-- [ ] T002 [P] [US1/US3] Create `src/katagiri/companions.py` — the detection core. Stdlib
+- [x] T002 [P] [US1/US3] [merged: 2f44dc7, lane commit 5903f2c] Create `src/katagiri/companions.py` — the detection core. Stdlib
       only plus `from katagiri.config import MOKURO_BRIDGE_PORT` (installer.py's
       no-package-imports rule applies here too, since this module is imported from it).
       Public shape: a `CompanionStatus` dataclass (name, verdict, evidence/detail,
@@ -127,7 +127,7 @@ order below avoids that entirely by putting T005 after the lane's merge.
       in-repo precedent for best-effort third-party profile detection),
       src/katagiri/config.py:36-60 (`MOKURO_BRIDGE_PORT`, `_SECRET_KEYS`).
 
-- [ ] T003 [P] [US2] Extend `src/katagiri/companions.py` with the catalog, the handoff
+- [x] T003 [P] [US2] [merged: 2f44dc7, lane commit c5682b2] Extend `src/katagiri/companions.py` with the catalog, the handoff
       text, and the mokuro row. (a) One module-level catalog constant holding, per
       companion: display name, store id(s), official install URL, and the numbered manual
       steps — **each entry carrying a comment citing research.md R5 as its provenance**, so
@@ -159,7 +159,7 @@ order below avoids that entirely by putting T005 after the lane's merge.
       socket-probe shape to copy — READ ONLY, never edit), src/katagiri/config.py:36-60 +
       140-155 (`MOKURO_BRIDGE_PORT`, `mokuro_shared_secret` doc text).
 
-- [ ] T004 [P] [US1/US2/US3] `tests/test_companions.py` (general group): synthetic browser
+- [x] T004 [P] [US1/US2/US3] [merged: 2f44dc7, lane commit e1b780c; 15 passed] `tests/test_companions.py` (general group): synthetic browser
       profile trees built entirely in `tmp_path` — **never a real profile, never the real
       `%LOCALAPPDATA%`** (monkeypatch the env/roots). Cover: extension present in the only
       profile ⇒ present, evidence names the profile; present in profile 2 of 2 ⇒ present,
@@ -187,7 +187,7 @@ order below avoids that entirely by putting T005 after the lane's merge.
 
 ### Serial-on-main track (HOT: `installer.py`, strict order T005 → T006 → T007)
 
-- [ ] T005 [US1] Wire detection into the doctor in `src/katagiri/installer.py`: add
+- [x] T005 [US1] (commit 01bc647; --check exit code byte-identical pre/post) Wire detection into the doctor in `src/katagiri/installer.py`: add
       `probe_companions(cfg)` returning the three `ComponentStatus` rows (one per
       companion) and append them to `collect_doctor_statuses()` (installer.py:769-783).
       Import `katagiri.companions` **lazily, inside the probe** — installer.py's top-level
@@ -208,7 +208,7 @@ order below avoids that entirely by putting T005 after the lane's merge.
       src/katagiri/companions.py (post-T003), specs/008-browser-companion-check/spec.md
       (FR-001, FR-003, FR-004, FR-009), specs/008-browser-companion-check/research.md (R6).
 
-- [ ] T006 [US2] Add the wizard step and the re-check loop in `src/katagiri/installer.py`:
+- [x] T006 [US2] (commit d279371; STEP_LABELS 10→11, TOTAL_STEPS 11→12) Add the wizard step and the re-check loop in `src/katagiri/installer.py`:
       **append** one label to `STEP_LABELS` (currently 10 entries — appending keeps
       `STEP_LABELS[7]`, indexed by tests/test_installer_setup.py:166, stable) and bump
       `TOTAL_STEPS` 11 → 12; add `step_companions(cfg, *, assume_yes, prompt=input)`
@@ -230,7 +230,7 @@ order below avoids that entirely by putting T005 after the lane's merge.
       (`_post_wizard_menu`, `_run_wizard_steps`), src/katagiri/companions.py (post-T003),
       specs/008-browser-companion-check/spec.md (US2, FR-005..FR-008).
 
-- [ ] T007 [US1/US2] `tests/test_installer_companions.py` (general group): subprocess runs
+- [x] T007 [US1/US2] (commit 6b98676; 12 passed + 1 strict xfail; gate grep `-k "readonly or no_install or exit_code"` → 5 non-empty. Bug found by this suite: `installer.RawConfig` lacks `mokuro_shared_secret`, so `mokuro_companion_status` always sees None — fixed serial-on-main immediately after T007 in commit 9c76116 — RawConfig gained `mokuro_shared_secret`, xfail flipped to passing, 44 passed) `tests/test_installer_companions.py` (general group): subprocess runs
       of `python -m katagiri.installer` with `LOCALAPPDATA` + `KATAGIRI_CONFIG` sandboxed
       and `PYTHONUTF8=1`, exactly the 007 harness style, plus in-process unit calls where a
       subprocess would be wasteful. Cover: `--check` output contains the three companion
@@ -253,7 +253,7 @@ order below avoids that entirely by putting T005 after the lane's merge.
 
 ### Lane `wt/008-docs` [P]
 
-- [ ] T008 [P] [US1/US2/US3] `docs/browser-companions.md` (FR-015, operator-facing, ~1
+- [x] T008 [P] [US1/US2/US3] [merged: 80215cb] `docs/browser-companions.md` (FR-015, operator-facing, ~1
       page): what each of the three doctor rows means and how to read its evidence; why
       "could not determine" is a distinct, honest verdict and what to do about it; per
       companion, what the operator does (Yomitan and asbplayer: open the store URL, install,
