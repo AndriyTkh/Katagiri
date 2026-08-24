@@ -260,6 +260,8 @@ PHASE_E_TOOLS: tuple[str, ...] = (
     "lyrics_now",
     "lyrics_context",
     "study_plan",
+    # 007 (additive): infrastructure, not a study phase. D-46.
+    "connection_status",
 )
 
 #: The whole contract as of Phase C: additive-only, and asserted as equality.

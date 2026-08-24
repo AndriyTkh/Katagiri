@@ -781,6 +781,8 @@ CONTRACT_TOOLS = frozenset(
         "screenshot_read",
         "open_anki",
         "study_plan",
+        # 007 (additive): infrastructure, not a study phase. D-46.
+        "connection_status",
     }
 )
 

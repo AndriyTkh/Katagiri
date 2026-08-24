@@ -650,3 +650,19 @@ Check for drift without writing anything:
 - **Side effects**: None — read-only. No row is written and no event is logged.
 - **Example**: `study_plan(include_mastered=False)` → `{"ok": true, "curriculum": [{"id": "te-form", "kind": "grammar", "mastered": false, "mastered_via": null, "reachable": true, "unlock_ready": true, "understanding": "partial", "missing_prereqs": [], "prereqs": ["masu-form"], "attributes": {"irodori_lesson": 6}}], "counts": {"total": 12, "mastered": 4, "reachable_now": 3, "blocked": 5}, "caps": {...}, "note": "This is an informational outlook, not a prescription: start_session remains the single prescriber, and its answer is always one action, never a menu."}`.
 <!-- END HAND: study_plan -->
+
+<!-- BEGIN GENERATED: connection_status -->
+### `connection_status`
+
+- **Name**: `connection_status`
+- **Model-facing description**: Which Katagiri install answered: version, process, resolved data home, config/DB/log paths, and the connected client's identity.
+- **Input schema**:
+  _none_
+- **Output schema**: {status, katagiri_version, python_version, transport, entry_point, pid, cwd, data_home, data_home_source ('default'|'env'), config_path, config_exists, db_path, db_available, log_file_path, client_info{name, version}, secrets{field: 'set'|'unset'}, changed_anything}
+<!-- END GENERATED: connection_status -->
+<!-- BEGIN HAND: connection_status -->
+- **Purpose**: _TODO (T020)_
+- **Error conditions**: _TODO (T020)_
+- **Side effects**: _TODO (T020)_
+- **Example**: _TODO (T020)_
+<!-- END HAND: connection_status -->

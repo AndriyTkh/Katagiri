@@ -153,6 +153,8 @@ CONTRACT_TOOLS = frozenset(
         "lyrics_now",
         "lyrics_context",
         "study_plan",
+        # 007 (additive): infrastructure, not a study phase. D-46.
+        "connection_status",
     }
 )
 
