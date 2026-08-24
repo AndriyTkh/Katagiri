@@ -137,6 +137,14 @@ class Sandbox:
     logs_dir: Path
     seeded: bool = False
     extra_env: dict[str, str] = field(default_factory=dict)
+    #: Variable names deleted from the child environment after the sandbox
+    #: defaults are applied and *before* ``extra_env``/``extra``. Defaults to
+    #: dropping ``KATAGIRI_DATA_HOME`` so a value left over in the gate
+    #: operator's own shell can never leak into a sandboxed child (US5/3: with
+    #: no override, behavior must be the default one). Instance tests add
+    #: ``KATAGIRI_CONFIG`` here, because it outranks the data home by design
+    #: (research D9) and would otherwise mask what they are exercising.
+    env_unset: set[str] = field(default_factory=lambda: {"KATAGIRI_DATA_HOME"})
 
     # -- environment --------------------------------------------------------
 
@@ -151,9 +159,42 @@ class Sandbox:
                 "PYTHONIOENCODING": "utf-8",
             }
         )
+        for name in self.env_unset:
+            env.pop(name, None)
         env.update(self.extra_env)
         env.update(extra)
         return env
+
+    def use_data_home(self, home: str | Path) -> None:
+        """Point this sandbox's children at ``home`` via ``KATAGIRI_DATA_HOME``.
+
+        ``KATAGIRI_CONFIG`` is dropped at the same time: it is the
+        higher-precedence override (research D9), so leaving it set would mean
+        the data home never gets a chance to resolve anything.
+        """
+        self.extra_env["KATAGIRI_DATA_HOME"] = str(home)
+        self.env_unset.add("KATAGIRI_CONFIG")
+
+    def use_default_home(self) -> None:
+        """No instance override at all -- the pre-007 default resolution.
+
+        ``LOCALAPPDATA`` still points at the sandbox, so "the default home"
+        means ``<sandbox>/appdata/Katagiri``; nothing here reaches the real one.
+        """
+        self.extra_env.pop("KATAGIRI_DATA_HOME", None)
+        self.env_unset.update({"KATAGIRI_CONFIG", "KATAGIRI_DATA_HOME"})
+
+    def default_home_entries(self) -> list[str]:
+        """Names of everything sitting in this sandbox's *default* home.
+
+        Empty means the run under test wrote nothing to
+        ``%LOCALAPPDATA%\\Katagiri`` -- the "no silent fallback" claim
+        (FR-014, spec edge case "never silently falls back to the default
+        home").
+        """
+        if not self.katagiri_dir.is_dir():
+            return []
+        return sorted(path.name for path in self.katagiri_dir.iterdir())
 
     # -- content ------------------------------------------------------------
 
