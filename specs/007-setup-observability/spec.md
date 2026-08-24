@@ -122,6 +122,40 @@ record, and per-tool-call lines — and no secret values.
 
 ---
 
+### User Story 5 - Side-by-side instances (Priority: P2)
+
+As the operator, I can install a second, clean instance of the app (e.g. a testing
+branch checked out in a neighbor folder) on the same PC, and both instances work
+independently: each has its own config, database, and logs; each checkout's client
+config launches *its* instance against *its* data; and the diagnostic tool tells me
+unambiguously which instance a client session is talking to. The existing single
+default install keeps working untouched when I do nothing.
+
+**Why this priority**: enables safe testing of setup changes (the whole point of US1)
+against a disposable instance without risking the real study database (constitution
+III: the event log is non-reconstructible).
+
+**Independent Test**: clone the repo into a second folder, install it with a separate
+data home, run both servers, and confirm complete isolation (paths, DBs, logs) plus
+correct per-instance diagnostics.
+
+**Acceptance Scenarios**:
+
+1. **Given** an existing default install, **When** a second checkout is installed with
+   a separate data home, **Then** the default install's config, database, and logs are
+   byte-untouched.
+2. **Given** two installed instances, **When** each checkout's launch chain starts its
+   server, **Then** each server resolves config/db/logs inside its own data home, and
+   the diagnostic tool from each session reports that instance's paths and how the
+   data home was resolved (default vs. override).
+3. **Given** no instance override anywhere, **When** the app runs, **Then** behavior is
+   identical to today (single global data home) — existing installs need no action.
+4. **Given** a second instance's wizard run, **When** it completes, **Then** the
+   instance wiring persists in that checkout (a later client launch from that folder
+   inherits it without re-exporting anything by hand).
+
+---
+
 ### User Story 4 - Held-out stability suite gates the feature (Priority: P2, Gate)
 
 As the operator, I want the feature validated by stability tests that were written
@@ -159,6 +193,13 @@ authored before tasks.md.
   (existing behavior; regression-tested here).
 - Two clients connected to two server instances sharing one log file → records carry
   enough instance identity (pid/session) to tell them apart.
+- Instance override points at a not-yet-existing directory → created on first use (or
+  reported clearly), never a crash.
+- Two checkouts accidentally wired to the SAME data home → allowed (they share state);
+  the diagnostic tool makes the sharing visible instead of hiding it.
+- Instance override set to an invalid value (empty string, relative path) → resolved or
+  rejected with an explicit message; never silently falls back to the default home
+  (silent fallback would risk the real study database).
 
 ## Requirements *(mandatory)*
 
@@ -203,6 +244,18 @@ authored before tasks.md.
   the feature's gate task runs it unmodified.
 - **FR-013**: A short operator doc MUST state where logs live, what each surface records,
   and how to run the install tests and the held-out gate.
+- **FR-014**: The system MUST support a per-instance data home (config + database +
+  logs as one unit) selected by a single override; with no override, the default
+  global location and all existing behavior are unchanged.
+- **FR-015**: The installer MUST accept an instance data home at install time and
+  persist the wiring in that checkout, so subsequent client-config launches from that
+  folder inherit the instance automatically; installing a second instance MUST NOT
+  read or write the first instance's data.
+- **FR-016**: The diagnostic tool MUST report the resolved data home and how it was
+  resolved (default vs. override), so two side-by-side instances are distinguishable
+  in one call.
+- **FR-017**: The install tests and held-out suite MUST cover two-instance isolation:
+  concurrent servers from two data homes never share config, database, or log files.
 
 ### Key Entities
 
@@ -249,3 +302,9 @@ authored before tasks.md.
   tests never register real Windows scheduled tasks.
 - Real vendor-data imports are avoided in install tests where possible (reuse the cached
   JMdict template mechanism); ground-zero behavior stays with `--public-build`.
+- Instance data homes are the operator's choice of location; the recommended location
+  stays under `%LOCALAPPDATA%` (secrets-in-LOCALAPPDATA posture, D-22, matching the
+  existing `KATAGIRI_CONFIG` precedent: an override for tests and advanced setups, not
+  a second secret source).
+- "Multiple instances" means multiple installed copies with separate data, not
+  multi-user features (constitution I unaffected — still one user, one PC).

@@ -18,6 +18,12 @@ state as live for those phases only. Once `kata-bvf` closes, beads becomes a rea
 | `006-teaching-method` | **spec-kit tasks.md** | — (no beads history) |
 | `007-setup-observability` | **spec-kit tasks.md** | — (no beads history) |
 
+Planned (not yet specified): `008-browser-companion-check` — installer doctor detection of
+learner-installed browser companions (Yomitan/asbplayer extensions, mokuro userscript
+reachability) with detect + guide-to-install flow; Chrome forbids silent extension
+installs, so scope is presence check + Web Store handoff + re-check. Deferred until 007
+ships (decided 2026-08-24).
+
 Phase A closed pre-migration; record in docs/dev-plan.md, docs/audit-log.md, closed beads.
 Historical bead IDs survive in tasks as `[was: kata-*]` for traceability.
 

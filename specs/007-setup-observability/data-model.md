@@ -13,6 +13,8 @@ No database entities. Three transient/report shapes; no schema migration (consti
 | entry_point | str | How this process was launched (argv[0] / module). |
 | pid | int | Instance disambiguator (shared-log edge case). |
 | cwd | str | Process working directory. |
+| data_home | str | Resolved instance root (`config_dir()`); distinguishes side-by-side installs. |
+| data_home_source | "default" \| "env" | How the home was resolved (`KATAGIRI_DATA_HOME`). |
 | config_path | str | Resolved path (env override honored). |
 | config_exists | bool | |
 | db_path | str | |

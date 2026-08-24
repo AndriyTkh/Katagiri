@@ -98,10 +98,43 @@ external research tasks were needed. One SDK detail is flagged for in-task verif
 - **Rationale**: "governance first" (006 precedent); one row, two clauses — they share
   one feature and one rationale.
 
+## D9. Side-by-side instances (added 2026-08-24, user instruction mid-planning)
+
+- **Decision**: one new env var **`KATAGIRI_DATA_HOME`**, honored in
+  `config.config_dir()`: when set (absolute path), it replaces
+  `%LOCALAPPDATA%\Katagiri` as the instance root; `logs_dir()` follows automatically
+  (it is `config_dir()/logs`, applog.py:107-114 — **no applog change needed**); the
+  instance's `config.toml` carries its own `db_path`, which the installer writes under
+  the data home. Precedence: `KATAGIRI_CONFIG` (file-specific, exists today) >
+  `KATAGIRI_DATA_HOME` > default. Empty/relative override → explicit `ConfigError`,
+  never a silent fallback to the default home (protects the real study DB).
+- **Installer**: new flag `--data-home PATH` — resolves config/db/logs under PATH for
+  the whole run, and persists `KATAGIRI_DATA_HOME=PATH` into the checkout's
+  `agent/.env` (untracked, per-checkout — the natural instance-wiring file, already
+  read by the bootstrap for `KATAGIRI_PYTHON`/`KATAGIRI_MODULE`). No tracked file is
+  edited, so a testing checkout stays clean.
+- **Bootstrap**: `agent/scripts/setup.py` additionally forwards `KATAGIRI_DATA_HOME`
+  and `KATAGIRI_CONFIG` from `agent/.env` into the server's environment at exec, and
+  writes its own `bootstrap.log` under the resolved data home.
+- **connection_status**: gains `data_home` + `data_home_source` ("default"|"env")
+  fields (contract updated pre-implementation — the tool does not exist yet, so this
+  is not a post-freeze contract change).
+- **Rationale**: single-seam change (one function) isolates everything at once;
+  default path untouched → existing install needs zero action (FR-014); mirrors the
+  documented `KATAGIRI_CONFIG` precedent's D-22 argument verbatim.
+- **Alternatives**: auto-deriving an instance from the checkout path — rejected
+  (changes default behavior for the existing install; magic identity is exactly what
+  connection_status exists to avoid). Editing `.mcp.json` per instance — rejected
+  (tracked file; dirty tree in every testing checkout).
+
 ## D8. Lane split (feeds tasks.md conflict map)
 
 - `wt/007-install-tests`: owns `tests/test_installer_setup.py`, `tests/test_launch_chain.py`.
-- `wt/007-bootstrap`: owns `agent/scripts/setup.py`, `tests/test_bootstrap_log.py`.
+- `wt/007-bootstrap`: owns `agent/scripts/setup.py`, `tests/test_bootstrap_log.py`
+  (bootstrap logging AND instance-env passthrough — same file, same lane).
+- `wt/007-instances`: owns `src/katagiri/config.py`, `src/katagiri/installer.py`,
+  `tests/test_instances.py` (KATAGIRI_DATA_HOME + --data-home). Read-only consumers of
+  config.py (T002) are unaffected — additive function change only.
 - `wt/007-docs`: owns `docs/setup-observability.md`.
 - Serial-on-master: `tool_registry.py`, `mcp_server.py`, `tests/test_connection_status.py`,
   `tests/test_mcp_tools.py` (congruence), `docs/decisions-ledger.md`, gate tasks.

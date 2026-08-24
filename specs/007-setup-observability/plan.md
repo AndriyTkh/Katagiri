@@ -13,8 +13,10 @@ Make the install chain testable and observable: (1) automated tests over
 `LOCALAPPDATA`/`KATAGIRI_CONFIG` sandboxes; (2) file logging for the bootstrap
 launcher + client-identity/lifecycle records in the server log; (3) one additive MCP
 tool `connection_status` (ledger row first) reporting runtime identity, path map, and
-secret-presence flags; (4) a held-out stability suite (authored pre-tasks, invisible to
-implementers) run only at the gate.
+secret-presence flags; (4) side-by-side instances via `KATAGIRI_DATA_HOME` +
+installer `--data-home` (a clean testing checkout in a neighbor folder gets its own
+config/db/logs; default install untouched); (5) a held-out stability suite (authored
+pre-tasks, invisible to implementers) run only at the gate.
 
 ## Technical Context
 
@@ -88,17 +90,19 @@ src/katagiri/
 ├── mcp_server.py        # HOT (serial-on-master): connection_status adapter + logic fn;
 │                        #   client-identity capture at handshake; lifecycle log lines
 ├── tool_registry.py     # HOT (serial-on-master): _INFRA_007_SPECS fragment appended
-├── installer.py         # read-mostly; only if FR-010 log-gap found (expected: none)
-├── config.py            # read-only (config_path/get_config reused)
-└── applog.py            # read-only (logs_dir/log_file_path reused)
+├── installer.py         # lane wt/007-instances: --data-home flag + agent/.env wiring
+├── config.py            # lane wt/007-instances: KATAGIRI_DATA_HOME in config_dir()
+└── applog.py            # read-only (logs_dir follows config_dir — no change)
 
 agent/scripts/
-└── setup.py             # lane wt/007-bootstrap: file logging (bootstrap.log), phases
+└── setup.py             # lane wt/007-bootstrap: file logging (bootstrap.log), phases,
+                         #   instance-env passthrough (KATAGIRI_DATA_HOME/KATAGIRI_CONFIG)
 
 tests/
 ├── test_installer_setup.py   # lane wt/007-install-tests: --yes/--check/wizard paths
 ├── test_launch_chain.py      # lane wt/007-install-tests: .mcp.json chain, mcp group
 ├── test_bootstrap_log.py     # lane wt/007-bootstrap
+├── test_instances.py         # lane wt/007-instances: side-by-side isolation (US5)
 ├── test_connection_status.py # serial-on-master (follows the tool)
 └── test_mcp_tools.py         # serial-on-master: congruence table grows by one
 
@@ -107,10 +111,10 @@ docs/
 └── setup-observability.md    # lane wt/007-docs: operator doc (FR-013)
 ```
 
-**Structure Decision**: single project, existing layout; three worktree lanes
-(`wt/007-install-tests`, `wt/007-bootstrap`, `wt/007-docs`) + serial-on-master tasks for
-the two hot files and `tests/conftest.py`/`test_mcp_tools.py`. Full Workfile & conflict
-map lands in tasks.md.
+**Structure Decision**: single project, existing layout; four worktree lanes
+(`wt/007-install-tests`, `wt/007-bootstrap`, `wt/007-instances`, `wt/007-docs`) +
+serial-on-master tasks for the two hot files and `test_mcp_tools.py`. Full Workfile &
+conflict map lands in tasks.md.
 
 ## Held-out suite protocol (binding on task generation)
 

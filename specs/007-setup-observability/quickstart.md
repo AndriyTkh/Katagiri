@@ -61,7 +61,21 @@ git log --oneline -- specs/007-setup-observability/holdout/
 Expected: only the authoring commit (plus merge commits touching nothing inside).
 A default `uv run pytest` must collect zero holdout tests (`testpaths=["tests"]`).
 
-## 6. Mutation demonstration (SC-001, one-off at gate)
+## 6. Side-by-side instances (US5)
+
+```bash
+uv run pytest tests/test_instances.py -q
+```
+
+Expected: `KATAGIRI_DATA_HOME` isolates config/logs; installer `--data-home` writes
+config+db under the given home and persists the wiring in `agent/.env`; two sandboxed
+instances run concurrently with zero shared files; `connection_status` from each
+reports its own `data_home` with `data_home_source: "env"`. Manual check: clone the
+repo to a neighbor folder, run `setup.bat -- --data-home <path>` there, open a client
+session in each folder, call `connection_status` in both — different `data_home`,
+different `db_path`, and the original install's files untouched.
+
+## 7. Mutation demonstration (SC-001, one-off at gate)
 
 In a sandbox, break one wizard precondition (e.g. point `KATAGIRI_CONFIG` at a directory
 whose vendor data is absent) and run the doctor: exit code non-zero, failing step named.

@@ -25,6 +25,8 @@ None.
   "entry_point": "katagiri.mcp_server (python -m) | .venv\\Scripts\\katagiri-mcp.exe",
   "pid": 12345,
   "cwd": "C:\\ProjectsC\\RandomPr\\Katagiri",
+  "data_home": "C:\\Users\\me\\AppData\\Local\\Katagiri",
+  "data_home_source": "default",
   "config_path": "C:\\Users\\me\\AppData\\Local\\Katagiri\\config.toml",
   "config_exists": true,
   "db_path": "C:\\Users\\me\\AppData\\Local\\Katagiri\\katagiri.db",
@@ -46,4 +48,8 @@ None.
 3. Read-only: `changed_anything` is always `false`; no file, DB, or network mutation.
 4. Paths reflect the answering process's actual resolution (env overrides honored), so
    two instances launched from different sandboxes return different maps.
+   `data_home` is the resolved instance root (config + logs live under it);
+   `data_home_source` is `"default"` when no override is set, `"env"` when
+   `KATAGIRI_DATA_HOME` selected it — two side-by-side installs are distinguishable
+   by `data_home` alone (FR-016).
 5. Response time < 5 s (in practice: milliseconds; DB check is a bounded open attempt).
