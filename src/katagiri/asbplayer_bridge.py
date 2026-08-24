@@ -562,7 +562,118 @@ class AsbplayerBridgeServer:
         """
         app = web.Application(client_max_size=MAX_WS_MESSAGE_BYTES)
         app.router.add_get(WS_PATH, self._handle_ws)
+        app.router.add_post(
+            "/disconnect-ws-clients", self._handle_disconnect_ws_clients
+        )
+        app.router.add_post(
+            "/asbplayer/load-subtitles", self._handle_load_subtitles
+        )
+        app.router.add_post("/asbplayer/seek", self._handle_seek)
+        app.router.add_get("/asbplayer/bound-media", self._handle_bound_media)
+        app.router.add_get("/asbplayer/subtitles", self._handle_subtitles)
+        app.router.add_get(
+            "/asbplayer/playback-state", self._handle_playback_state
+        )
         return app
+
+    # -- the six relay routes (research.md R1.3/R1.4) ----------------------
+
+    async def _read_json_body(self, request: web.Request) -> Any:
+        """Parse the request body as JSON, or raise the 400 both POST relays
+        answer on an unparsable body (``main.go:320-324``/``345-349``)."""
+        raw = await request.read()
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+
+    async def _await_or_500(self, command: ClientCommand) -> ClientResponse:
+        """Publish-and-await, turning "no answer" (deadline or no client) into
+        the 500 every relay endpoint answers for that case (``main.go:332-335``
+        style ``ok`` checks)."""
+        response = await self.publish_and_await_async(command)
+        if response is None:
+            raise web.HTTPInternalServerError()
+        return response
+
+    async def _handle_disconnect_ws_clients(self, request: web.Request) -> web.Response:
+        """``POST /disconnect-ws-clients``: close and forget every client;
+        200 with an empty body (``main.go:430-439``)."""
+        await self.disconnect_all_clients()
+        return web.Response(status=200, text="")
+
+    async def _handle_load_subtitles(self, request: web.Request) -> web.Response:
+        """``POST /asbplayer/load-subtitles``: body ``{"files": [...]}`` ->
+        ``load-subtitles``; reply awaited and its body discarded — 200 with an
+        **empty string** body, not JSON (``main.go:316-339``)."""
+        body = await self._read_json_body(request)
+        files = body.get("files") if isinstance(body, dict) else None
+        command = ClientCommand.new("load-subtitles", {"files": files})
+        await self._await_or_500(command)
+        return web.Response(status=200, text="")
+
+    async def _handle_seek(self, request: web.Request) -> web.Response:
+        """``POST /asbplayer/seek``: body ``{"timestamp": float, "mediaId":
+        str}`` -> ``seek-timestamp``; ``mediaId`` only when non-empty; reply
+        awaited and discarded — 200 with an empty string body
+        (``main.go:341-370``). ``timestamp`` is seconds, never normalized to
+        the playback-state reply's milliseconds (research.md R1.3 units
+        caution)."""
+        body = await self._read_json_body(request)
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="expected a JSON object")
+        command_body: dict[str, Any] = {"timestamp": body.get("timestamp")}
+        media_id = body.get("mediaId")
+        if media_id:
+            command_body["mediaId"] = media_id
+        command = ClientCommand.new("seek-timestamp", command_body)
+        await self._await_or_500(command)
+        return web.Response(status=200, text="")
+
+    async def _handle_bound_media(self, request: web.Request) -> web.Response:
+        """``GET /asbplayer/bound-media`` -> ``get-bound-media``; 200 with the
+        reply's ``body`` relayed verbatim as a raw JSON blob, never inspected
+        (``main.go:372-383``)."""
+        command = ClientCommand.new("get-bound-media", {})
+        response = await self._await_or_500(command)
+        return _json_blob(response.body)
+
+    async def _handle_subtitles(self, request: web.Request) -> web.Response:
+        """``GET /asbplayer/subtitles``: optional query ``mediaId`` (non-empty)
+        and ``trackNumbers`` (comma-separated, non-numeric entries dropped,
+        key present only if at least one parsed) -> ``get-subtitles``; 200 with
+        the reply's ``body`` relayed verbatim (``main.go:385-411``)."""
+        command_body: dict[str, Any] = {}
+        media_id = request.query.get("mediaId")
+        if media_id:
+            command_body["mediaId"] = media_id
+        raw_track_numbers = request.query.get("trackNumbers")
+        if raw_track_numbers:
+            parsed: list[int] = []
+            for token in raw_track_numbers.split(","):
+                try:
+                    parsed.append(int(token.strip()))
+                except ValueError:
+                    continue
+            if parsed:
+                command_body["trackNumbers"] = parsed
+        command = ClientCommand.new("get-subtitles", command_body)
+        response = await self._await_or_500(command)
+        return _json_blob(response.body)
+
+    async def _handle_playback_state(self, request: web.Request) -> web.Response:
+        """``GET /asbplayer/playback-state``: optional query ``mediaId`` (non-
+        empty) -> ``get-playback-state``; 200 with the reply's ``body`` relayed
+        verbatim (``main.go:413-428``). The reply's own units are integer
+        milliseconds — never normalized here (research.md R1.3 units
+        caution)."""
+        command_body: dict[str, Any] = {}
+        media_id = request.query.get("mediaId")
+        if media_id:
+            command_body["mediaId"] = media_id
+        command = ClientCommand.new("get-playback-state", command_body)
+        response = await self._await_or_500(command)
+        return _json_blob(response.body)
 
     async def _start_site(self, host: str, port: int) -> tuple[str, int]:
         runner = web.AppRunner(
@@ -828,6 +939,19 @@ class AsbplayerBridgeServer:
                 "*_async variant instead of the blocking wrapper"
             )
         return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
+
+
+def _json_blob(body: Any) -> web.Response:
+    """200 with ``body`` re-serialized as the whole response, never inspected.
+
+    ``body`` is already the decoded JSON value from the client's reply
+    (``parse_client_response``) — an object, array, number, string, bool, or
+    ``None``. Re-encoding it is a byte-identical round trip for JSON's
+    canonical values and is what Go's ``c.JSONBlob`` achieves by writing the
+    original bytes back out; there is nothing here that looks at what kind of
+    value ``body`` is, including an error object (research.md R1.4).
+    """
+    return web.json_response(body)
 
 
 def _first_address(
