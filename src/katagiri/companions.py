@@ -67,11 +67,23 @@ query that supplies neither is reported as "Firefox not covered" rather than
 contributing an ``absent`` -- see :class:`ExtensionQuery.firefox_ids` /
 ``firefox_names`` and :func:`_firefox_covered_for`.
 
-The catalog of real companion ids, install URLs and handoff text is *not*
-here; it arrives with 008 T003. This module is the parameterised engine, so
-that the ids live in exactly one place and the detection logic can be tested
-against synthetic profile trees (every entry point takes an injectable
-``env`` mapping and an injectable clock).
+The catalog of real companion ids, install URLs and handoff text lives below
+(008 T003), each entry carrying a comment citing research.md R5 as its
+provenance so a re-verification is a one-file edit. This module is the
+parameterised engine plus that catalog, so the ids live in exactly one place
+and the detection logic can be tested against synthetic profile trees (every
+entry point takes an injectable ``env`` mapping and an injectable clock).
+
+The mokuro row (T003) is deliberately not built from :class:`ExtensionQuery`
+at all: research.md R3 found that "probe the bridge and see if the userscript
+answers" is not a coherent installer-time check (the bridge is not started by
+the MCP server and is not running during an install), so
+:func:`mokuro_companion_status` reports *configuration readiness* instead --
+whether ``mokuro_shared_secret`` is set (presence only, never the value: spec
+FR-014) and whether the pinned loopback port is free or occupied via a bare
+``socket.create_connection`` (never an HTTP client, per this module's
+no-HTTP-client rule above; the probe is wrapped in ``except OSError`` and
+never treats a free port as evidence the userscript is missing).
 """
 
 from __future__ import annotations
@@ -79,6 +91,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -110,6 +123,17 @@ __all__ = [
     "scan_browsers",
     "detect_extensions",
     "detect_extension",
+    "CompanionCatalogEntry",
+    "YOMITAN_QUERY",
+    "ASBPLAYER_QUERY",
+    "EXTENSION_QUERIES",
+    "YOMITAN_ENTRY",
+    "ASBPLAYER_ENTRY",
+    "MOKURO_ENTRY",
+    "COMPANION_CATALOG",
+    "render_handoff",
+    "probe_mokuro_bridge_port",
+    "mokuro_companion_status",
 ]
 
 # --------------------------------------------------------------------------
@@ -902,3 +926,235 @@ def detect_extension(
     """Single-companion convenience wrapper around :func:`detect_extensions`."""
     rows, _ = detect_extensions([query], env=env, budget=budget, clock=clock)
     return rows[0]
+
+
+# --------------------------------------------------------------------------
+# Catalog and handoff text (research.md R5)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CompanionCatalogEntry:
+    """One operator-facing catalog row: identity, install target(s), steps.
+
+    ``query`` is the :class:`ExtensionQuery` this companion is detected with,
+    or ``None`` for mokuro, which has no browser-extension id at all -- its
+    row comes from :func:`mokuro_companion_status` instead (research.md R3).
+    ``url``/``firefox_url`` are the official store listings; either may be
+    ``None`` when that browser's variant is not covered (see the module
+    docstring's Firefox paragraph, research.md R2/O-3) or, for mokuro, because
+    no store listing and no shipped file exist at all (research.md O-5).
+    """
+
+    name: str
+    query: ExtensionQuery | None
+    url: str | None
+    firefox_url: str | None
+    steps: tuple[str, ...]
+
+
+# Chrome Web Store id and listing URL verified by web lookup 2026-08-24
+# (research.md R5, table row "Yomitan (Chrome/Chromium)"). Firefox coverage is
+# matched by display name only: the AMO listing's *internal* add-on id was not
+# verified against a real profile (research.md R2, open item O-3), so
+# ``firefox_ids`` is deliberately left empty here rather than guessed.
+YOMITAN_QUERY: Final = ExtensionQuery(
+    name="Yomitan",
+    chromium_ids=("likgccmbimhjbgkjambclfkhldnlhbnn",),
+    firefox_names=("Yomitan",),
+    optional=True,
+)
+
+# Chrome Web Store id and listing URL verified by web lookup 2026-08-24
+# (research.md R5, table row "asbplayer (Chrome/Chromium)"). No Firefox id or
+# name is supplied: asbplayer's Firefox story was left explicitly
+# "unknown/not covered" rather than guessed at (research.md R2).
+ASBPLAYER_QUERY: Final = ExtensionQuery(
+    name="asbplayer",
+    chromium_ids=("hkledmpjpaehamkiehglnbelcpdflcab",),
+    optional=True,
+)
+
+#: Every companion this module knows how to *detect* via a browser-extension
+#: id. Mokuro is intentionally absent from this tuple -- see
+#: :func:`mokuro_companion_status`.
+EXTENSION_QUERIES: Final[tuple[ExtensionQuery, ...]] = (YOMITAN_QUERY, ASBPLAYER_QUERY)
+
+# URL verified by web lookup 2026-08-24 (research.md R5). Steps are the
+# ordinary "install a browser extension from its official listing" flow --
+# nothing companion-specific, because Yomitan needs nothing beyond that to
+# start working.
+YOMITAN_ENTRY: Final = CompanionCatalogEntry(
+    name="Yomitan",
+    query=YOMITAN_QUERY,
+    url="https://chromewebstore.google.com/detail/yomitan/likgccmbimhjbgkjambclfkhldnlhbnn",
+    firefox_url="https://addons.mozilla.org/firefox/addon/yomitan/",
+    steps=(
+        "Open the install URL above in your browser.",
+        "Click \"Add to Chrome\" (or \"Add to Firefox\" for the Firefox URL).",
+        "Confirm the permission prompt the browser shows.",
+        "Reload any already-open tabs where you want Yomitan active.",
+    ),
+)
+
+# URL verified by web lookup 2026-08-24 (research.md R5). No Firefox URL:
+# research.md R2 leaves asbplayer's Firefox variant explicitly not covered
+# rather than guessed at, so ``firefox_url`` stays ``None`` here too.
+ASBPLAYER_ENTRY: Final = CompanionCatalogEntry(
+    name="asbplayer",
+    query=ASBPLAYER_QUERY,
+    url="https://chromewebstore.google.com/detail/asbplayer-language-learni/hkledmpjpaehamkiehglnbelcpdflcab",
+    firefox_url=None,
+    steps=(
+        "Open the install URL above in your browser.",
+        "Click \"Add to Chrome\".",
+        "Confirm the permission prompt the browser shows.",
+        "Reload any already-open tabs on the streaming/subtitle site you use it with.",
+    ),
+)
+
+# research.md R5 ("mokuro userscript" row: "no store listing -- userscript-
+# manager setup steps") and O-5: this repository ships no ``.user.js`` file,
+# so both URLs are ``None`` on purpose -- the handoff below says that
+# plainly instead of implying a file exists to link.
+MOKURO_ENTRY: Final = CompanionCatalogEntry(
+    name="mokuro page-change bridge",
+    query=None,
+    url=None,
+    firefox_url=None,
+    steps=(
+        "Install a userscript manager extension in your browser (for example "
+        "Tampermonkey or Violentmonkey) -- this is itself a browser extension, "
+        "so it is not something Katagiri can install or detect for you.",
+        "This repository does not ship a mokuro page-change userscript file "
+        "(research.md O-5). Write or obtain one (it is short: mokuro-reader "
+        "already fires a `mokuro-reader:page.change` browser event; the "
+        "script only needs to POST it to "
+        f"http://127.0.0.1:{MOKURO_BRIDGE_PORT}/mokuro/page-change).",
+        "Set the request header X-Katagiri-Mokuro-Secret on that POST to the "
+        "same value as this machine's mokuro_shared_secret config key.",
+        "If mokuro_shared_secret is not yet set in config.toml, set it first "
+        "-- the bridge rejects every request, from any script, until it is.",
+    ),
+)
+
+#: Every companion this module has a catalog entry for, in the order the
+#: doctor prints them (research.md R5's table order).
+COMPANION_CATALOG: Final[tuple[CompanionCatalogEntry, ...]] = (
+    YOMITAN_ENTRY,
+    ASBPLAYER_ENTRY,
+    MOKURO_ENTRY,
+)
+
+
+def render_handoff(entry: CompanionCatalogEntry) -> str:
+    """The install-handoff text for one catalog entry (spec FR-005).
+
+    Plain ASCII, no emoji (installer.py's stated output rule) -- the URL(s)
+    first, then the numbered manual steps the operator performs in their own
+    browser. Katagiri does not act on any of these steps itself (spec FR-006);
+    this function only renders text.
+    """
+    lines: list[str] = []
+    if entry.url:
+        lines.append(f"Install (Chrome/Chromium): {entry.url}")
+    if entry.firefox_url:
+        lines.append(f"Install (Firefox): {entry.firefox_url}")
+    if not entry.url and not entry.firefox_url:
+        lines.append(
+            "No store listing and no file ship with this repository for "
+            f"{entry.name}; follow the setup steps below."
+        )
+    for i, step in enumerate(entry.steps, start=1):
+        lines.append(f"  {i}. {step}")
+    return _ascii("\n".join(lines))
+
+
+# --------------------------------------------------------------------------
+# mokuro: configuration readiness, not liveness (research.md R3)
+# --------------------------------------------------------------------------
+
+
+def probe_mokuro_bridge_port(
+    *,
+    host: str = "127.0.0.1",
+    port: int = MOKURO_BRIDGE_PORT,
+    timeout: float = 0.2,
+) -> bool:
+    """Whether anything is already accepting connections on the loopback port.
+
+    A bare socket connect, never an HTTP request -- this module carries no
+    HTTP client (see the module docstring's "No HTTP client" rule) and this
+    is exactly the shape ``asbplayer_launch.bridge_port_is_occupied`` already
+    uses for the same question about a different port. ``port`` and ``host``
+    are keyword-only and injectable so tests can bind an ephemeral port and
+    probe *that* -- the real pinned 8767 must never be bound by a test
+    (research.md R3, mirroring ``tests/test_media_mokuro.py``'s ``port=0``
+    discipline).
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def mokuro_companion_status(
+    cfg: Any,
+    *,
+    host: str = "127.0.0.1",
+    port: int = MOKURO_BRIDGE_PORT,
+    timeout: float = 0.2,
+    optional: bool = True,
+) -> CompanionStatus:
+    """Report the mokuro bridge's configuration readiness, never its liveness.
+
+    ``cfg`` is anything exposing a ``mokuro_shared_secret`` attribute (a
+    loaded :class:`katagiri.config.Config`, or a test double) -- only its
+    *presence* is reported, per FR-014 and the installer's existing
+    "(set)/(unset)" idiom (installer.py's status-line convention); the value
+    itself never appears in the returned :class:`CompanionStatus`, in an
+    exception message, or anywhere else.
+
+    Verdict: :data:`VERDICT_ABSENT` when the secret is unset, because the
+    bridge then fails closed for every request regardless of what is
+    happening on the port -- this is the one real, actionable gap (spec Edge
+    Cases). :data:`VERDICT_PRESENT` when the secret is set, meaning the
+    bridge is *configured*; this says nothing about whether a live study
+    session or the userscript exist right now, and the detail text says so.
+
+    The port state (free / occupied) is reported either way, worded so a free
+    port reads as the expected, ordinary state outside a live session -- the
+    bridge is only ever started for the duration of one study session, not by
+    the installer -- and never as "the learner has not installed the
+    userscript" (spec FR-010). An occupied port is reported as occupied by
+    *something*, never as "bridge healthy": this function makes no HTTP
+    request and so cannot tell what is listening.
+    """
+    secret = getattr(cfg, "mokuro_shared_secret", None)
+    secret_set = bool(secret)
+    occupied = probe_mokuro_bridge_port(host=host, port=port, timeout=timeout)
+
+    if occupied:
+        port_note = (
+            f"port {port} is occupied by something -- possibly the bridge "
+            "already running for a live study session, possibly an unrelated "
+            "process; a plain socket connect cannot tell which"
+        )
+    else:
+        port_note = (
+            f"port {port} is free, which is the expected state outside a live "
+            "study session -- the bridge is only hosted for the duration of "
+            "one session, not by the installer, so a free port here does not "
+            "mean the userscript was never installed"
+        )
+
+    if not secret_set:
+        detail = _ascii(
+            "mokuro_shared_secret is (unset) in config.toml; the bridge fails "
+            f"closed and rejects every request until it is set. {port_note}."
+        )
+        return CompanionStatus(MOKURO_ENTRY.name, VERDICT_ABSENT, detail, optional)
+
+    detail = _ascii(f"mokuro_shared_secret is (set); {port_note}.")
+    return CompanionStatus(MOKURO_ENTRY.name, VERDICT_PRESENT, detail, optional)
