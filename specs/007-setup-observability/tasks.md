@@ -271,6 +271,19 @@ task, escalate to orchestrator (do not fix inside the lane).
       tests/test_installer_setup.py (extend only).
       **Read**: T005 findings above, src/katagiri/installer.py:328-348 + 1321-1377.
 
+- [x] T017 [US2] (orchestrator-filed at TG2 close; commit 19d00b9) Integrate
+      connection_status into cross-feature contract surfaces: regen
+      docs/assignment/tool-contracts.md via scripts/gen_tool_contracts.py; add
+      connection_status to the frozen handshake tool sets in tests/test_averify.py,
+      tests/test_bverify.py, tests/test_cverify.py (additive, D-46). Fixes 6 of the 8
+      TG2-close failures.
+- [x] T018 [Gate] (orchestrator-filed at TG2 close; resolved as **D-47**, commit 4a3b7d1)
+      test_averify/test_cverify HTTP-client invariant failures: urllib.request found in
+      src/katagiri/irodori_import.py + vendor_fetch.py. Investigation confirmed both
+      pre-existing (commits 5002422 / e0f5b64, pre-007). Resolution per user decision:
+      both files added to HTTP_CLIENT_ALLOWLIST in test_bverify.py + test_cverify.py as
+      deliberate consent-gated setup-time fetchers; ledger row D-47 + audit-log entry.
+
 **Checkpoint**: all TG2 tasks merged to master + full suite green → TG3.
 
 ---
