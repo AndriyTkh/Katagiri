@@ -162,7 +162,7 @@ exist.
 
 ### Lane `wt/009-bridge` [P] (strict order T003 → T004 → T005 → T006)
 
-- [ ] T003 [in-progress: wt/009-bridge] [P] [US1] Create `src/katagiri/asbplayer_bridge.py` — the transport core.
+- [x] T003 [merged: fef1747, lane commit f0f6afe] [P] [US1] Create `src/katagiri/asbplayer_bridge.py` — the transport core.
       An `aiohttp` `web.Application` served on a **private asyncio loop running on a daemon
       thread**, with `start(host, port)` returning the bound address and an explicit
       `stop()` that closes the site and joins the thread (plan.md decision 9; FR-012 — a
@@ -199,7 +199,7 @@ exist.
       src/katagiri/media_asbplayer.py:130-190 (the client's constants and expectations —
       READ ONLY, MUST NOT CHANGE).
 
-- [ ] T004 [P] [US1] Add the six relay routes to `src/katagiri/asbplayer_bridge.py`:
+- [x] T004 [merged: fef1747, lane commit 75ba699] [P] [US1] Add the six relay routes to `src/katagiri/asbplayer_bridge.py`:
       `POST /asbplayer/load-subtitles`, `POST /asbplayer/seek`,
       `GET /asbplayer/bound-media`, `GET /asbplayer/subtitles`,
       `GET /asbplayer/playback-state`, and `POST /disconnect-ws-clients` — paths, methods,
@@ -223,7 +223,7 @@ exist.
       src/katagiri/media_asbplayer.py:180-320 (what the client actually sends and expects —
       READ ONLY).
 
-- [ ] T005 [P] [US2] Add the AnkiConnect proxy to `src/katagiri/asbplayer_bridge.py`:
+- [x] T005 [merged: fef1747, lane commit 10a7dde] [P] [US2] Add the AnkiConnect proxy to `src/katagiri/asbplayer_bridge.py`:
       `GET /`, `POST /`, `OPTIONS /`. Byte-exact passthrough (FR-007) — copy **every**
       request header, pass the body through unmodified, return the upstream **status,
       headers, and body** unchanged. The outbound leg is `http.client` in a worker thread
@@ -254,7 +254,7 @@ exist.
       FR-008, FR-017), `main.go` lines 170-314 (READ ONLY),
       src/katagiri/media_asbplayer.py:242-315 (the `http.client` house pattern — READ ONLY).
 
-- [ ] T006 [P] [US1/US2/US3] `tests/test_asbplayer_bridge.py` (general group): drive the
+- [x] T006 [merged: fef1747, lane commit 011f1e4; 50 passed, 0 xfail, no product bugs] [P] [US1/US2/US3] `tests/test_asbplayer_bridge.py` (general group): drive the
       real server over a **real loopback socket on an ephemeral port** (`port=0`, never
       8766 — binding rule 4), with a scripted WebSocket client standing in for the extension
       and a stub AnkiConnect upstream (also on an ephemeral port). Every command, endpoint,
@@ -311,7 +311,7 @@ exist.
 
 ### Serial-on-main track (strict order T007 → T009 → T010)
 
-- [ ] T007 [US1/US3/US4] Rewrite `src/katagiri/asbplayer_launch.py` to host the bridge, and
+- [ ] T007 [in-progress: serial-main] [US1/US3/US4] Rewrite `src/katagiri/asbplayer_launch.py` to host the bridge, and
       rewrite `tests/test_asbplayer_launch.py` with it (both in one task — the test file is
       a point-for-point mirror of the module's contract and splitting them would leave the
       tree red between two commits). **Keep every public name and signature**:
