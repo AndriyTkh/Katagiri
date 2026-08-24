@@ -18,6 +18,7 @@ state as live for those phases only. Once `kata-bvf` closes, beads becomes a rea
 | `006-teaching-method` | **spec-kit tasks.md** | — (no beads history) |
 | `007-setup-observability` | **spec-kit tasks.md** | — (no beads history) |
 | `008-browser-companion-check` | **spec-kit tasks.md** | — (no beads history) |
+| `009-asbplayer-bridge-in-process` | **spec-kit tasks.md** | — (no beads history) |
 
 `008-browser-companion-check` — installer doctor detection of learner-installed browser
 companions (Yomitan/asbplayer extensions, mokuro bridge readiness) with a detect +
@@ -26,23 +27,20 @@ check + Web Store handoff + re-check; no MCP tool, no schema change. Specified
 2026-08-24 (spec/plan/research/quickstart/tasks; no data-model, no holdout — plan.md
 §Deliberate omissions records why).
 
-Planned (not yet specified): `009-asbplayer-bridge-in-process` — replace the Go
-WebSocket bridge (`asbplayer_launch.py` runs `go run main.go` from the configured
-checkout; requires Go on PATH) with a Python WS server inside Katagiri hosting
-`ws://127.0.0.1:8766/ws` directly. Feasibility audit 2026-08-24 (local bridge source,
-490 LOC, stock upstream 1.20.2 + one local commit `37495e22` = F-05 playback-state +
-HOST bind): positive — protocol is 6 server→client JSON commands correlated by
-messageId (5s timeout), 5 thin HTTP endpoints, app-level text "PING"/"PONG";
-~300-line Python (`websockets` + aiohttp/httpx) covers it. MUST carry over: the
-bridge's AnkiConnect proxy on `POST /` with addNote-intercept mining (extension may
-point its Anki URL at :8766) and exact header/body passthrough. Upstream research
-closed 2026-08-24: repo moved to github.com/asbplayer/asbplayer; v1.20.2 is still the
-latest release (no releases since); issue #1087 is an OPEN unmerged proposal (WS media
-targeting / note updates / event subscription / capability handshake — no playback-state
-overlap, no linked PRs), so 1.20.2 + local commit 37495e22 remains the correct protocol
-baseline. Caveat: no canonical WS protocol doc could be fetched, so "no other drift" is
-best-effort from release notes; re-check #1087 before 009 ships. Deferred until 007
-ships (007 shipped 2026-08-24; 009 unblocked, runs after 008).
+`009-asbplayer-bridge-in-process` — retire the external Go WebSocket bridge
+(`asbplayer_launch.py` runs `go run main.go` from a configured checkout and needs Go on
+PATH) and host `ws://127.0.0.1:8766/ws` inside Katagiri instead. Clean cutover: one new
+aiohttp-backed module reimplements the bridge's protocol — six server→client JSON
+commands correlated by `messageId` (5 s deadline), five relay endpoints, text
+`PING`/`PONG`, plus the AnkiConnect proxy on `POST /` with addNote-intercept mining and
+byte-exact passthrough. Protocol frozen at asbplayer 1.20.2 + local commit `37495e22`
+(F-05 playback-state + HOST bind), transcribed with `main.go` line citations in
+research.md; upstream issue #1087 is open/unmerged and re-checked before shipping.
+Zero MCP contract growth, `media_asbplayer.py` untouched. An in-process listener needs
+`HTTP_SERVER_ALLOWLIST` (and likely `HTTP_CLIENT_ALLOWLIST`) entries and a new runtime
+dependency — both escalated to the user under D-47 precedent, not pre-decided. Specified
+2026-08-24 (spec/plan/research/quickstart/tasks; no data-model, no contracts, no holdout —
+plan.md §Deliberate omissions records why, and what differential gate replaces it).
 
 Phase A closed pre-migration; record in docs/dev-plan.md, docs/audit-log.md, closed beads.
 Historical bead IDs survive in tasks as `[was: kata-*]` for traceability.
