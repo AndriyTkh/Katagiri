@@ -69,7 +69,7 @@ owns the launcher, the hot file, and the gated allowlist edit — file-disjoint 
 
 ## Taskgroup TG1: Governance (serial, blocks everything)
 
-- [ ] T001 [Gate] File the 009 decisions-ledger row in `docs/decisions-ledger.md`
+- [x] T001 [Gate] (D-50, commit 76538b5; all four escalations answered by user 2026-08-24 and recorded verbatim: server allowlist APPROVED, client allowlist APPROVED (http.client leg), aiohttp APPROVED (>=3.10,<4), zero-MCP-growth CONFIRMED doctor-row-only) File the 009 decisions-ledger row in `docs/decisions-ledger.md`
       (**expected D-50 — CONFIRM the actual next number at execution time**:
       `grep '^| D-' docs/decisions-ledger.md | tail -3`; this draft was written when D-49
       was last, and 007's T001 drafted D-39 but landed as D-46, so a stale number is the
