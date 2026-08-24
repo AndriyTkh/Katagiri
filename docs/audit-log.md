@@ -1543,3 +1543,67 @@ about it registers a tool or changes what `registered_tools()` returns.
 **Net effect**: no contract change on either side. `study_plan` is a new, additive, informational
 ToolSpec; the CLI mode is a new operator-only invocation path for code that already existed and
 was already tested, with the MCP exclusion for that same code left exactly as it was.
+
+---
+
+## 007 TG1 — connection_status + holdout governance (2026-08-24)
+
+Session date: 2026-08-24. Filed as ledger row D-46, before implementation, covering three
+points from the 007 setup-observability plan's TG1 gate.
+
+**Point (a) — `connection_status`, additive tool, 26 → 27.** Contract lives at
+`specs/007-setup-observability/contracts/connection_status.md`. It takes no arguments and returns
+process identity (version, pid, cwd, entry point, transport), resolved paths (data home, config,
+DB, log file — reflecting the *answering* process's actual env-override resolution, not a
+hardcoded default), client identity when available, and a secrets **presence** map keyed by
+secret name with values restricted to the literal strings `"set"`/`"unset"` — never the secret
+itself. `changed_anything` is hardcoded `false`; the behavioral guarantees section requires it
+never raise on a missing config file, a locked/unreachable DB, or absent client identity — those
+degrade to `config_exists: false` / `db_available: false` / an `"unknown"` client rather than an
+exception. Judged against D-24 (the standing additive-tool-change test): no existing ToolSpec's
+argument or return contract is touched, so this is a pure addition, not a breaking or ambiguous
+change to anything already shipped. Judged against constitution VII: the tool is read-only,
+mutates nothing, and the contract is explicit that it is "stable once merged" (additive-only
+afterwards) — so it is VII-compliant on arrival and needs no separate constitution bump to land.
+
+**Point (b) — held-out-suite governance, made explicit rather than assumed.** The 007 held-out
+module (`specs/007-setup-observability/holdout/`) was authored in two pre-tasks commits
+(77792d9 "test(007): author held-out stability suite", 4cedd6e "test(007): author held-out instances
+stability module") *before* `/speckit-tasks` generated `tasks.md` — by design, so no
+implementation task's shape could leak into the validation data meant to check it. Per
+`plan.md`'s "Held-out suite protocol" section, the directory sits outside `tests/`, so ordinary
+`uv run pytest` never collects it; it runs only from the dedicated gate task
+(`uv run pytest specs/007-setup-observability/holdout -q`), and every other implementation task's
+Read list and dispatch prompt explicitly excludes `holdout/` paths, this task's own dispatch
+included. The governance rule this row records for the record: a held-out test failing means the
+*implementation* is wrong and gets fixed — the held-out test itself is never edited to make it
+pass; changing a held-out test requires an explicit user decision, recorded in the gate task text,
+not a unilateral call by whichever session is running the gate.
+
+**Point (c) — side-by-side instances, `KATAGIRI_DATA_HOME`.** Two installed copies of Katagiri on
+one machine currently collide on `%LOCALAPPDATA%\Katagiri` (config, DB, logs) — there is no way to
+point a second instance elsewhere. The fix mirrors a precedent already on the books rather than
+inventing a new mechanism: D-22 established `KATAGIRI_CONFIG` as an environment override for
+`config_path()` (`config.py:185-199`) that is used verbatim when set and leaves the default
+`%LOCALAPPDATA%\Katagiri\config.toml` path untouched when unset — "does not add a second secret
+source or move anything out of `%LOCALAPPDATA%`," per that function's own docstring
+(`config.py:188-194`). `KATAGIRI_DATA_HOME` extends the identical argument one level up, to
+`config_dir()` itself, so an override there relocates config, DB, *and* logs together as one
+instance root instead of overriding them independently. The installer's new `--data-home` flag is
+the operator-facing way to set that override durably: it persists the chosen path into
+`agent/.env`, the same file the agent process already reads its environment from, rather than
+requiring the operator to set the environment variable by hand every launch. `connection_status`
+(point a) is what makes the result checkable: its `data_home`/`data_home_source` fields
+(`"default"` vs `"env"`) let two side-by-side instances be told apart by which data home each one
+actually resolved to. None of this touches Constitution I — multiple installed copies are still
+multiple copies of a single-user tool, not a multi-tenant server; nothing here adds per-request
+tenant isolation, auth, or a shared-state assumption that Constitution I would forbid.
+
+**Judgment call — no constitution bump.** `connection_status` is additive, read-only, and already
+matches constitution VII's additive-only-after-merge stability rule on day one; the
+`KATAGIRI_DATA_HOME`/`--data-home` change is additive and default-preserving under the same D-22
+reasoning already accepted for `KATAGIRI_CONFIG`; the held-out-suite rule formalizes a process
+already in effect (commits already made, plan section already written) rather than changing any
+shipped behavior. None of the three points removes a guarantee, widens the threat model, or
+changes what "one user" means — so this row is filed as a plan-level decision, not a constitution
+amendment.
