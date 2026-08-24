@@ -1650,3 +1650,56 @@ alive, which is what the new `direct_child_pids()` holdout helper (`holdout/conf
 automates. User decision to amend the two asserts (accept `Popen.pid` or one of its direct
 children) is recorded in `specs/007-setup-observability/tasks.md` T021 and filed as D-48 in
 `docs/decisions-ledger.md`. No other held-out assertion was touched.
+
+## 008 TG1 — browser companion detection boundaries (2026-08-24)
+
+Filed before any 008 code task, mirroring 007's T001 pattern (ledger-first discipline). Read
+research.md R3/R4/R6/R7 and plan.md's Constitution Check and Key design decisions to confirm
+these are binding decisions, not implementation notes:
+
+- **Zero MCP contract growth.** 008 registers no ToolSpec and changes none — plan.md's
+  Constitution Check marks Principle VII PASS on exactly this basis, calling it "the strongest
+  form of additive only." There is nothing for a future feature to migrate or preserve here.
+- **No silent install, ever.** Chrome's only programmatic-install paths are enterprise policy
+  (`ExtensionInstallForcelist`, a machine security-policy write) and unpacked side-loading.
+  Both are rejected on principle, not as a stopgap until something better ships — recorded as a
+  platform fact the design works around permanently, via detect → store-URL handoff →
+  post-wizard re-check (research.md R5, R6).
+- **Browser profiles are read-only to Katagiri.** The detector in `companions.py` reads
+  `Extensions\<id>\` presence and `Preferences` JSON only; no write, rename, delete, or
+  extension file manipulation under any browser data directory, at any point in the design.
+- **Absent ⇒ `MANUAL STEP`, never `MISSING`.** `doctor_exit_code()` (installer.py:795) returns 1
+  iff any row is `MISSING`; making an absent companion `MANUAL STEP` leaves that function
+  untouched and keeps SC-004 (installer exits 0 with everything optional missing) true. This is
+  the same in-line argument `probe_irodori` and `probe_schtasks` already carry — 008 extends an
+  existing severity convention rather than inventing one (research.md R6, plan.md decision 3).
+- **The mokuro row is configuration readiness, not liveness.** `MokuroBridgeServer` is Katagiri's
+  own server (not the learner's browser), is never started by the MCP server at request time,
+  and the userscript that would drive it is not shipped in this repository (research.md R3). So
+  the row can only honestly report `mokuro_shared_secret` set/unset and pinned-port
+  free/occupied — never "the learner installed the userscript" — with "free" worded as expected
+  outside a live session, per spec FR-010.
+- **No `HTTP_CLIENT_ALLOWLIST` change.** The port probe is a bare
+  `socket.create_connection(("127.0.0.1", 8767), timeout≈0.2)`. Checked against
+  `tests/test_bverify.py`'s `HTTP_CLIENT_PATTERNS` and `HTTP_SERVER_PATTERNS`: it matches
+  neither, so no allowlist entry is needed. This is the explicit contrast with D-47, which *did*
+  need an allowlist exemption because `irodori_import.py`/`vendor_fetch.py` use
+  `urllib.request`. Plan.md treats this as a hard constraint, not a preference: if an
+  implementer ever needs an HTTP client for this probe, that forces a stop-and-escalate to a new
+  user decision and ledger row, never a silent allowlist edit (research.md R3, plan.md
+  decision 5).
+- **The 008/009 boundary.** 008 detects only the asbplayer *browser extension* (one of three
+  distinct "asbplayer" things per research.md R4: extension, web app, WebSocket bridge). It adds
+  no bridge health row and touches none of `asbplayer_launch.py`, `media_asbplayer.py`, or
+  `config.asbplayer_bridge_dir` — so `009-asbplayer-bridge-in-process`, which is expected to
+  replace the Go bridge with an in-process Python WS server, inherits no doctor-row contract it
+  has to preserve or migrate.
+
+**Judgment call — no constitution bump.** Plan.md's Constitution Check evaluates all seven
+principles as PASS against v1.4.0 with no adaptation needed beyond V's existing cold-subagent
+gate posture (already established by 005/007), and Complexity Tracking is empty. None of the
+above narrows or widens any existing principle: VII already required additive-only tool
+changes and this row makes zero tool changes; VI's read-only/no-network posture is unchanged
+by a bounded loopback connect; nothing here touches the event log, phase gating, or the
+single-user posture that Principle I protects. Filed as a plan-level decisions-ledger row
+(D-49), not a constitution amendment.
