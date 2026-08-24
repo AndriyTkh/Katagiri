@@ -1,4 +1,4 @@
-"""009-T003: the asbplayer bridge's transport core, hosted in-process.
+"""009: the asbplayer bridge, hosted in-process.
 
 This module replaces the Go binary at
 ``asbplayer/scripts/web-socket-server/main.go`` (commit ``37495e22``) with an
@@ -9,11 +9,18 @@ reproduces that contract rather than a more sensible one, with exactly the
 divergences research.md R4 lists as known Go defects (each commented with its
 ``G-`` number where it applies).
 
-**What lives here (T003).** The transport: the listener's lifecycle, the
-``GET /ws`` upgrade, the read loop, and the publish/await correlation layer.
-The five relay HTTP endpoints and ``POST /disconnect-ws-clients`` are T004's;
-the AnkiConnect proxy on ``/`` and the ``addNote`` intercept are T005's. Both
-extend :meth:`AsbplayerBridgeServer._build_app`.
+**What lives here.** The transport (the listener's lifecycle, the ``GET /ws``
+upgrade, the read loop, and the publish/await correlation layer — T003); the
+five relay HTTP endpoints and ``POST /disconnect-ws-clients`` (T004); and the
+AnkiConnect proxy on ``/`` with its ``addNote`` intercept (T005).
+
+**The proxy's outbound leg** (T005, plan.md decision 2, research.md R2) is the
+standard library's :mod:`http.client` on a worker thread, not ``aiohttp``'s
+client: FR-007 wants the upstream's status, header list, and body bytes
+relayed unchanged, and ``http.client`` is the one client that will send a
+header list as given and hand the answer back unnormalized. That is why this
+module carries an ``HTTP_CLIENT_ALLOWLIST`` entry, approved by the user and
+recorded in D-50.
 
 **Threading model** (plan.md decision 9, research.md R6). ``mcp_server.main()``
 is synchronous and ends in a blocking ``server.run(transport="stdio")``, so the
@@ -65,6 +72,7 @@ a credential. The Go request logger re-reads and prints request bodies
 from __future__ import annotations
 
 import asyncio
+import http.client
 import ipaddress
 import json
 import logging
@@ -73,6 +81,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Mapping
+from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
@@ -136,6 +145,72 @@ ENV_INTERCEPT_VALUE: Final = "INTERCEPT_VALUE"
 #: loopback listener any local page can reach, and an unbounded cap would make
 #: a single frame an out-of-memory lever.
 MAX_WS_MESSAGE_BYTES: Final = 64 * 1024 * 1024
+
+#: The AnkiConnect proxy's own path — ``GET``/``POST``/``OPTIONS`` on ``/``
+#: (``main.go:481-482, 488``; FR-007).
+PROXY_PATH: Final = "/"
+
+#: The command the ``addNote`` intercept publishes (``main.go:244``).
+MINE_SUBTITLE_COMMAND: Final = "mine-subtitle"
+
+#: The ``POST_MINE_ACTION`` value that means "let AnkiConnect create the note
+#: and only *then* tell asbplayer about it" — the Go code's one branch point
+#: (``main.go:249``; research.md R3.6). Every other value takes the
+#: publish-and-await path (research.md O-3: 0/1/3 are untested end to end, so
+#: the branch is implemented exactly as written rather than elaborated).
+POST_MINE_ACTION_UPDATE_LAST_CARD: Final = 2
+
+#: **G-6 divergence.** ``http.DefaultClient`` (``main.go:181``) has no timeout,
+#: so a wedged AnkiConnect wedges the handler — and, here, would wedge a worker
+#: thread of the host MCP process. The replacement carries a bounded timeout;
+#: the only observable difference is that a hung upstream eventually produces a
+#: 500 instead of hanging forever. Generous rather than tight: AnkiConnect's
+#: ``addNote`` can pull media over the network before it answers.
+ANKI_CONNECT_TIMEOUT_S: Final = 30.0
+
+#: Headers that describe *this* hop rather than the message, and so must not be
+#: copied verbatim onto the outbound leg however byte-exact the rest of the
+#: passthrough is: ``Host`` is rewritten from the AnkiConnect URL (Go does the
+#: same — it puts the copied map on a request whose ``Host`` came from
+#: ``http.NewRequest``, and Go's transport ignores ``Header["Host"]``), and the
+#: framing headers must describe the body ``http.client`` is actually about to
+#: write, not the one aiohttp already decoded. research.md O-4 records that
+#: which hop-by-hop headers survive is unverified against real Anki; this list
+#: is the deliberate answer for now. Everything else — ``Content-Type``,
+#: ``Accept-Encoding``, ``Origin``, ``User-Agent``, every custom header — is
+#: forwarded unchanged (FR-007).
+_SKIP_REQUEST_HEADERS: Final = frozenset(
+    {
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "upgrade",
+        "te",
+        "trailer",
+        "expect",
+    }
+)
+
+#: The mirror image on the way back: aiohttp re-frames the response it writes,
+#: so relaying the upstream's own framing headers would double them up. The
+#: *content* headers — ``Content-Type``, ``Content-Encoding``, every CORS
+#: header AnkiConnect sets — are relayed untouched, which is the whole point of
+#: FR-007 and of US2's "the bridge invents no CORS headers of its own".
+_SKIP_RESPONSE_HEADERS: Final = frozenset(
+    {
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "upgrade",
+        "te",
+        "trailer",
+    }
+)
 
 #: Bounded waits on the loop-thread seam, so a wedged loop surfaces as an error
 #: instead of hanging the MCP server's startup or a test's teardown.
@@ -358,6 +433,180 @@ def parse_client_response(raw: str) -> ClientResponse | None:
 
 
 # ---------------------------------------------------------------------------
+# The AnkiConnect proxy's outbound leg (research.md R2, G-1/G-2/G-6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _UpstreamResponse:
+    """What AnkiConnect said, kept whole: status, header list, body bytes.
+
+    ``headers`` is a *list*, not a mapping, so a repeated header (``Set-Cookie``
+    is the classic) survives the relay in order and in multiplicity — Go adds
+    every value of every key (``main.go:190-194``) and so does this.
+    """
+
+    status: int
+    headers: list[tuple[str, str]]
+    body: bytes
+
+    def to_web_response(self) -> web.Response:
+        """Relay the upstream answer unchanged (FR-007).
+
+        **G-2 divergence.** ``main.go:196``/``221`` index
+        ``Header["Content-Type"][0]`` with no length check, so an upstream
+        response carrying no ``Content-Type`` panics the handler. Nothing here
+        indexes anything: the header is relayed if it is there and simply
+        absent if it is not, and aiohttp is given the body as bytes so it does
+        not invent one either.
+        """
+        relayed: list[tuple[str, str]] = [
+            (name, value)
+            for name, value in self.headers
+            if name.lower() not in _SKIP_RESPONSE_HEADERS
+        ]
+        return web.Response(status=self.status, body=self.body, headers=relayed)
+
+
+def _forward_blocking(
+    anki_connect_url: str,
+    method: str,
+    headers: list[tuple[str, str]],
+    body: bytes,
+    timeout_s: float,
+) -> _UpstreamResponse:
+    """One blocking request to AnkiConnect. Runs on a worker thread.
+
+    :mod:`http.client`, the same standard-library client
+    ``media_asbplayer.AsbplayerClient`` uses, chosen here for the opposite
+    reason: not because the job is small, but because it is the only client
+    that will send a header list *as given* and hand back the response's own
+    status, header list, and body bytes without normalizing them (FR-007).
+
+    ``putrequest``/``putheader`` rather than the ``headers=`` mapping: a
+    mapping cannot express two headers with the same name, and the mapping form
+    would also let http.client re-add framing headers we mean to control.
+    """
+    parts = urlsplit(anki_connect_url)
+    host = parts.hostname or "127.0.0.1"
+    scheme = (parts.scheme or "http").lower()
+    if scheme == "https":
+        conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+            host, parts.port, timeout=timeout_s  # G-6: bounded, unlike main.go:181
+        )
+    else:
+        conn = http.client.HTTPConnection(host, parts.port, timeout=timeout_s)
+
+    target = parts.path or "/"
+    if parts.query:
+        target = f"{target}?{parts.query}"
+
+    try:
+        conn.putrequest(
+            method,
+            target,
+            # Both suppressions exist so the *client's* headers win: http.client
+            # would otherwise add its own Host and an ``Accept-Encoding:
+            # identity`` that the caller never asked for.
+            skip_host=True,
+            skip_accept_encoding=True,
+        )
+        conn.putheader("Host", parts.netloc or host)
+        for name, value in headers:
+            if name.lower() in _SKIP_REQUEST_HEADERS:
+                continue
+            conn.putheader(name, value)
+        if method == "GET":
+            # Go's GET leg sends no body at all (``http.Get``), so neither does
+            # this — a Content-Length: 0 on a GET is a difference AnkiConnect
+            # has never been asked to tolerate.
+            conn.endheaders()
+        else:
+            conn.putheader("Content-Length", str(len(body)))
+            conn.endheaders(body)
+        response = conn.getresponse()
+        raw = response.read()
+        return _UpstreamResponse(
+            status=response.status,
+            headers=list(response.getheaders()),
+            body=raw,
+        )
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# The addNote intercept's decision helpers (research.md R3.4/R3.5, G-3)
+# ---------------------------------------------------------------------------
+
+
+def _should_intercept_add_note(
+    params: Any, intercept_field: str, intercept_value: str
+) -> bool:
+    """``shouldInterceptAddNote`` (``main.go:288-309``).
+
+    An empty ``INTERCEPT_FIELD`` **or** an empty ``INTERCEPT_VALUE`` intercepts
+    *everything* — and both are empty by default, so the default bridge
+    intercepts every ``addNote`` that arrives while a client is connected.
+    Otherwise ``params.note.fields[field]`` must exist, be a string, and equal
+    the configured value; every type mismatch is "do not intercept".
+    """
+    if not intercept_field or not intercept_value:
+        return True
+    if not isinstance(params, dict):
+        return False
+    note = params.get("note")
+    if not isinstance(note, dict):
+        return False
+    fields = note.get("fields")
+    if not isinstance(fields, dict):
+        return False
+    actual = fields.get(intercept_field)
+    if not isinstance(actual, str):
+        return False
+    return actual == intercept_value
+
+
+def _extract_note_fields(params: Any) -> tuple[bool, Any]:
+    """``(found, fields)`` for ``params.note.fields`` — the G-3 guard.
+
+    ``found`` is False when there is no note object to read, which is the case
+    ``main.go:245`` panics on. ``fields`` itself may legitimately be missing
+    from a well-formed note object; Go would put a nil in the command body and
+    so does this (``found=True, fields=None``), because that is contract rather
+    than the defect.
+    """
+    if not isinstance(params, dict):
+        return False, None
+    note = params.get("note")
+    if not isinstance(note, dict):
+        return False, None
+    return True, note.get("fields")
+
+
+def _extract_note_id(response_body: bytes) -> int | None:
+    """``extractNoteIdFromAnkiConnectResponse`` (``main.go:200-210``).
+
+    ``{"result": <int>}`` and nothing else: an absent, null, or unparsable
+    result simply omits the id, exactly as the Go ``ok=false`` path does. A
+    non-integer result (AnkiConnect answers a list for ``addNotes``, a string
+    for some actions) is likewise no note id — Go unmarshals into ``*int64``
+    and errors out.
+    """
+    try:
+        parsed = json.loads(response_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    result = parsed.get("result")
+    # ``bool`` is an ``int`` in Python but not an int64 in Go's decoder.
+    if isinstance(result, bool) or not isinstance(result, int):
+        return None
+    return result
+
+
+# ---------------------------------------------------------------------------
 # The server
 # ---------------------------------------------------------------------------
 
@@ -397,6 +646,12 @@ class AsbplayerBridgeServer:
         # forwarder's shared mutex has no counterpart here.
         self._clients: set[web.WebSocketResponse] = set()
         self._pending: dict[str, asyncio.Future[ClientResponse]] = {}
+        # Strong references to the fire-and-forget publishes the
+        # POST_MINE_ACTION==2 branch launches (research.md R3.6: "publish
+        # without awaiting"). asyncio only holds a weak reference to a task, so
+        # a set that a done-callback drains is what keeps one from being
+        # garbage-collected mid-send.
+        self._background: set[asyncio.Task[Any]] = set()
 
         # Lifecycle state, written by start()/stop() on the caller's thread.
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -555,16 +810,17 @@ class AsbplayerBridgeServer:
     def _build_app(self) -> web.Application:
         """The route table.
 
-        T003 registers the upgrade only. T004 adds the five relay endpoints and
-        ``POST /disconnect-ws-clients``; T005 adds ``GET/POST/OPTIONS /`` — in
-        ``main.go:479-488``'s order, which matters only for readability since
-        aiohttp matches on the exact path.
+        Registered in ``main.go:479-488``'s order, which matters only for
+        readability since aiohttp matches on the exact path.
         """
         app = web.Application(client_max_size=MAX_WS_MESSAGE_BYTES)
         app.router.add_get(WS_PATH, self._handle_ws)
         app.router.add_post(
             "/disconnect-ws-clients", self._handle_disconnect_ws_clients
         )
+        app.router.add_get(PROXY_PATH, self._handle_anki_get)
+        app.router.add_post(PROXY_PATH, self._handle_anki_post)
+        app.router.add_route("OPTIONS", PROXY_PATH, self._handle_anki_options)
         app.router.add_post(
             "/asbplayer/load-subtitles", self._handle_load_subtitles
         )
@@ -675,6 +931,232 @@ class AsbplayerBridgeServer:
         response = await self._await_or_500(command)
         return _json_blob(response.body)
 
+    # -- the AnkiConnect proxy (research.md R2/R3) -------------------------
+
+    async def _forward_to_anki_connect(
+        self, request: web.Request, method: str, body: bytes
+    ) -> _UpstreamResponse:
+        """``forwardToAnkiConnect`` (``main.go:170-198``): same method, same
+        body, every request header copied, upstream answer returned whole.
+
+        The outbound leg is the standard library's :mod:`http.client` on a
+        worker thread (plan.md decision 2; the ``HTTP_CLIENT_ALLOWLIST``
+        exemption D-50 records is what makes this legal here). It is the
+        module that can hand back the upstream's *raw* status, header list and
+        body bytes without a client library normalizing anything on the way —
+        which is exactly what FR-007 asks for, and what the ``addNote``
+        intercept needs in order to read the note id out of AnkiConnect's own
+        answer. ``asyncio.to_thread`` keeps the blocking call off the bridge's
+        single event-loop thread, where it would stall the WebSocket read loop.
+
+        Raises :class:`OSError` / :class:`http.client.HTTPException` upward;
+        both callers turn that into the 500 the Go handlers produce from a
+        non-nil error.
+        """
+        headers = [(name, value) for name, value in request.headers.items()]
+        return await asyncio.to_thread(
+            _forward_blocking,
+            self.config.anki_connect_url,
+            method,
+            headers,
+            body,
+            ANKI_CONNECT_TIMEOUT_S,
+        )
+
+    async def _proxy(
+        self, request: web.Request, method: str, body: bytes
+    ) -> tuple[web.Response, _UpstreamResponse | None]:
+        """Forward and build the client's reply; ``(response, upstream)``.
+
+        ``upstream`` is ``None`` when the forward failed, in which case
+        ``response`` is the 500 Go's ``return err`` becomes.
+        """
+        try:
+            upstream = await self._forward_to_anki_connect(request, method, body)
+        except Exception as exc:
+            # G-5: metadata only. The exception text is the connection error,
+            # never a request body or a note field.
+            _log.warning(
+                "asbplayer bridge: AnkiConnect %s forward failed: %s",
+                method,
+                exc.__class__.__name__,
+            )
+            return web.Response(status=500, text=""), None
+        _log.debug(
+            # G-5 divergence: the Go request logger re-reads the body and
+            # prints parsed AnkiConnect fields to *stdout* (main.go:461-469).
+            # Here: stderr, and byte counts rather than content.
+            "asbplayer bridge: AnkiConnect %s -> %d (%d bytes in, %d bytes out)",
+            method,
+            upstream.status,
+            len(body),
+            len(upstream.body),
+        )
+        return upstream.to_web_response(), upstream
+
+    async def _handle_anki_get(self, request: web.Request) -> web.Response:
+        """``GET /`` (``main.go:212-225``): forward to AnkiConnect, relay the
+        answer.
+
+        **G-1 divergence.** Go builds ``fmt.Sprintf("%s/%s", url, c.Path())``
+        and, because ``c.Path()`` already starts with ``/``, actually requests
+        ``http://127.0.0.1:8765//``. AnkiConnect tolerates it; nothing observable
+        to a client changes by requesting the configured URL itself, which is
+        what this does.
+
+        Go's ``GET`` path also uses bare ``http.Get`` and therefore copies *no*
+        request headers, unlike its ``POST``/``OPTIONS`` sibling. FR-007 asks
+        for one proxy rule, not two, so the headers are copied here too — a
+        superset of what Go sent, and the same thing AnkiConnect would have
+        seen from a direct browser ``GET``.
+
+        A failed forward answers 500 with a JSON ``null`` body, matching
+        ``c.JSON(http.StatusInternalServerError, nil)`` (``main.go:218``).
+        """
+        response, upstream = await self._proxy(request, "GET", b"")
+        if upstream is None:
+            return web.json_response(None, status=500)
+        return response
+
+    async def _handle_anki_options(self, request: web.Request) -> web.Response:
+        """``OPTIONS /`` (``main.go:311-314``): forward with an **empty** body
+        and relay whatever AnkiConnect answers, headers and all.
+
+        The bridge invents no CORS headers of its own (US2 scenario 6) — the
+        preflight is answered by AnkiConnect, not by this process.
+        """
+        response, _ = await self._proxy(request, "OPTIONS", b"")
+        return response
+
+    async def _handle_anki_post(self, request: web.Request) -> web.Response:
+        """``POST /`` (``handlePostRequest``, ``main.go:227-286``): the
+        passthrough, plus the ``addNote`` intercept, branch for branch.
+
+        research.md R3 is the enumeration; each numbered step below is its
+        counterpart.
+        """
+        # R3.1 — buffer the body once and parse it. Unparsable ⇒ 400
+        # (main.go:234). The *original bytes* are what gets forwarded in every
+        # branch that forwards: the parse is a decision input, never a rewrite
+        # (FR-007's "byte-for-byte").
+        body = await request.read()
+        try:
+            parsed = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+
+        # R3.2's "stash the action for the request logger" has no counterpart:
+        # G-5 — there is no per-request logger reproducing request contents.
+        action = parsed.get("action") if isinstance(parsed, dict) else None
+        params = parsed.get("params") if isinstance(parsed, dict) else None
+
+        # R3.3 — the pass-through condition (main.go:239), in Go's order.
+        if (
+            action != "addNote"
+            or self.client_count == 0
+            or not _should_intercept_add_note(
+                params, self.config.intercept_field, self.config.intercept_value
+            )
+        ):
+            response, _ = await self._proxy(request, "POST", body)
+            return response
+
+        # G-3 divergence. main.go:245 does
+        # ``request.Params["note"].(map[string]interface{})["fields"]`` with no
+        # ``, ok`` — an addNote whose ``params.note`` is not an object panics
+        # the handler *after* shouldInterceptAddNote already said yes (which it
+        # does for every note whenever INTERCEPT_FIELD is empty, the default).
+        # Here a malformed note means: do not intercept, forward it.
+        found, fields = _extract_note_fields(params)
+        if not found:
+            _log.debug(
+                "asbplayer bridge: addNote with a malformed note object — "
+                "forwarding instead of intercepting (G-3)"
+            )
+            response, _ = await self._proxy(request, "POST", body)
+            return response
+
+        # R3.5 — the command (main.go:244-247). ``fields`` is passed through as
+        # the client sent it and is never logged (FR-017).
+        command = ClientCommand.new(
+            MINE_SUBTITLE_COMMAND,
+            {"fields": fields, "postMineAction": self.config.post_mine_action},
+        )
+
+        if self.config.post_mine_action == POST_MINE_ACTION_UPDATE_LAST_CARD:
+            return await self._intercept_forward_first(request, body, command)
+        return await self._intercept_publish_first(request, body, command)
+
+    async def _intercept_forward_first(
+        self, request: web.Request, body: bytes, command: ClientCommand
+    ) -> web.Response:
+        """R3.6 / ``main.go:249-265`` — ``POST_MINE_ACTION == 2``.
+
+        Forward **first**; on success pull ``{"result": <int>}`` out of the
+        answer and attach it as ``noteId``; publish **without awaiting** (a
+        publish failure is logged, not returned); return AnkiConnect's own
+        response. A forward failure still publishes — Go's ``publishMessage``
+        call is unconditional — and then answers 500.
+        """
+        response, upstream = await self._proxy(request, "POST", body)
+        if upstream is not None:
+            note_id = _extract_note_id(upstream.body)
+            if note_id is not None:
+                command.body["noteId"] = note_id
+
+        # "Without awaiting" is load-bearing: the caller's response must not
+        # wait on a browser. A publish failure is logged (main.go:261-263
+        # prints it) and never reaches the HTTP answer.
+        task = asyncio.create_task(self._publish_detached(command))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+        return response
+
+    async def _publish_detached(self, command: ClientCommand) -> None:
+        try:
+            await self.publish_async(command)
+        except Exception:  # pragma: no cover - publish_async swallows its own
+            _log.warning(
+                "asbplayer bridge: failed to publish %s", command.command, exc_info=True
+            )
+
+    async def _intercept_publish_first(
+        self, request: web.Request, body: bytes, command: ClientCommand
+    ) -> web.Response:
+        """R3.7 / ``main.go:267-285`` — any ``POST_MINE_ACTION`` other than 2.
+
+        Publish and await. No answer at all (Go: the channel closed, i.e. the
+        publish failed, the deadline expired, or nobody was listening) ⇒ 500.
+        A reply that does not unmarshal into ``{"published": bool}``, or says
+        ``published: false`` ⇒ **forward the original request after all**.
+        ``published: true`` ⇒ HTTP 200 whose whole JSON body is ``-1``, and no
+        forward — the extension reads that as "asbplayer handled the note, here
+        is a fake note id" (research.md R3).
+
+        research.md O-3: whether the extension really answers ``{"published":
+        …}`` in these modes has never been observed. The branch is implemented
+        as written, not as guessed.
+        """
+        reply = await self.publish_and_await_async(command)
+        if reply is None:
+            raise web.HTTPInternalServerError()
+
+        published = reply.body.get("published") if isinstance(reply.body, dict) else None
+        if published is not True:
+            # Go unmarshals into a struct: a non-object body is an error and a
+            # missing key leaves the bool false — both land here, both forward.
+            _log.debug(
+                "asbplayer bridge: mine-subtitle not published — forwarding "
+                "the original addNote to AnkiConnect"
+            )
+            response, _ = await self._proxy(request, "POST", body)
+            return response
+
+        # c.JSON(http.StatusOK, -1) (main.go:283): the body is the two bytes
+        # ``-1``, content type application/json.
+        return web.json_response(-1)
+
     async def _start_site(self, host: str, port: int) -> tuple[str, int]:
         runner = web.AppRunner(
             self._build_app(),
@@ -706,6 +1188,11 @@ class AsbplayerBridgeServer:
             if not pending.done():
                 pending.cancel()
         self._pending.clear()
+        # The detached POST_MINE_ACTION==2 publishes: there is nobody left to
+        # publish to, and leaving one pending would keep the loop from closing.
+        for task in list(self._background):
+            task.cancel()
+        self._background.clear()
         if self._site is not None:
             await self._site.stop()
         if self._runner is not None:
@@ -965,6 +1452,7 @@ def _first_address(
 
 
 __all__ = [
+    "ANKI_CONNECT_TIMEOUT_S",
     "AsbplayerBridgeServer",
     "BridgeConfig",
     "ClientCommand",
@@ -974,6 +1462,9 @@ __all__ = [
     "DEFAULT_PORT",
     "KEEPALIVE_PING",
     "KEEPALIVE_PONG",
+    "MINE_SUBTITLE_COMMAND",
+    "POST_MINE_ACTION_UPDATE_LAST_CARD",
+    "PROXY_PATH",
     "REPLY_TIMEOUT_S",
     "WS_PATH",
     "is_loopback",
