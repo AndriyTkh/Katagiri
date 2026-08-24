@@ -1805,3 +1805,42 @@ R1.3); local asbplayer checkout HEAD unmoved at `37495e22` but working tree is d
 unrelated, unmerged local `request-playback-state` exploration. Full findings in
 specs/009-asbplayer-bridge-in-process/research.md ("2026-08-24 — Upstream re-check, second
 pass (T008)").
+
+## 2026-08-24 — 009 T012 gate: differential run findings, quickstart correction
+
+TG3 gate task T012 ran the mandated differential run (quickstart.md §5): the Python bridge
+and the Go oracle, driven by the same scripted extension double and HTTP client, over all
+ten routes in research.md R1.4 plus every AnkiConnect branch in R3. 23 checks total: 17
+byte-identical, 6 divergent. Every status code and every branch-selection decision matched
+across all 23 checks — the 6 divergences are error/edge-path body-text only, and none of
+them were already covered by research.md R4's G-1..G-6 list.
+
+Orchestrator ruling: the 6 divergences are the same class as G-1..G-6 — deliberate
+non-reproduction of a Go-framework quirk (echo's JSON error rendering and its `c.JSON`
+trailing newline), not a contract gap — and are ratified as **G-7, G-8, G-9**. Recorded in
+research.md R4:
+- G-7: 400 body wording on unparsable request bodies to `/asbplayer/load-subtitles` and
+  `/asbplayer/seek` (Go: echo's `{"message":"invalid character ..."}`; Python: raw
+  `json.JSONDecodeError` text). Status 400 matches; no client consumes the body.
+- G-8: the mine-intercept "handled" response is `-1\n` from Go (`c.JSON(200, -1)` appends a
+  newline) vs `-1` from Python. JSON-semantically identical; the extension JSON-parses the
+  body, so the newline is a framework artifact, not contract.
+- G-9: the generic 500 no-answer body — Go's `echo.NewHTTPError(500, nil)` renders `null\n`;
+  Python's aiohttp default renders plain-text `500: Internal Server Error`. Status 500
+  matches on every such path; no client consumes the body.
+
+No code change resulted from this gate step — the divergences were ratified as documentation,
+not fixed, per the orchestrator's ruling that they are not contract violations.
+
+**Quickstart §8 grep correction.** The gate also found that quickstart.md §8's literal-string
+grep (`git grep -n "go run\|main\.go\|which(\"go\")" -- src/katagiri`) falsely fires on the
+~50 mandated `main.go:NNN` line-citation comments that research.md R1 requires inside
+`asbplayer_bridge.py` as provenance for the protocol transcription. Narrowed to grep for
+actual spawn machinery instead (`subprocess\|shutil\.which\|Popen\|go run`), which still
+expects no output (SC-008) but no longer collides with the mandated citations. See
+quickstart.md §8 for the corrected command.
+
+**Port hygiene note.** During this gate run, a leftover Go-bridge process (`go-build
+main.exe`) from an earlier smoke-testing session was found still holding port 8766. It was
+cleared before the SC-006 port check in quickstart.md §9, which then passed (no listener on
+8766 after the suite with no Katagiri running).

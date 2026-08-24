@@ -191,6 +191,31 @@ Reproducing these faithfully would be wrong. Each is called out so an implemente
   eventually produces an error instead of hanging, which is strictly better and matches
   Katagiri's house style everywhere else.
 
+The following three were discovered and ratified at the T012 differential gate (2026-08-24):
+a 23-check run of the Python bridge against the Go oracle over all R1.4 routes plus all R3
+AnkiConnect branches found 17 byte-identical and 6 divergent, with every status code and
+every branch-selection decision identical across all 23. The orchestrator ruled the 6
+divergences the same class as G-1..G-6 — deliberate non-reproduction of a Go-framework
+quirk, not a contract gap — and ratified them as G-7, G-8, and G-9.
+
+- **G-7 — 400 error body wording on unparsable request bodies.** On `POST
+  /asbplayer/load-subtitles` and `POST /asbplayer/seek`, an unparsable body yields **400**
+  from both bridges, but the body text differs: Go returns echo's framework-generated
+  `{"message":"invalid character ..."}` JSON, while Python returns the raw
+  `json.JSONDecodeError` text. Parser error wording is inherently engine-specific and
+  cannot be byte-matched for arbitrary malformed inputs; the status code matches and no
+  client consumes the body.
+- **G-8 — trailing newline on the mine-intercept "handled" response.** The bare `-1` body
+  documented in R3 step 7 is literally `-1\n` from Go (`c.JSON(200, -1)` appends a
+  newline) versus `-1` from Python. The two are JSON-semantically identical, and the
+  extension JSON-parses this body, so the trailing newline is a framework artifact of
+  echo's `c.JSON`, not part of the contract.
+- **G-9 — generic 500 no-answer body.** Every "channel closed, no answer" path in R1.2
+  turns into `echo.NewHTTPError(http.StatusInternalServerError, nil)` in Go, which renders
+  as the JSON literal `null\n`; aiohttp's default 500 renders as plain text `500: Internal
+  Server Error`. The status code (500) matches on every such path in both bridges; no
+  client consumes the body.
+
 ---
 
 ## R5. What Katagiri itself uses today

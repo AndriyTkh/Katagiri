@@ -142,10 +142,14 @@ that row. Any other change in either file, any other module gaining a server con
 an allowlist edit with **no** ledger row behind it: the gate fails and the question goes to
 the user (D-47 precedent).
 
-Also confirm the Go path is gone:
+Also confirm the Go path is gone. Grep for actual spawn machinery rather than the literal
+strings `go run`/`main.go` — research.md R1 mandates roughly 50 `main.go:NNN` line-citation
+comments in `asbplayer_bridge.py` as provenance for the protocol transcription, and those
+citations are exactly what the literal-string grep falsely fires on; the real invariant is
+that nothing spawns a Go process anymore:
 
 ```bash
-git grep -n "go run\|main\.go\|which(\"go\")" -- src/katagiri | cat
+git grep -n "subprocess\|shutil\.which\|Popen\|go run" -- src/katagiri | cat
 ```
 
 Expected: no output (SC-008).
