@@ -112,7 +112,20 @@ class _LoggedMCPServer(MCPServer[Any]):
     Errors are logged as ``type: message``, never with ``exc_info``: the stderr
     handler is shared, and a traceback there is both noise on the MCP channel
     and indistinguishable from a crash to anything scraping it.
+
+    ``call_tool`` also carries the one-time "client connected" line (007,
+    D-46). The lowlevel SDK's ``initialize`` handshake is reserved (its own
+    docs forbid overriding the ``initialize`` request handler, and the
+    documented ``notifications/initialized`` hook lives on a private
+    ``MCPServer._lowlevel_server`` attribute with a differently-shaped
+    context — not worth the coupling for one log line). The first ``call_tool``
+    invocation is guaranteed to run after the handshake (a client cannot call
+    a tool before ``initialize`` completes) and already receives the same
+    ``Context`` that :func:`client_identity` expects, so a per-process latch
+    here is the cheap, stable option: one flag flip, first call only.
     """
+
+    _client_connected_logged: bool = False
 
     async def call_tool(
         self,
@@ -120,6 +133,15 @@ class _LoggedMCPServer(MCPServer[Any]):
         arguments: dict[str, Any],
         context: Any = None,
     ) -> Any:
+        if not self._client_connected_logged:
+            self._client_connected_logged = True
+            identity = client_identity(context)
+            logger.info(
+                "client connected: name=%s version=%s pid=%s",
+                identity["name"],
+                identity["version"] or "(no version)",
+                os.getpid(),
+            )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("tool %s arguments %s", name, truncated_repr(arguments))
         started = time.perf_counter()
@@ -1994,9 +2016,10 @@ def main() -> None:
     # One positional argument, resolved from KATAGIRI_LOG_LEVEL.
     setup_logging(log_level())
     logger.info(
-        "starting katagiri %s (python %s) on stdio",
+        "starting katagiri %s (python %s) on stdio, pid %s",
         __version__,
         platform.python_version(),
+        os.getpid(),
     )
     logger.info(
         "katagiri db %s; log file %s",
