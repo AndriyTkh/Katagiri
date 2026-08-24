@@ -420,7 +420,7 @@ exist.
 
 ## Taskgroup TG3: Gate (serial-on-main, dedicated testing agent)
 
-- [ ] T012 [Gate] Run `specs/009-asbplayer-bridge-in-process/quickstart.md` §1–§9 in order
+- [ ] T012 [Gate] [GATE RUN 2026-08-24 — all automatable sections PASS; §6 DEFERRED TO USER, see note below] Run `specs/009-asbplayer-bridge-in-process/quickstart.md` §1–§9 in order
       and record the outcome here. The load-bearing steps, called out because a green suite
       alone does not prove them: (a) **§5, the differential run against the Go bridge, is
       mandatory** — plan.md §Deliberate omissions traded 009's held-out suite for it, so a
@@ -448,7 +448,31 @@ exist.
       specs/009-asbplayer-bridge-in-process/research.md (R4's G-numbers, for naming
       permitted differences).
 
-**Checkpoint**: feature complete. Push to remote after TG3 (orchestrator).
+      **Gate note (2026-08-24, run 1 of max 2):**
+      §1 PASS (aiohttp 3.14.3 resolves clean). §2 PASS (50 passed). §3 PASS (8 passed).
+      §4 PASS — `git diff bc9e4a2` (true pre-009 tip; 342f2fe was stale, two 007 cleanup
+      commits after it) empty on media_asbplayer.py / its tests / test_everify.py;
+      PROTOCOL_SURFACE_VERSION == 3.
+      §5 PASS after ratification — Go 1.26.3 oracle on :8769, 23 checks over all R1.4
+      routes + R3 branches: 17 byte-identical, 6 divergent, ALL statuses and
+      branch-selection decisions identical. The 6 divergences ratified as **G-7** (400
+      parser-wording), **G-8** (`-1\n` vs `-1` trailing newline), **G-9** (Go `null\n` vs
+      aiohttp plain-text 500 body) in research.md R4, commit 4f462fd. No code change.
+      §6 **DEFERRED TO USER — the only open item.** Requires the physical user: real
+      extension → `ws://127.0.0.1:8766/ws`, media_now/media_context live check, mine one
+      card via proxy at `http://127.0.0.1:8766`, stop/start rebind observation. Record
+      results here when performed; feature is not fully gated until then.
+      §7 PASS (security_scan/serves_stdio test green); live-binding PowerShell check
+      deferred with §6 (needs Katagiri running).
+      §8 PASS — diff vs bc9e4a2 on test_bverify/test_cverify contains only the D-50
+      allowlist entries + provenance comments; no spawn machinery in src (quickstart §8
+      grep pattern corrected in 4f462fd — old literal pattern false-fired on mandated
+      main.go:NNN citations).
+      §9 PASS — full suite 2194 passed / 10 env skips (108s); port 8766 free after
+      clearing a leftover pre-gate Go-bridge process (go-build main.exe, PID 3996, from
+      earlier smoke testing — suite itself binds ephemeral ports only, verified).
+
+**Checkpoint**: feature complete pending §6 manual observation. Push to remote after TG3 (orchestrator).
 
 ---
 
