@@ -118,16 +118,18 @@ def test_the_server_log_records_the_client_identity_from_the_handshake(
 
 
 def test_the_server_log_carries_enough_instance_identity_to_tell_instances_apart(
-    sandbox, mcp_server
+    holdout, sandbox, mcp_server
 ):
     """Edge case: two instances sharing one log file must be distinguishable."""
     client = mcp_server(sandbox)
     client.call_tool("ping")
     pid = client.process.pid
+    accepted = {pid} | holdout.direct_child_pids(pid)
     client.close()
 
     text = _text_of(_sandbox_log_files(sandbox))
-    assert str(pid) in text, (
+    # amended per user decision 2026-08-24 (tasks.md T021): venv launcher shim makes Popen.pid the shim, interpreter is its direct child
+    assert any(str(p) in text for p in accepted), (
         f"the log does not carry the answering instance's pid ({pid}); concurrent "
         "instances sharing a log file cannot be told apart:\n" + text[-3000:]
     )

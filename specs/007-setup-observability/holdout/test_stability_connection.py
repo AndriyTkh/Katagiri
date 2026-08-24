@@ -93,9 +93,11 @@ def test_connection_status_returns_every_contract_field_with_the_right_type(
     assert payload["transport"] == "stdio", payload["transport"]
     assert payload["changed_anything"] is False, "the diagnostic tool must be read-only"
     assert payload["pid"] > 0, payload["pid"]
-    assert payload["pid"] == client.process.pid, (
-        "the reported pid must be the answering process's own: "
-        f"{payload['pid']} != {client.process.pid}"
+    accepted = {client.process.pid} | holdout.direct_child_pids(client.process.pid)
+    # amended per user decision 2026-08-24 (tasks.md T021): venv launcher shim makes Popen.pid the shim, interpreter is its direct child
+    assert payload["pid"] in accepted, (
+        "the reported pid must be the answering process's own pid, or the "
+        f"interpreter child of the venv launcher shim: {payload['pid']} not in {accepted}"
     )
     for field in ("katagiri_version", "python_version", "entry_point", "cwd"):
         assert payload[field].strip(), f"{field} came back empty"

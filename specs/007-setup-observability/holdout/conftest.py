@@ -407,6 +407,29 @@ def doctor_rows(stdout: str) -> list[tuple[str, str, str]]:
 # --------------------------------------------------------------------------
 
 
+def direct_child_pids(root_pid: int) -> set[int]:
+    """Direct child pids of ``root_pid``, queried on Windows while it is alive.
+
+    Needed because ``.venv\\Scripts\\python.exe`` here is a launcher shim:
+    ``subprocess.Popen([sys.executable, ...]).pid`` names the shim process,
+    while the real interpreter answering on stdio is its direct child. Must be
+    called before the process exits -- once it is gone, Win32_Process can no
+    longer report it as a parent.
+    """
+    completed = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"(Get-CimInstance Win32_Process -Filter 'ParentProcessId={root_pid}').ProcessId",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return {int(token) for token in completed.stdout.split() if token.strip().isdigit()}
+
+
 class StdioMcpClient:
     """The smallest honest MCP client: newline-delimited JSON-RPC over pipes.
 
@@ -804,6 +827,7 @@ def holdout() -> SimpleNamespace:
         TOTAL_INSTALLER_STEPS=TOTAL_INSTALLER_STEPS,
         assert_no_canary=assert_no_canary,
         assert_no_traceback=assert_no_traceback,
+        direct_child_pids=direct_child_pids,
         doctor_rows=doctor_rows,
         jmdict_template=jmdict_template,
         real_app_data_names=real_app_data_names,

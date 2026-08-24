@@ -1623,3 +1623,30 @@ never reachable from MCP request-time code. User decision 2026-08-24: extend
 `HTTP_CLIENT_ALLOWLIST` in both test files with `irodori_import.py` and `vendor_fetch.py` rather
 than routing either module through the Obsidian proxy or building a second allowlist mechanism.
 Recorded as D-47.
+
+## 007 T021 — held-out pid asserts, venv launcher-shim probe (2026-08-24)
+
+Two held-out stability asserts (`test_stability_connection.py`'s `payload["pid"] ==
+client.process.pid`, `test_stability_logging.py`'s `str(pid) in text`) failed against a correct
+server implementation. Isolated the cause with a Popen probe outside any Katagiri code:
+
+```python
+import subprocess, sys
+p = subprocess.Popen([sys.executable, "-c", "import os; print(os.getpid())"],
+                     stdout=subprocess.PIPE, text=True)
+out, _ = p.communicate()
+print("Popen.pid:", p.pid, "child os.getpid():", out.strip())
+```
+
+On this checkout's `.venv\Scripts\python.exe`, `Popen.pid` and the child's own `os.getpid()`
+are two different numbers every run — the launcher shim under `.venv\Scripts\` exec's a real
+interpreter as a child process rather than replacing its own image, so `Popen.pid` names the
+shim and the truthful `os.getpid()` the server reports (via `connection_status` and its own log
+line) belongs to the shim's direct child. This reproduces with an arbitrary throwaway script,
+nothing katagiri-specific, and is a property of this Windows venv layout, not of
+`mcp_server.py` or any 007 code. Confirmed the child relationship holds via
+`Get-CimInstance Win32_Process -Filter "ParentProcessId=<Popen.pid>"` while the process is
+alive, which is what the new `direct_child_pids()` holdout helper (`holdout/conftest.py`)
+automates. User decision to amend the two asserts (accept `Popen.pid` or one of its direct
+children) is recorded in `specs/007-setup-observability/tasks.md` T021 and filed as D-48 in
+`docs/decisions-ledger.md`. No other held-out assertion was touched.
