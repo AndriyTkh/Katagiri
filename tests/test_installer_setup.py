@@ -394,3 +394,111 @@ def test_interactive_scheduled_tasks_step_never_registers_real_schtasks(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Scheduled tasks (optional) ... SKIP (no scheduled tasks created)" in proc.stdout
     assert re.search(r"^scheduled tasks\s+MANUAL STEP", proc.stdout, re.MULTILINE)
+
+
+# ---------------------------------------------------------------------------
+# T019: a flag-only --data-home run must re-home the installer log too
+# ---------------------------------------------------------------------------
+
+
+def _copy_installer_script(tmp_path: Path) -> tuple[Path, Path]:
+    """Copy ``installer.py`` into a throwaway ``<fake-repo>/src/katagiri/``.
+
+    ``installer._repo_root()`` derives from ``Path(__file__).resolve().parents[2]``
+    -- not the process cwd -- so running ``python -m katagiri.installer
+    --data-home ...`` as a subprocess against the real checkout would make
+    ``_persist_data_home_env`` write ``KATAGIRI_DATA_HOME=...`` straight into
+    *this worktree's real* ``agent/.env``. Running a copy of the script from a
+    fake ``<tmp>/src/katagiri/installer.py`` keeps ``_repo_root()`` -- and
+    therefore that write -- inside ``tmp_path`` instead, while every actual
+    import inside the script (``katagiri.config``, ``katagiri.applog``, ...)
+    still resolves to the real, installed package (import resolution follows
+    ``sys.path``, not the running script's own directory).
+    """
+    fake_repo = tmp_path / "fake-checkout"
+    pkg_dir = fake_repo / "src" / "katagiri"
+    pkg_dir.mkdir(parents=True)
+    script = pkg_dir / "installer.py"
+    script.write_text(
+        (_REPO_ROOT / "src" / "katagiri" / "installer.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    return fake_repo, script
+
+
+def test_data_home_flag_relocates_installer_log_before_argparse_runs(tmp_path):
+    """T019 regression: ``run_cli``'s ``setup_logging()`` (installer.py's
+    ``__main__`` block) used to run *before* ``main()`` parsed ``--data-home``,
+    so a flag-only override run's log landed under the default home instead of
+    the override, and nothing under the override's ``logs/`` ever appeared.
+    The fix primes ``KATAGIRI_DATA_HOME`` from ``sys.argv`` before ``run_cli``
+    runs. Exercises the real ``python <installer.py>`` entry point end to end
+    (not ``installer.main()`` in-process), since the bug lived in the
+    ``__main__`` sequencing itself.
+    """
+    fake_repo, script = _copy_installer_script(tmp_path)
+    local_appdata = tmp_path / "AppDataLocal"
+    local_appdata.mkdir()
+    data_home = tmp_path / "override-home"
+
+    env = os.environ.copy()
+    env["LOCALAPPDATA"] = str(local_appdata)
+    env["PYTHONUTF8"] = "1"
+    env.pop("KATAGIRI_DATA_HOME", None)
+    env.pop("KATAGIRI_CONFIG", None)
+
+    proc = subprocess.run(
+        [sys.executable, str(script), "--data-home", str(data_home), "--check"],
+        cwd=str(fake_repo),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=_SHORT_TIMEOUT,
+    )
+
+    assert proc.returncode in (0, 1), proc.stdout + proc.stderr
+    assert (data_home / "logs" / "katagiri.log").is_file(), (
+        f"expected installer log under the --data-home override:\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    # Nothing -- not even an empty logs/ dir -- may appear under the default
+    # home: it must stay completely untouched by a flag-only override run.
+    assert not (local_appdata / "Katagiri").exists()
+
+    # And the *real* checkout's agent/.env (not the fake one) must never see
+    # this test's throwaway override path.
+    real_env_file = _REPO_ROOT / "agent" / ".env"
+    if real_env_file.exists():
+        assert "override-home" not in real_env_file.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# T020: an empty/blank KATAGIRI_DATA_HOME must fail cleanly, no traceback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", ["", "   "])
+def test_blank_katagiri_data_home_env_exits_cleanly_without_traceback(tmp_path, bad_value):
+    """T020 regression: an empty/blank ``KATAGIRI_DATA_HOME`` correctly exited
+    nonzero and left the default home untouched, but also leaked a raw Python
+    traceback to stderr (``config_dir()``'s ``ConfigError`` propagating
+    uncaught through ``run_cli``). The fix catches ``ConfigError`` at
+    ``installer.main()``'s call to ``config_path()`` and reports it the same
+    clean way as an invalid ``--data-home`` flag.
+    """
+    local_appdata = tmp_path / "AppDataLocal"
+    local_appdata.mkdir()
+
+    env = os.environ.copy()
+    env["LOCALAPPDATA"] = str(local_appdata)
+    env["PYTHONUTF8"] = "1"
+    env["KATAGIRI_DATA_HOME"] = bad_value
+    env.pop("KATAGIRI_CONFIG", None)  # KATAGIRI_CONFIG outranks it -- must not mask this
+
+    proc = _run_installer(["--yes"], env)
+
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    combined = proc.stdout + proc.stderr
+    assert "KATAGIRI_DATA_HOME" in combined
+    assert "Traceback (most recent call last)" not in combined
+    assert not (local_appdata / "Katagiri").exists()

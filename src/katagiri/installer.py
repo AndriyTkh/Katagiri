@@ -1616,6 +1616,49 @@ def _persist_data_home_env(repo_root: Path, data_home: Path) -> None:
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _prescan_data_home(argv: list[str]) -> str | None:
+    """Best-effort extraction of ``--data-home``'s raw value before argparse runs.
+
+    Needed so the installer's log file -- attached by ``run_cli`` at
+    ``__main__``-time, before ``main()`` gets a chance to parse arguments and
+    set ``KATAGIRI_DATA_HOME`` -- lands under the override home instead of the
+    default one (T019: log destination was being decided too early). This is
+    deliberately tolerant: any shape it does not recognize (missing value,
+    unknown spelling) is simply left for ``main()``'s real argparse pass and
+    its existing validation/error reporting, since a mis-scan here would at
+    worst leave logging at the (harmless) default until ``main()`` sorts it
+    out for real.
+    """
+    for i, arg in enumerate(argv):
+        if arg == "--data-home":
+            return argv[i + 1] if i + 1 < len(argv) else None
+        if arg.startswith("--data-home="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _prime_data_home_env_from_argv(argv: list[str]) -> None:
+    """Set ``KATAGIRI_DATA_HOME`` from a valid ``--data-home`` flag, pre-argparse.
+
+    Called before ``run_cli`` (hence before ``setup_logging()``) so the
+    installer's own log file resolves under the override home from the very
+    first line, rather than under the default home that ``main()`` would only
+    move away from later (T019). Uses the same validation as ``main()``'s own
+    ``--data-home`` handling (:func:`_resolve_data_home`); an invalid value is
+    silently left alone here -- ``main()`` will re-validate and report it
+    cleanly through its normal ``error: ...`` / exit-2 path, so nothing is
+    lost by not duplicating that reporting in this pre-argparse pass.
+    """
+    raw = _prescan_data_home(argv)
+    if not raw:
+        return
+    try:
+        data_home = _resolve_data_home(raw)
+    except config_mod.ConfigError:
+        return
+    os.environ["KATAGIRI_DATA_HOME"] = str(data_home)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     repo_root = _repo_root()
@@ -1629,11 +1672,25 @@ def main(argv: list[str] | None = None) -> int:
         # Set before any config access below so config_dir()/config_path()
         # (and everything derived from them: db_path, logs_dir()) resolve
         # under PATH for the rest of this run -- T011's KATAGIRI_DATA_HOME
-        # seam in katagiri.config.config_dir().
+        # seam in katagiri.config.config_dir(). Idempotent if
+        # _prime_data_home_env_from_argv already set the same value from
+        # __main__ (T019).
         os.environ["KATAGIRI_DATA_HOME"] = str(data_home)
         _persist_data_home_env(repo_root, data_home)
 
-    cfg_path = config_mod.config_path()
+    try:
+        cfg_path = config_mod.config_path()
+    except config_mod.ConfigError as exc:
+        # A bad KATAGIRI_DATA_HOME/KATAGIRI_CONFIG override (e.g. empty or
+        # blank env var) must fail loudly but cleanly: nonzero exit, one
+        # logged ERROR line, no raw traceback on stdout/stderr (T020). Logged
+        # explicitly here -- rather than left to propagate into run_cli's
+        # generic BaseException handler -- because that handler re-raises
+        # after logging, which is right for genuine bugs but wrong for an
+        # already-diagnosed, user-facing configuration error.
+        _log.error("installer aborted: %s", exc)
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     if args.check:
         cfg = read_raw_config(cfg_path)
@@ -1650,9 +1707,11 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     # Production entry point: runs under the shared rotating log in
-    # %LOCALAPPDATA%\Katagiri\logs. Wired here rather than inside main() so an
-    # in-process main() call does not install a process-wide handler as a side
-    # effect. See katagiri.applog.run_cli.
+    # %LOCALAPPDATA%\Katagiri\logs (or the --data-home override, primed below
+    # before logging is configured -- T019). Wired here rather than inside
+    # main() so an in-process main() call does not install a process-wide
+    # handler as a side effect. See katagiri.applog.run_cli.
     from katagiri.applog import run_cli
 
+    _prime_data_home_env_from_argv(sys.argv[1:])
     raise SystemExit(run_cli("installer", main))
