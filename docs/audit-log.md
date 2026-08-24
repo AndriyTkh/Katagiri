@@ -1703,3 +1703,95 @@ changes and this row makes zero tool changes; VI's read-only/no-network posture 
 by a bounded loopback connect; nothing here touches the event log, phase gating, or the
 single-user posture that Principle I protects. Filed as a plan-level decisions-ledger row
 (D-49), not a constitution amendment.
+
+## 009 TG1 — in-process asbplayer bridge: cutover, protocol freeze, and the listener exemption (2026-08-24)
+
+Filed before any 009 code task, per research.md R7's instruction that the allowlist question
+is a user decision, not an implementation choice, and mirroring 007's/008's ledger-first
+pattern. Read plan.md's Constitution Check and Key design decisions, and research.md R4, R6,
+R7, R8 plus all six open items, to confirm these are binding decisions rather than
+implementation notes, and recorded the reasoning behind each of the four escalation answers
+here rather than only in the ledger row.
+
+- **Why a clean cutover instead of a config-gated fallback.** Plan.md decision 4 rejects
+  keeping the Go spawn path behind a flag: maintaining two implementations of one protocol
+  means every future bug report starts with "which bridge was running?" — a permanent tax
+  with no offsetting benefit once the in-process replacement exists. The rollback safety net
+  that actually matters is kept anyway: `bridge_port_is_occupied()` (`asbplayer_launch.py`)
+  already makes Katagiri stand down for whatever already holds port 8766, so a learner who
+  starts the old Go bridge by hand is unaffected. `asbplayer_bridge_dir` is left in the config
+  schema as dead weight rather than removed, purely because `tests/test_skeleton.py:115,146`
+  pin it as a known key — deleting it would be a test-driven false economy for a key that
+  costs nothing to leave inert (FR-014, plan.md decision 5).
+- **Why the protocol is treated as frozen, not as a target to improve toward.** research.md R1
+  and R3 transcribe the Go bridge's routes, fields, and the `addNote` intercept branch-by-branch
+  with `main.go` line citations against the asbplayer checkout at local commit `37495e22`
+  (based on upstream tag `1.20.2`, `570f441d`). The reasoning for treating that transcription
+  as the contract, rather than any implementer's sense of "what a bridge should do": the real
+  client is asbplayer's own extension, which was never written against a spec, only against
+  this exact Go behavior — deviating from the transcription risks the extension silently
+  failing to interoperate in ways no Katagiri-side test would catch (research.md O-1 is exactly
+  this risk, closed only by TG3's mandatory real-machine differential run). Upstream issue
+  #1087 is open, unmerged, and has no overlap with `37495e22` today (research.md R8); the task
+  text is explicit that a merged protocol change upstream is a stop-and-replan trigger for the
+  dedicated re-check task, not something later work should try to absorb quietly.
+- **Why the six G-1..G-6 divergences are documented as deliberate rather than silently fixed.**
+  research.md R4 catalogs six Go-source behaviors as bugs, not contract: a double-slashed
+  proxy URL on `GET /` (G-1), an index panic on a missing `Content-Type` header (G-2), an
+  unchecked type assertion on the `addNote` note body that panics instead of forwarding a
+  malformed note (G-3), a single shared response channel that lets one waiter eat another
+  request's reply (G-4, fixed by a per-`messageId` registry — a strict improvement given
+  `media_asbplayer.py` already only ever has one request in flight), request-body logging to
+  stdout that would corrupt MCP stdio and leak note contents (G-5, contradicting FR-017), and
+  no timeout on the outbound AnkiConnect leg (G-6). Recording all six by name means a future
+  reviewer diffing the new module against `main.go` reads each difference as an intentional,
+  reasoned fix rather than a reimplementation error.
+- **Why `aiohttp`, and why not stdlib.** research.md R6's decision table rejected stdlib
+  (`http.server` plus a hand-written RFC 6455 handshake and frame codec) on a constitutional
+  ground, not a convenience one: the real client is a genuine browser WebSocket — masked
+  frames, fragmentation, control frames, a close handshake, and base64 payloads past 64 KiB for
+  `load-subtitles` — and hand-writing that framing against it is reimplementing OSS in the
+  sense Principle II forbids outright, for the single highest technical risk in the whole
+  feature. `websockets` alone was rejected because its server hook cannot see the three POST
+  request bodies the HTTP half needs; `websockets` sans-io over hand-rolled HTTP/1.1 was kept
+  on record as the fallback if `aiohttp` ever becomes unavailable, since it trades one hand-
+  rolled protocol for another rather than eliminating the risk. The AnkiConnect outbound leg
+  deliberately stays on `http.client` rather than `aiohttp`'s own client, because FR-007 wants
+  byte-exact header and body passthrough and an async client that manages `Host`,
+  `Content-Length`, and hop-by-hop headers on your behalf is the wrong instrument for that —
+  the cost of this choice is that the new module needs **both** allowlist entries, not just the
+  server one.
+- **Why both allowlist questions went to the user rather than being pre-approved.** research.md
+  R7 is explicit that `media_mokuro.py` is the only standing `HTTP_SERVER_ALLOWLIST` exemption
+  and that D-47 is the process precedent for a client-side exemption going to the user with its
+  own ledger row. The task text treats these as two separate questions with two separate
+  answers precisely because they gate different risk: the server exemption is "should Katagiri
+  ever listen on a socket for this purpose at all" (the answer determines whether 009 can exist
+  in this form, or has to be re-planned entirely), while the client exemption is "which
+  fidelity/exemption trade-off for one outbound leg." Both were answered "yes" by the user on
+  2026-08-24, recorded verbatim in the ledger row (D-50) with the exact escalation text and the
+  user's exact reply, matching D-47's and D-48's precedent of quoting the user's decision rather
+  than paraphrasing it.
+- **Why `aiohttp`'s transitive tree needed its own escalation.** Katagiri has carried exactly
+  four runtime dependencies (`fugashi`, `mcp`, `pypdf`, `tzdata`) since inception, and D-10 set a
+  vendored-and-checksummed posture for data specifically because unaudited runtime downloads
+  were treated as a risk worth avoiding. `aiohttp` pulls in `multidict`, `yarl`, `frozenlist`,
+  `aiosignal`, `propcache`, and `attrs`, none of which were audited before this row (research.md
+  O-6) — a materially different kind of addition from a data file, so it went to the user as
+  its own question rather than being bundled into the WebSocket-hosting decision.
+- **Why zero MCP contract growth was confirmed rather than assumed.** Plan.md decision 10
+  scopes the doctor row as the smallest useful addition and explicitly calls a bridge-status
+  MCP tool a different, larger feature. Because 008 deliberately left this exact door open
+  (008 research.md R4, restated in D-49(g)) precisely so 009 could choose either way, the
+  choice itself — doctor row only, no tool — needed the user's explicit confirmation rather
+  than treating 008's silence as tacit permission.
+
+**Judgment call — no constitution amendment.** Plan.md's Constitution Check and research.md R7
+agree that Principle VI's "stdio-only MCP transport, no network listener" describes the MCP
+transport itself and already coexists with `media_mokuro.py`'s bridge; this feature extends
+that same coexistence to a second module (`asbplayer_bridge.py`) rather than narrowing or
+widening the principle's text, so it is recorded as a plan-level decisions-ledger row (D-50),
+not a constitution amendment — matching how D-49 treated 008's Principle VII question. If the
+user's escalation-1 answer is later read as wanting Principle VI to name this second exception
+explicitly in the constitution text, that is a separate amendment filed the normal way
+(ledger row first), not implied by this row or by D-50.
