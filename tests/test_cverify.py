@@ -652,8 +652,27 @@ HTTP_CLIENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 #: against the locally-running asbplayer app and its bridge's REST calls —
 #: never leaving 127.0.0.1, so the token-boundary property this file's
 #: docstring cares about is unaffected.
+#:
+#: ``irodori_import.py`` and ``vendor_fetch.py`` are a third, pre-007
+#: exception, same shape as Phase E's: both are consent-gated, setup-time-only
+#: fetchers (never imported or invoked by the MCP server at request time),
+#: run by hand from the installer or their own CLI — ``irodori_import.py``
+#: downloads the freely-published Japan Foundation Irodori Starter
+#: Table-of-Contents PDF, and ``vendor_fetch.py`` downloads the vendor/
+#: reference artifacts (UniDic, JMdict, kanjium accents, BCCWJ, JLPT decks,
+#: jreadability) listed in its ``ARTIFACTS`` tuple, each from its official
+#: source. Exempted per D-47 (user decision 2026-08-24, surfaced by 007
+#: TG2-close's full-suite run) rather than routed through the Obsidian proxy,
+#: which speaks only to the local Obsidian vault, not to these modules'
+#: external hosts.
 HTTP_CLIENT_ALLOWLIST = frozenset(
-    {"obsidian_proxy.py", "asbplayer_launch.py", "media_asbplayer.py"}
+    {
+        "obsidian_proxy.py",
+        "asbplayer_launch.py",
+        "media_asbplayer.py",
+        "irodori_import.py",
+        "vendor_fetch.py",
+    }
 )
 
 #: Phase E's mokuro page-change bridge is the one deliberate exception to

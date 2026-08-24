@@ -1607,3 +1607,19 @@ already in effect (commits already made, plan section already written) rather th
 shipped behavior. None of the three points removes a guarantee, widens the threat model, or
 changes what "one user" means — so this row is filed as a plan-level decision, not a constitution
 amendment.
+
+## 007 TG2-close — HTTP-client allowlist exemption for pre-007 setup fetchers (2026-08-24)
+
+`tests/test_bverify.py::test_only_the_obsidian_proxy_is_an_http_client` and
+`tests/test_cverify.py::test_the_obsidian_proxy_is_still_the_only_http_client` failed at 007's
+TG2-close full-suite run because `irodori_import.py` and `vendor_fetch.py` (both pre-007,
+commits 5002422 and e0f5b64, 2026-08-23) use `urllib.request` and were never routed through the
+allowlisted-exception process Phase E's asbplayer integration already set up for this invariant.
+Read both modules to characterize them honestly rather than guess: `irodori_import.py` fetches
+one file, the freely-published JF Irodori Starter TOC PDF, from `irodori.jpf.go.jp`;
+`vendor_fetch.py` fetches the `vendor/` reference artifacts (UniDic, JMdict, kanjium accents,
+BCCWJ, JLPT decks, jreadability) from their official hosts. Both are consent-gated, setup-time-only,
+never reachable from MCP request-time code. User decision 2026-08-24: extend
+`HTTP_CLIENT_ALLOWLIST` in both test files with `irodori_import.py` and `vendor_fetch.py` rather
+than routing either module through the Obsidian proxy or building a second allowlist mechanism.
+Recorded as D-47.
