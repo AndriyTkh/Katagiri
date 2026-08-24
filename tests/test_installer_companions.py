@@ -28,15 +28,13 @@ Covers (spec 008 US1/US2, SC-003/SC-004, quickstart.md SS2-3):
 * The mokuro shared secret planted in the sandbox config never reaches
   stdout, stderr, or the sandboxed log file.
 
-One genuine bug was found while writing this suite and is recorded as a
-strict ``xfail`` rather than fixed here (this file may not touch
-non-test code): ``installer.RawConfig`` has no ``mokuro_shared_secret``
-field and ``read_raw_config`` never populates one, so
-``mokuro_companion_status(cfg)`` -- which reads that attribute via
-``getattr(cfg, "mokuro_shared_secret", None)`` -- always sees ``None``
-and reports the mokuro row as "(unset)" regardless of what is actually in
-config.toml. See ``test_mokuro_row_reflects_configured_secret_xfail_bug``
-below.
+A bug was found while writing this suite -- ``installer.RawConfig`` had no
+``mokuro_shared_secret`` field and ``read_raw_config`` never populated one,
+so ``mokuro_companion_status(cfg)`` (which reads that attribute via
+``getattr(cfg, "mokuro_shared_secret", None)``) always saw ``None`` and
+reported the mokuro row as "(unset)" regardless of what was actually in
+config.toml. Fixed in ``installer.py``'s ``RawConfig``/``read_raw_config``
+(T007 follow-up); see ``test_mokuro_row_reflects_configured_secret`` below.
 """
 
 from __future__ import annotations
@@ -294,19 +292,18 @@ def test_yes_never_blocks_never_fails_when_every_companion_is_present(real_jmdic
     db_path.parent.mkdir(parents=True, exist_ok=True)
     real_jmdict_template.materialize(db_path)
     _make_chrome_default_profile(local_appdata, extension_ids=(_YOMITAN_ID, _ASBPLAYER_ID))
-    _write_config_with_secret(cfg_path, "irrelevant-because-of-the-RawConfig-bug")
+    _write_config_with_secret(cfg_path, "a-real-looking-secret-value")
 
     proc = _run_installer(["--yes"], env, timeout=_FULL_WIZARD_TIMEOUT)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    # Yomitan/asbplayer both present now; mokuro's row still reads "absent"
-    # from --yes's point of view because of the RawConfig bug documented in
-    # this file's module docstring and exercised directly below -- so the
-    # overall step is still SKIP (not every companion is present), which is
-    # itself the correct, non-failing behavior FR-008 requires either way.
-    assert re.search(r"\[11/12\]\s+Browser companion check \(optional\)\s+\.\.\.\s+SKIP", proc.stdout), proc.stdout
+    # Yomitan/asbplayer both present, and mokuro_shared_secret is genuinely
+    # set in config.toml, so all three companions read "present" -- the step
+    # must finish OK, not SKIP (FR-008's other half).
+    assert re.search(r"\[11/12\]\s+Browser companion check \(optional\)\s+\.\.\.\s+OK", proc.stdout), proc.stdout
     assert "Yomitan: present" in proc.stdout
     assert "asbplayer: present" in proc.stdout
+    assert "mokuro page-change bridge: present" in proc.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -347,8 +344,8 @@ def test_interactive_recheck_flips_row_when_extension_appears_between_checks(tmp
             # the extension directory the instant before answering "r".
             (profile / "Extensions" / _YOMITAN_ID).mkdir(parents=True, exist_ok=True)
             return "r"
-        # mokuro's row can never read "present" (RawConfig bug, documented
-        # above), so the loop cannot exit via all_present -- the operator's
+        # This cfg never sets mokuro_shared_secret, so mokuro's row stays
+        # "absent" and the loop cannot exit via all_present -- the operator's
         # only way out on the second round is Skip (US2 acceptance 3).
         return "s"
 
@@ -498,24 +495,13 @@ def test_mokuro_shared_secret_never_appears_via_interactive_companion_step(tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Genuine bug found while writing this suite (not fixed here -- see module
-# docstring). Kept as a strict xfail so a future fix flips it green instead
-# of it silently rotting.
+# Bug found while writing this suite (see module docstring) -- now fixed:
+# RawConfig plumbs mokuro_shared_secret through, so the doctor row reflects
+# a genuinely configured secret.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "installer.RawConfig has no mokuro_shared_secret field and "
-        "read_raw_config() never populates one, so mokuro_companion_status(cfg) "
-        "-- via getattr(cfg, 'mokuro_shared_secret', None) -- always sees None "
-        "and the doctor/wizard mokuro row always reads (unset), even when "
-        "config.toml genuinely has the secret set. Not fixed here: this task is "
-        "test-file-only."
-    ),
-)
-def test_mokuro_row_reflects_configured_secret_xfail_bug(tmp_path):
+def test_mokuro_row_reflects_configured_secret(tmp_path):
     env, cfg_path, db_path, local_appdata, appdata = _sandbox_env(tmp_path)
     _write_config_with_secret(cfg_path, "a-real-looking-secret-value")
 

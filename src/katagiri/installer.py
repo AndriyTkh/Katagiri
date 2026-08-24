@@ -142,6 +142,7 @@ class RawConfig:
     vault_path: Path | None = None
     anki_data_dir: Path | None = None
     obsidian_api_token: str | None = None
+    mokuro_shared_secret: str | None = None
 
 
 def _repo_root() -> Path:
@@ -193,15 +194,17 @@ def read_raw_config(cfg_path: Path) -> RawConfig:
             return Path(value.strip()).expanduser()
         return None
 
-    token = raw.get("obsidian_api_token")
-    token = token.strip() if isinstance(token, str) and token.strip() else None
-    if token is not None and validate_secret_value(token) is not None:
-        # An invalid token (control char, or a byte outside latin-1 -- the same
-        # rules config.py enforces on write) must never reach a consumer that
-        # would forward it as an HTTP header value. Treating it as unset here
-        # means every downstream probe/step takes the "not configured" branch
-        # instead of the "send it to Obsidian" branch.
-        token = None
+    def _secret(key: str) -> str | None:
+        value = raw.get(key)
+        value = value.strip() if isinstance(value, str) and value.strip() else None
+        if value is not None and validate_secret_value(value) is not None:
+            # An invalid secret (control char, or a byte outside latin-1 -- the
+            # same rules config.py enforces on write) must never reach a
+            # consumer that would forward it as an HTTP header value. Treating
+            # it as unset here means every downstream probe/step takes the
+            # "not configured" branch instead of the "send it" branch.
+            return None
+        return value
 
     return RawConfig(
         config_file=cfg_path,
@@ -209,7 +212,8 @@ def read_raw_config(cfg_path: Path) -> RawConfig:
         db_path=_path("db_path") or default_db,
         vault_path=_path("vault_path"),
         anki_data_dir=_path("anki_data_dir"),
-        obsidian_api_token=token,
+        obsidian_api_token=_secret("obsidian_api_token"),
+        mokuro_shared_secret=_secret("mokuro_shared_secret"),
     )
 
 
