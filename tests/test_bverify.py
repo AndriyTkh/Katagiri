@@ -280,6 +280,11 @@ HTTP_CLIENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 #: TG2-close's full-suite run) rather than routed through the Obsidian proxy,
 #: which speaks only to the local Obsidian vault, not to these modules'
 #: external hosts.
+#: ``asbplayer_bridge.py`` is a fourth exception, filed alongside its server-side
+#: allowlist entry below: its AnkiConnect leg deliberately uses stdlib
+#: ``http.client`` in a worker thread rather than ``aiohttp``, so the note-creation
+#: request and response pass through byte-exact instead of being re-serialized.
+#: Approved per D-50 escalation (2) ("Allow http.client leg").
 HTTP_CLIENT_ALLOWLIST = frozenset(
     {
         "obsidian_proxy.py",
@@ -287,6 +292,7 @@ HTTP_CLIENT_ALLOWLIST = frozenset(
         "media_asbplayer.py",
         "irodori_import.py",
         "vendor_fetch.py",
+        "asbplayer_bridge.py",
     }
 )
 
@@ -298,7 +304,14 @@ HTTP_CLIENT_ALLOWLIST = frozenset(
 #: echoed) on every request — a browser userscript has no IPC pipe to speak
 #: through the way mpv's Lua scripting does, so a guarded loopback HTTP
 #: listener is the only transport available to it.
-HTTP_SERVER_ALLOWLIST = frozenset({"media_mokuro.py"})
+#:
+#: 009's asbplayer bridge (``asbplayer_bridge.py``) is the second entry, the
+#: same shape: the asbplayer browser extension also has no IPC pipe to speak
+#: through, so a guarded loopback listener is the only transport available to
+#: it — and it binds the same port the external Go bridge it replaces already
+#: opened, not a new one. Approved per D-50 escalation (1) ("Allow
+#: asbplayer_bridge.py").
+HTTP_SERVER_ALLOWLIST = frozenset({"media_mokuro.py", "asbplayer_bridge.py"})
 
 
 def package_sources() -> list[Path]:
