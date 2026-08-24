@@ -769,7 +769,7 @@ def test_the_phase_d_fragment_holds_exactly_the_registered_batches():
     assert len(tool_registry._PHASE_D_SPECS) == 11 + 3
     # Fragment concatenation, not replacement: the earlier phases are all still
     # declared and still registered. Phase E (E-T007, below) adds 2 more on top.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(D_US1_CONTRACT))
@@ -1911,10 +1911,11 @@ def test_t010_registers_zero_new_toolspecs():
     # 26 as of T010; E-T007 adds 2 more (media_now, media_context); T012 (TG-E4,
     # below) adds 4 more (lyrics_now, lyrics_context, screenshot_capture,
     # screenshot_read); the anki fragment (below) adds 1 more (open_anki);
-    # D-44 adds 1 more (study_plan) — T010 itself still added none, which is
-    # the claim this test defends.
-    assert len(TOOL_SPECS) == 26 + 2 + 4 + 1 + 1
-    assert len(registered_tools()) == 26 + 2 + 4 + 1 + 1
+    # D-44 adds 1 more (study_plan); 007's infra fragment adds 1 more
+    # (connection_status) — T010 itself still added none, which is the claim
+    # this test defends.
+    assert len(TOOL_SPECS) == 26 + 2 + 4 + 1 + 1 + 1
+    assert len(registered_tools()) == 26 + 2 + 4 + 1 + 1 + 1
 
 
 # ---------------------------------------------------------------------------
@@ -1949,7 +1950,7 @@ def test_the_phase_e_fragment_holds_exactly_the_registered_batch():
     assert len(tool_registry._PHASE_E_SPECS) == 2
     # Fragment concatenation, not replacement: every earlier phase is still
     # declared and still registered. TG-E4 (T012, below) adds 4 more on top.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(E_US1_CONTRACT))
@@ -2186,7 +2187,7 @@ def test_the_phase_e_tg_e4_fragment_holds_exactly_the_registered_batch():
     assert len(tool_registry._PHASE_E_TG_E4_SPECS) == 4
     # Fragment concatenation, not replacement: every earlier phase (and
     # fragment) is still declared and still registered.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(E_TG_E4_CONTRACT))
@@ -2232,7 +2233,7 @@ def test_the_phase_e_anki_fragment_holds_exactly_the_registered_batch():
     assert len(tool_registry._PHASE_E_ANKI_SPECS) == 1
     # Fragment concatenation, not replacement: every earlier phase (and
     # fragment) is still declared and still registered.
-    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
+    assert len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 + 1 == len(registered_tools())
 
 
 @pytest.mark.parametrize("name", sorted(E_ANKI_CONTRACT))
@@ -2280,13 +2281,62 @@ def test_the_phase_e_d44_fragment_holds_exactly_the_registered_batch():
     # Fragment concatenation, not replacement: every earlier phase (and
     # fragment) is still declared and still registered.
     assert (
-        len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 == len(registered_tools())
+        len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 + 1 == len(registered_tools())
     )
 
 
 @pytest.mark.parametrize("name", sorted(D44_CONTRACT))
 def test_d44_contract_is_additive_only(name):
     required, optional = D44_CONTRACT[name]
+    spec = get_spec(name)  # raises if the tool was removed or renamed
+    assert spec.required_args == required, (
+        f"{name}: required arguments changed — that is a breaking change"
+    )
+    present = set(spec.arg_names)
+    assert optional <= present, (
+        f"{name}: optional arguments {sorted(optional - present)} were dropped"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 007: setup observability — connection_status (D-46)
+# ---------------------------------------------------------------------------
+#
+# Over-the-wire behaviour (real subprocess, real stdio handshake, secret-leak
+# scan) lives in tests/test_connection_status.py. What is defended here is
+# only the registration: the spec and the adapter agree, and the fragment
+# holds exactly its one additive tool.
+
+INFRA_007_CONTRACT: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "connection_status": (frozenset(), frozenset()),
+}
+
+
+def test_infra_007_tools_are_registered_with_specs():
+    registered = registered_tools()
+    for name in INFRA_007_CONTRACT:
+        assert name in registered, f"{name} is declared in the spec but not registered"
+        spec = get_spec(name)
+        assert spec.stability == "stable"
+        assert spec.note, "the connection_status spec must say why it never raises"
+
+
+def test_the_infra_007_fragment_holds_exactly_the_registered_batch():
+    """The fragment is connection_status's additive batch; an accidental extra shows here."""
+    assert {spec.name for spec in tool_registry._INFRA_007_SPECS} == set(
+        INFRA_007_CONTRACT
+    )
+    assert len(tool_registry._INFRA_007_SPECS) == 1
+    # Fragment concatenation, not replacement: every earlier phase (and
+    # fragment) is still declared and still registered.
+    assert (
+        len(TOOL_SPECS) == 8 + 3 + 1 + 14 + 2 + 4 + 1 + 1 + 1 == len(registered_tools())
+    )
+
+
+@pytest.mark.parametrize("name", sorted(INFRA_007_CONTRACT))
+def test_infra_007_contract_is_additive_only(name):
+    required, optional = INFRA_007_CONTRACT[name]
     spec = get_spec(name)  # raises if the tool was removed or renamed
     assert spec.required_args == required, (
         f"{name}: required arguments changed — that is a breaking change"
