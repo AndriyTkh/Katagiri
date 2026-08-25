@@ -1,0 +1,1 @@
+import{in as e}from"./base64-4YujvIcm.js";var t=async()=>{let t=await(await fetch(e.runtime.getURL(`/mp3-encoder-worker.js`))).text(),n=new Blob([t],{type:`application/javascript`});return new Worker(URL.createObjectURL(n))};export{t};

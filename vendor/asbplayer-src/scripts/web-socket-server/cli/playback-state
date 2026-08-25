@@ -1,0 +1,9 @@
+#!/bin/bash
+
+MEDIA_ID="$1"
+
+QUERY=""
+[ -n "$MEDIA_ID" ] && QUERY="mediaId=$MEDIA_ID"
+
+curl -H "content-type: application/json" \
+    -X GET "http://127.0.0.1:8766/asbplayer/playback-state${QUERY:+?$QUERY}"

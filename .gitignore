@@ -47,3 +47,9 @@ agent/*.log
 # Local Obsidian workspace/plugin state belongs to the operator's vault. It can
 # hold plugin credentials and must not enter this repository.
 docs/katagiri/katagiri/.obsidian/
+
+# asbplayer vendor: source tree + prebuilt extension, tracked deliberately
+!vendor/asbplayer-src/
+!vendor/asbplayer-src/**
+!vendor/asbplayer-extension/
+!vendor/asbplayer-extension/**
