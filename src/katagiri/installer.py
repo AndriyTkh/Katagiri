@@ -479,6 +479,131 @@ def verify_vendor(repo_root: Path) -> ComponentStatus:
 # ---------------------------------------------------------------------------
 
 
+def _default_obsidian_json_path() -> Path | None:
+    """``%APPDATA%\\obsidian\\obsidian.json`` -- Obsidian's own vault registry.
+
+    ``None`` when ``APPDATA`` isn't set (never expected on a real Windows
+    session, but kept parallel to :func:`_detect_anki_data_dir`'s handling of
+    a missing ``APPDATA``): callers treat that the same as "no file found".
+    """
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    return Path(appdata) / "obsidian" / "obsidian.json"
+
+
+def discover_open_vault(obsidian_json_path: Path | None = None) -> Path | None:
+    """Best-effort: the vault Obsidian itself currently has open, or ``None``.
+
+    Reads Obsidian's own vault registry (``obsidian.json``, format
+    ``{"vaults": {"<id>": {"path": ..., "ts": ..., "open": ...}, ...}}``) --
+    the same file Obsidian writes on every vault switch, not anything
+    Katagiri maintains. ``obsidian_json_path`` defaults to
+    :func:`_default_obsidian_json_path` but can be passed explicitly (this is
+    the test-injection seam: unit tests exercise the parsing logic directly
+    against a file they control, without touching ``APPDATA``).
+
+    Picks the vault flagged ``"open": true``; if none is (Obsidian was
+    closed when this ran), falls back to the most recent ``"ts"``. Either
+    way, the candidate is only returned if its path still exists *and* still
+    looks like a real Obsidian vault (has a ``.obsidian`` subdirectory) --
+    Obsidian's registry keeps entries for vaults that were since moved,
+    renamed, or deleted, and a stale entry must never overwrite a working
+    ``vault_path`` with a bad one.
+
+    Never raises: a missing file, unreadable JSON, or a registry with no
+    usable vault all collapse to ``None``, exactly like every other
+    best-effort autodetect in this module (see :func:`_detect_anki_data_dir`).
+    """
+    if obsidian_json_path is None:
+        obsidian_json_path = _default_obsidian_json_path()
+        if obsidian_json_path is None:
+            return None
+    if not obsidian_json_path.is_file():
+        return None
+    try:
+        raw = json.loads(obsidian_json_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+    vaults = raw.get("vaults") if isinstance(raw, dict) else None
+    if not isinstance(vaults, dict):
+        return None
+
+    candidates = [
+        entry
+        for entry in vaults.values()
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"].strip()
+    ]
+    if not candidates:
+        return None
+
+    open_candidates = [entry for entry in candidates if entry.get("open") is True]
+    if open_candidates:
+        chosen = open_candidates[0]
+    else:
+        chosen = max(candidates, key=lambda entry: entry.get("ts") or 0)
+
+    path = Path(chosen["path"])
+    if path.is_dir() and (path / ".obsidian").is_dir():
+        return path
+    return None
+
+
+def is_vault_path_stale(vault_path: Path) -> bool:
+    """``True`` when ``vault_path`` no longer looks like a real vault.
+
+    A configured ``vault_path`` goes stale when the vault was moved, renamed,
+    or deleted since it was written to ``config.toml`` -- the directory is
+    simply gone, or it exists but its ``.obsidian`` marker is gone with it
+    (e.g. the folder now holds something unrelated). Only checked against a
+    *set* ``vault_path``; an unset one is a different condition ("never
+    configured") that callers handle separately.
+    """
+    return not (vault_path.is_dir() and (vault_path / ".obsidian").is_dir())
+
+
+def _stale_vault_repair(cfg: RawConfig, *, apply: bool) -> tuple[RawConfig, str | None]:
+    """If ``cfg.vault_path`` is stale, look for a fix (and, if ``apply``,
+    write it).
+
+    Returns ``(cfg, None)`` unchanged when ``vault_path`` is unset or not
+    stale -- callers only need to react when the note is non-``None``.
+    When stale:
+
+    * ``apply=False`` (doctor probes, including ``--check`` -- which must
+      stay read-only, see the module docstring) only reports what autodiscovery
+      *would* fix, or why nothing was found; ``config.toml`` is never touched
+      and the returned ``cfg`` is the same object.
+    * ``apply=True`` (the interactive/``--yes`` wizard step) writes the
+      discovered path via :func:`apply_config_updates` and returns a ``cfg``
+      reflecting the new value, so the caller's subsequent connection attempt
+      uses it immediately.
+    """
+    if cfg.vault_path is None or not is_vault_path_stale(cfg.vault_path):
+        return cfg, None
+
+    old = cfg.vault_path
+    discovered = discover_open_vault()
+    if discovered is None:
+        return cfg, (
+            f"vault_path ({old}) is stale (missing or no .obsidian folder) and no "
+            "open Obsidian vault could be autodiscovered to repair it"
+        )
+    if not apply:
+        return cfg, (
+            f"vault_path ({old}) is stale; an open vault was found at {discovered} "
+            "(re-run the installer, not --check, to apply the fix)"
+        )
+    try:
+        apply_config_updates(
+            cfg.config_file, {"vault_path": _normalize_path_value(str(discovered))}
+        )
+    except InstallerError as exc:
+        return cfg, f"vault_path ({old}) is stale; repair failed: {exc}"
+    return replace(cfg, vault_path=discovered), f"vault_path was stale ({old}); repaired to {discovered}"
+
+
 def check_obsidian_connection(token: str | None) -> tuple[bool, str]:
     """Ping obsidian-local-rest-api through ``katagiri.obsidian_proxy``.
 
@@ -740,15 +865,20 @@ def probe_yomitan(cfg: RawConfig) -> ComponentStatus:
 
 
 def probe_obsidian(cfg: RawConfig) -> ComponentStatus:
+    cfg, repair_note = _stale_vault_repair(cfg, apply=False)
+
     if not cfg.obsidian_api_token and cfg.vault_path is None:
-        return ComponentStatus(
-            "obsidian bridge",
-            "MANUAL STEP",
+        detail = (
             "vault_path not set; install the 'Local REST API' plugin and set "
             "vault_path so its key and certificate can be auto-discovered "
-            "(or set obsidian_api_token explicitly)",
+            "(or set obsidian_api_token explicitly)"
         )
+        if repair_note:
+            detail = f"{repair_note}; {detail}"
+        return ComponentStatus("obsidian bridge", "MANUAL STEP", detail)
     ok, detail = check_obsidian_connection(cfg.obsidian_api_token)
+    if repair_note:
+        detail = f"{repair_note}; {detail}"
     return ComponentStatus("obsidian bridge", "READY" if ok else "MANUAL STEP", detail)
 
 
@@ -913,21 +1043,49 @@ def step_config(
     if created:
         config_mod.write_default_config(cfg_path)
 
-    if assume_yes:
-        return StepResult("OK", "created config.toml" if created else "config.toml present")
-
     current = read_raw_config(cfg_path)
+    vault_stale = current.vault_path is not None and is_vault_path_stale(current.vault_path)
+    discovered_vault: Path | None = None
+    if current.vault_path is None or vault_stale:
+        discovered_vault = discover_open_vault()
+
+    if assume_yes:
+        detail = "created config.toml" if created else "config.toml present"
+        if discovered_vault is not None:
+            try:
+                apply_config_updates(
+                    cfg_path, {"vault_path": _normalize_path_value(str(discovered_vault))}
+                )
+            except InstallerError as exc:
+                return StepResult("ACTION NEEDED", str(exc))
+            if vault_stale:
+                why = f"vault_path was stale (was {current.vault_path})"
+            else:
+                why = "vault_path was unset"
+            detail = f"{detail}; {why}, autodiscovered and set to {discovered_vault}"
+            _log.info("step_config: %s -> %s", why, discovered_vault)
+        return StepResult("OK", detail)
+
     updates: dict[str, str] = {}
     for key, label in CONFIG_PROMPTS:
         is_secret = key == "obsidian_api_token"
         current_value = getattr(current, key)
-        shown = "(set)" if is_secret and current_value else (str(current_value) if current_value else "(unset)")
+        default_answer: str | None = None
+        if key == "vault_path" and discovered_vault is not None:
+            why = "stale" if vault_stale else "unset"
+            shown = f"{discovered_vault} -- autodiscovered, vault_path was {why}"
+            default_answer = str(discovered_vault)
+        else:
+            shown = "(set)" if is_secret and current_value else (str(current_value) if current_value else "(unset)")
         asker = secret_prompt if (is_secret and secret_prompt is not None) else prompt
+        prompt_suffix = "Enter to accept" if default_answer is not None else "Enter to keep"
         try:
-            answer = asker(f"  {label} [{shown}], Enter to keep: ")
+            answer = asker(f"  {label} [{shown}], {prompt_suffix}: ")
         except (EOFError, KeyboardInterrupt):
             answer = ""
         answer = (answer or "").strip()
+        if not answer and default_answer is not None:
+            answer = default_answer
         if not answer:
             continue
         updates[key] = answer if is_secret else _normalize_path_value(answer)
@@ -1226,6 +1384,11 @@ def step_obsidian(cfg: RawConfig) -> StepResult:
     print("  Opening Obsidian so you know it's there -- it's your main notebook.")
     launch = obsidian_launch.launch_obsidian()
 
+    cfg, repair_note = _stale_vault_repair(cfg, apply=True)
+    if repair_note:
+        print(f"  {repair_note}")
+        _log.info("step_obsidian: %s", repair_note)
+
     if not cfg.obsidian_api_token and cfg.vault_path is None:
         detail = (
             "vault_path not set. Install the 'Local REST API' community plugin "
@@ -1234,8 +1397,12 @@ def step_obsidian(cfg: RawConfig) -> StepResult:
         )
         if launch.reason and not launch.already_running:
             detail = f"{detail} ({launch.reason})"
+        if repair_note:
+            detail = f"{repair_note}; {detail}"
         return StepResult("SKIP", detail)
     ok, detail = check_obsidian_connection(cfg.obsidian_api_token)
+    if repair_note:
+        detail = f"{repair_note}; {detail}"
     return StepResult("OK" if ok else "ACTION NEEDED", detail)
 
 
@@ -1572,6 +1739,45 @@ def _print_doctor_summary(cfg_path: Path, repo_root: Path) -> list[ComponentStat
     return statuses
 
 
+def _mcp_server_exe_path(repo_root: Path) -> Path:
+    """Absolute path to the ``katagiri-mcp`` console-script entry point.
+
+    ``pyproject.toml`` declares ``katagiri-mcp = "katagiri.mcp_server:main"``,
+    which ``uv sync``/``pip install -e .`` materializes as a real executable
+    inside the checkout's own venv -- ``Scripts\\katagiri-mcp.exe`` on Windows,
+    ``bin/katagiri-mcp`` elsewhere -- rather than something importable at
+    runtime, so the path is built rather than looked up.
+    """
+    if os.name == "nt":
+        return repo_root / ".venv" / "Scripts" / "katagiri-mcp.exe"
+    return repo_root / ".venv" / "bin" / "katagiri-mcp"
+
+
+def render_mcp_connect_instructions(repo_root: Path) -> str:
+    """The "how do I point an MCP client at this" block, shown after setup.
+
+    Pure string formatting around :func:`_mcp_server_exe_path` -- no
+    filesystem access, no subprocess -- so it's cheap to unit-test and safe
+    to call from both the wizard's end-of-run summary and ``--check``.
+    """
+    exe = _mcp_server_exe_path(repo_root)
+    json_snippet = json.dumps(
+        {"mcpServers": {"katagiri": {"command": str(exe), "args": []}}}, indent=2
+    )
+    return (
+        "\nConnect Katagiri to an agent:\n"
+        "  Claude Code:\n"
+        f"    claude mcp add katagiri -- {exe}\n"
+        "\n"
+        "  Other MCP clients (generic JSON config):\n"
+        f"    {json_snippet}\n"
+        "\n"
+        "  The server speaks MCP over stdio; your MCP client spawns it on\n"
+        "  demand -- there is nothing to start manually. Set KATAGIRI_DATA_HOME\n"
+        "  to isolate this instance's data (config/db/logs) if needed.\n"
+    )
+
+
 def _launch_mcp_server(repo_root: Path) -> None:
     """Open run-mcp.bat in a new console window and return immediately.
 
@@ -1716,6 +1922,7 @@ def _run_wizard_steps(cfg_path: Path, repo_root: Path, *, assume_yes: bool) -> N
     statuses = _print_doctor_summary(cfg_path, repo_root)
     print()
     print(EPILOGUE)
+    print(render_mcp_connect_instructions(repo_root))
 
     if assume_yes or aborted:
         return
@@ -1883,6 +2090,7 @@ def main(argv: list[str] | None = None) -> int:
         statuses = collect_doctor_statuses(cfg, repo_root)
         print(f"Data home: {config_mod.config_dir()}")
         print(render_doctor_table(statuses))
+        print(render_mcp_connect_instructions(repo_root))
         code = doctor_exit_code(statuses)
         _log.info("doctor finished with exit code %d", code)
         return code

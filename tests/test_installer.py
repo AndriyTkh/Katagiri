@@ -18,6 +18,7 @@ otherwise shell out, and every filesystem interaction goes through a temp
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -111,7 +112,8 @@ def test_apply_config_updates_fails_safe_on_non_utf8_existing_file(tmp_path):
     assert cfg_path.read_bytes() == original_bytes
 
 
-def test_step_config_reports_action_needed_instead_of_crashing(tmp_path):
+def test_step_config_reports_action_needed_instead_of_crashing(tmp_path, monkeypatch):
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: None)
     cfg_dir = tmp_path / "Katagiri"
     cfg_dir.mkdir(parents=True)
     cfg_path = cfg_dir / "config.toml"
@@ -135,7 +137,8 @@ def test_apply_config_updates_skips_blank_values(tmp_path):
     assert "anki_data_dir" not in text
 
 
-def test_step_config_never_echoes_token_to_stdout(tmp_path, capsys):
+def test_step_config_never_echoes_token_to_stdout(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: None)
     cfg_path = tmp_path / "Katagiri" / "config.toml"
     secret = "sk-super-secret-token-value"
 
@@ -152,7 +155,8 @@ def test_step_config_never_echoes_token_to_stdout(tmp_path, capsys):
     assert secret in cfg_path.read_text(encoding="utf-8")
 
 
-def test_step_config_assume_yes_creates_file_without_prompting(tmp_path):
+def test_step_config_assume_yes_creates_file_without_prompting(tmp_path, monkeypatch):
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: None)
     cfg_path = tmp_path / "Katagiri" / "config.toml"
 
     def boom(_msg: str) -> str:
@@ -161,6 +165,267 @@ def test_step_config_assume_yes_creates_file_without_prompting(tmp_path):
     result = installer.step_config(cfg_path, assume_yes=True, prompt=boom)
     assert result.status == "OK"
     assert cfg_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# vault_path autodiscovery + self-repair
+# ---------------------------------------------------------------------------
+
+
+def _write_obsidian_json(path: Path, payload: dict) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _make_vault(root: Path, name: str = "Vault") -> Path:
+    vault = root / name
+    (vault / ".obsidian").mkdir(parents=True, exist_ok=True)
+    return vault
+
+
+def test_discover_open_vault_picks_the_vault_flagged_open(tmp_path):
+    open_vault = _make_vault(tmp_path, "OpenVault")
+    other_vault = _make_vault(tmp_path, "OtherVault")
+    registry = _write_obsidian_json(
+        tmp_path / "obsidian.json",
+        {
+            "vaults": {
+                "a": {"path": str(other_vault), "ts": 200, "open": False},
+                "b": {"path": str(open_vault), "ts": 100, "open": True},
+            }
+        },
+    )
+    assert installer.discover_open_vault(registry) == open_vault
+
+
+def test_discover_open_vault_falls_back_to_most_recent_ts_when_none_open(tmp_path):
+    older = _make_vault(tmp_path, "Older")
+    newer = _make_vault(tmp_path, "Newer")
+    registry = _write_obsidian_json(
+        tmp_path / "obsidian.json",
+        {
+            "vaults": {
+                "a": {"path": str(older), "ts": 100, "open": False},
+                "b": {"path": str(newer), "ts": 999, "open": False},
+            }
+        },
+    )
+    assert installer.discover_open_vault(registry) == newer
+
+
+def test_discover_open_vault_missing_file_returns_none(tmp_path):
+    assert installer.discover_open_vault(tmp_path / "no-such-obsidian.json") is None
+
+
+def test_discover_open_vault_garbage_json_returns_none(tmp_path):
+    registry = tmp_path / "obsidian.json"
+    registry.write_text("{not json at all", encoding="utf-8")
+    assert installer.discover_open_vault(registry) is None
+
+
+def test_discover_open_vault_no_vaults_key_returns_none(tmp_path):
+    registry = _write_obsidian_json(tmp_path / "obsidian.json", {"unrelated": True})
+    assert installer.discover_open_vault(registry) is None
+
+
+def test_discover_open_vault_rejects_path_without_dot_obsidian(tmp_path):
+    """A registry entry whose folder has no ``.obsidian`` subdir (moved/deleted
+    vault) must never be handed back as a good autodiscovery result."""
+    not_a_vault = tmp_path / "NotAVault"
+    not_a_vault.mkdir()
+    registry = _write_obsidian_json(
+        tmp_path / "obsidian.json",
+        {"vaults": {"a": {"path": str(not_a_vault), "ts": 1, "open": True}}},
+    )
+    assert installer.discover_open_vault(registry) is None
+
+
+def test_discover_open_vault_rejects_nonexistent_path(tmp_path):
+    registry = _write_obsidian_json(
+        tmp_path / "obsidian.json",
+        {"vaults": {"a": {"path": str(tmp_path / "gone"), "ts": 1, "open": True}}},
+    )
+    assert installer.discover_open_vault(registry) is None
+
+
+def test_is_vault_path_stale_true_when_directory_missing(tmp_path):
+    assert installer.is_vault_path_stale(tmp_path / "nope") is True
+
+
+def test_is_vault_path_stale_true_when_no_dot_obsidian(tmp_path):
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir()
+    assert installer.is_vault_path_stale(plain_dir) is True
+
+
+def test_is_vault_path_stale_false_for_a_real_vault(tmp_path):
+    vault = _make_vault(tmp_path)
+    assert installer.is_vault_path_stale(vault) is False
+
+
+def test_step_config_yes_writes_discovered_vault_path_when_unset(tmp_path, monkeypatch):
+    discovered = _make_vault(tmp_path, "Discovered")
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: discovered)
+    cfg_path = tmp_path / "Katagiri" / "config.toml"
+
+    result = installer.step_config(cfg_path, assume_yes=True, prompt=None)
+
+    assert result.status == "OK"
+    assert "unset" in result.detail
+    assert str(discovered) in result.detail
+    cfg = installer.read_raw_config(cfg_path)
+    assert cfg.vault_path == discovered
+
+
+def test_step_config_yes_repairs_a_stale_vault_path(tmp_path, monkeypatch):
+    stale = tmp_path / "GoneVault"
+    discovered = _make_vault(tmp_path, "Discovered")
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: discovered)
+    cfg_path = tmp_path / "Katagiri" / "config.toml"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text(f'vault_path = "{stale.as_posix()}"\n', encoding="utf-8")
+
+    result = installer.step_config(cfg_path, assume_yes=True, prompt=None)
+
+    assert result.status == "OK"
+    assert "stale" in result.detail
+    assert str(stale) in result.detail
+    assert str(discovered) in result.detail
+    cfg = installer.read_raw_config(cfg_path)
+    assert cfg.vault_path == discovered
+
+
+def test_step_config_yes_leaves_a_healthy_vault_path_alone(tmp_path, monkeypatch):
+    healthy = _make_vault(tmp_path, "Healthy")
+
+    def boom(*a, **k):
+        raise AssertionError("must not autodiscover when vault_path is already healthy")
+
+    monkeypatch.setattr(installer, "discover_open_vault", boom)
+    cfg_path = tmp_path / "Katagiri" / "config.toml"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text(f'vault_path = "{healthy.as_posix()}"\n', encoding="utf-8")
+
+    result = installer.step_config(cfg_path, assume_yes=True, prompt=None)
+
+    assert result.status == "OK"
+    cfg = installer.read_raw_config(cfg_path)
+    assert cfg.vault_path == healthy
+
+
+def test_step_config_interactive_offers_discovered_vault_as_default(tmp_path, monkeypatch):
+    discovered = _make_vault(tmp_path, "Discovered")
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: discovered)
+    cfg_path = tmp_path / "Katagiri" / "config.toml"
+
+    prompts: list[str] = []
+    # Enter (blank) on the vault_path prompt accepts the discovered default;
+    # decline everything else.
+    answers = iter(["", "", ""])
+
+    def fake_prompt(msg: str) -> str:
+        prompts.append(msg)
+        return next(answers)
+
+    result = installer.step_config(cfg_path, assume_yes=False, prompt=fake_prompt)
+
+    assert result.status == "OK"
+    assert any(str(discovered) in p for p in prompts)
+    cfg = installer.read_raw_config(cfg_path)
+    assert cfg.vault_path == discovered
+
+
+def test_step_config_interactive_explicit_answer_overrides_discovered_default(
+    tmp_path, monkeypatch
+):
+    discovered = _make_vault(tmp_path, "Discovered")
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: discovered)
+    cfg_path = tmp_path / "Katagiri" / "config.toml"
+    explicit = tmp_path / "Explicit" / "Vault"
+
+    answers = iter([str(explicit), "", ""])
+
+    def fake_prompt(_msg: str) -> str:
+        return next(answers)
+
+    result = installer.step_config(cfg_path, assume_yes=False, prompt=fake_prompt)
+
+    assert result.status == "OK"
+    cfg = installer.read_raw_config(cfg_path)
+    assert cfg.vault_path == explicit
+
+
+def test_probe_obsidian_stale_vault_path_reports_repair_available_without_writing(
+    tmp_path, monkeypatch
+):
+    stale = tmp_path / "GoneVault"
+    discovered = _make_vault(tmp_path, "Discovered")
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: discovered)
+    cfg = _raw_config(tmp_path, vault_path=stale)
+
+    before = cfg.config_file.read_bytes() if cfg.config_file.exists() else None
+    status = installer.probe_obsidian(cfg)
+
+    assert "stale" in status.detail
+    assert str(discovered) in status.detail
+    # --check must stay read-only: nothing written even though a fix exists.
+    after = cfg.config_file.read_bytes() if cfg.config_file.exists() else None
+    assert before == after
+
+
+def test_probe_obsidian_stale_vault_path_no_fix_found(tmp_path, monkeypatch):
+    stale = tmp_path / "GoneVault"
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: None)
+    cfg = _raw_config(tmp_path, vault_path=stale)
+
+    status = installer.probe_obsidian(cfg)
+
+    assert "stale" in status.detail
+    assert "no open Obsidian vault could be autodiscovered" in status.detail
+
+
+def test_step_obsidian_repairs_stale_vault_path_before_connecting(tmp_path, monkeypatch):
+    import katagiri.obsidian_launch as obsidian_launch_mod
+    import katagiri.obsidian_proxy as obsidian_proxy
+
+    monkeypatch.setattr(
+        obsidian_launch_mod,
+        "launch_obsidian",
+        lambda: obsidian_launch_mod.LaunchResult(
+            launched=False, already_running=True, path=None, reason=None
+        ),
+    )
+
+    stale = tmp_path / "GoneVault"
+    discovered = _make_vault(tmp_path, "Discovered")
+    monkeypatch.setattr(installer, "discover_open_vault", lambda *a, **k: discovered)
+
+    cfg_path = tmp_path / "Katagiri" / "config.toml"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text(f'vault_path = "{stale.as_posix()}"\n', encoding="utf-8")
+    cfg = installer.read_raw_config(cfg_path)
+
+    def fake_list_vault_dir():
+        return {
+            "ok": True,
+            "status": 200,
+            "error": None,
+            "note": "",
+            "files": [],
+            "file_count": 0,
+            "truncated": False,
+            "path": "",
+        }
+
+    monkeypatch.setattr(obsidian_proxy, "list_vault_dir", fake_list_vault_dir)
+
+    result = installer.step_obsidian(cfg)
+
+    assert result.status == "OK"
+    assert "repaired" in result.detail
+    on_disk = installer.read_raw_config(cfg_path)
+    assert on_disk.vault_path == discovered
 
 
 # ---------------------------------------------------------------------------
@@ -828,7 +1093,11 @@ def test_step_obsidian_attempts_connection_when_only_vault_path_set(tmp_path, mo
         }
 
     monkeypatch.setattr(obsidian_proxy, "list_vault_dir", fake_list_vault_dir)
-    cfg = _raw_config(tmp_path, vault_path=tmp_path)
+    # A real (non-stale) vault -- not just any directory -- so this exercises
+    # the "token unset but vault_path healthy" path without also tripping the
+    # stale-vault_path autodiscovery/repair branch (covered separately).
+    vault = _make_vault(tmp_path)
+    cfg = _raw_config(tmp_path, vault_path=vault)
     result = installer.step_obsidian(cfg)
     assert calls == [True]
     assert result.status == "OK"
@@ -860,7 +1129,10 @@ def test_probe_obsidian_attempts_connection_when_only_vault_path_set(tmp_path, m
         }
 
     monkeypatch.setattr(obsidian_proxy, "list_vault_dir", fake_list_vault_dir)
-    cfg = _raw_config(tmp_path, vault_path=tmp_path)
+    # See the step_obsidian twin above: a real vault, not a bare tmp_path, so
+    # this doesn't also trip the stale-vault_path repair branch.
+    vault = _make_vault(tmp_path)
+    cfg = _raw_config(tmp_path, vault_path=vault)
     status = installer.probe_obsidian(cfg)
     assert calls == [True]
     assert status.status == "READY"
@@ -1453,3 +1725,45 @@ def test_run_wizard_releases_lock_even_when_a_step_raises(tmp_path, monkeypatch)
     # which proves run_wizard didn't leak the OS lock on a step failure.
     fh = installer._acquire_wizard_lock(lock_path)
     installer._release_wizard_lock(fh)
+
+
+# ---------------------------------------------------------------------------
+# MCP connect instructions
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_exe_path_uses_venv_scripts_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(installer.os, "name", "nt")
+    exe = installer._mcp_server_exe_path(tmp_path)
+    assert exe == tmp_path / ".venv" / "Scripts" / "katagiri-mcp.exe"
+
+
+def test_mcp_exe_path_uses_venv_bin_on_posix(tmp_path, monkeypatch):
+    monkeypatch.setattr(installer.os, "name", "posix")
+    exe = installer._mcp_server_exe_path(tmp_path)
+    assert exe == tmp_path / ".venv" / "bin" / "katagiri-mcp"
+
+
+def test_render_mcp_connect_instructions_contains_the_real_exe_path(tmp_path):
+    text = installer.render_mcp_connect_instructions(tmp_path)
+    exe = installer._mcp_server_exe_path(tmp_path)
+    assert str(exe) in text
+    assert "claude mcp add katagiri --" in text
+    assert f"claude mcp add katagiri -- {exe}" in text
+
+
+def test_render_mcp_connect_instructions_embeds_valid_json():
+    import re
+
+    text = installer.render_mcp_connect_instructions(Path("C:/repo"))
+    match = re.search(r"(\{[\s\S]*\})", text)
+    assert match is not None, text
+    payload = json.loads(match.group(1))
+    exe = str(installer._mcp_server_exe_path(Path("C:/repo")))
+    assert payload == {"mcpServers": {"katagiri": {"command": exe, "args": []}}}
+
+
+def test_render_mcp_connect_instructions_mentions_stdio_and_data_home_env():
+    text = installer.render_mcp_connect_instructions(Path("C:/repo"))
+    assert "stdio" in text
+    assert "KATAGIRI_DATA_HOME" in text
