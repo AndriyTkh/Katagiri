@@ -420,7 +420,7 @@ exist.
 
 ## Taskgroup TG3: Gate (serial-on-main, dedicated testing agent)
 
-- [ ] T012 [Gate] [GATE RUN 2026-08-24 — all automatable sections PASS; §6 DEFERRED TO USER, see note below] Run `specs/009-asbplayer-bridge-in-process/quickstart.md` §1–§9 in order
+- [ ] T012 [Gate] [GATE RUNS 2026-08-24 (§1–§5, §7–§9 PASS) + 2026-08-25 (§6 live, PASS except media-attach eyeball — see note)] Run `specs/009-asbplayer-bridge-in-process/quickstart.md` §1–§9 in order
       and record the outcome here. The load-bearing steps, called out because a green suite
       alone does not prove them: (a) **§5, the differential run against the Go bridge, is
       mandatory** — plan.md §Deliberate omissions traded 009's held-out suite for it, so a
@@ -458,12 +458,40 @@ exist.
       branch-selection decisions identical. The 6 divergences ratified as **G-7** (400
       parser-wording), **G-8** (`-1\n` vs `-1` trailing newline), **G-9** (Go `null\n` vs
       aiohttp plain-text 500 body) in research.md R4, commit 4f462fd. No code change.
-      §6 **DEFERRED TO USER — the only open item.** Requires the physical user: real
-      extension → `ws://127.0.0.1:8766/ws`, media_now/media_context live check, mine one
-      card via proxy at `http://127.0.0.1:8766`, stop/start rebind observation. Record
-      results here when performed; feature is not fully gated until then.
-      §7 PASS (security_scan/serves_stdio test green); live-binding PowerShell check
-      deferred with §6 (needs Katagiri running).
+      §6 **RUN 2026-08-25 (real extension, live Chrome) — PASS except one eyeball item.**
+      Step 1 startup log: real Katagiri starts at 08:22:13 and 08:45:54 both logged
+      "asbplayer bridge listening on 127.0.0.1:8766 (in-process)" + "hosted asbplayer
+      bridge in-process on loopback port 8766" — wording and loopback bind confirmed.
+      (Session note: at 08:45:54 Claude Code spawned TWO katagiri instances; the loser
+      got WinError 10048 and, since ensure_asbplayer_bridge never retries, ran
+      bridge-less for its lifetime — observations below therefore ran against the same
+      bridge hosted standalone via the identical public entry point
+      `ensure_asbplayer_bridge()`, HTTP/ws-equivalent per media_asbplayer.py's
+      pure-loopback-HTTP design. Follow-up filed for the no-retry gap.)
+      Step 2 connect: real extension (2 ws clients, user's Chrome, YouTube tab) connected
+      unprompted — extension was already configured at ws://127.0.0.1:8766/ws; DEBUG log
+      "client connected from 127.0.0.1 (1 total)/(2 total)" 0.3s/5s after bind; connection
+      held >2 min across many keepalive intervals while serving relays. PASS.
+      Step 3 MCP tools: media_now → active=true, channel=asbplayer, real bound media
+      (YouTube title), anchor_ms with **anchor_source="live"** (patched build confirmed).
+      media_context → ok, same live anchor; lines=[] because the extension never applied
+      the pushed SRT (load-subtitles relay answered 200 with awaited client reply, but
+      loadedSubtitles stayed [] — extension-side, tab unfocused/paused; bridge relay
+      itself verified). Relay checks: /asbplayer/seek moved the real player to 5000ms
+      (playback-state confirmed), bound-media/subtitles/playback-state all live. PASS.
+      Step 4 mine: addNote via proxy http://127.0.0.1:8766 → forwarded to Anki 200,
+      noteId 1787637230253 (and 1787637406326 on logged rerun) landed in deck Default;
+      DEBUG log "published mine-subtitle (…) to 2 client(s)" with noteId attached, both
+      clients replied (fire-and-forget per R3.6). **Residual: media attach on the card
+      not confirmed** — extension acked mine-subtitle but issued no updateLastCard
+      (no subtitle loaded/tab unfocused); needs 60s of user eyeball: focus the tab, load
+      subs, mine once, confirm [sound:]/<img> on the card.
+      Step 5 rebind: real-Katagiri cycle in katagiri.log — 08:22 bind → stop
+      "asbplayer bridge stopped" → 08:45:56 fresh instance rebinds clean (O-2). Repeated
+      with the standalone host: kill → port released ≤2s → restart → rebind ≤1s →
+      both extension clients auto-reconnected within 5s, relays served. PASS.
+      §7 PASS (security_scan/serves_stdio test green); live-binding check now done with
+      bridge running: Get-NetTCPConnection port 8766 → 127.0.0.1 only, never 0.0.0.0.
       §8 PASS — diff vs bc9e4a2 on test_bverify/test_cverify contains only the D-50
       allowlist entries + provenance comments; no spawn machinery in src (quickstart §8
       grep pattern corrected in 4f462fd — old literal pattern false-fired on mandated
@@ -472,7 +500,10 @@ exist.
       clearing a leftover pre-gate Go-bridge process (go-build main.exe, PID 3996, from
       earlier smoke testing — suite itself binds ephemeral ports only, verified).
 
-**Checkpoint**: feature complete pending §6 manual observation. Push to remote after TG3 (orchestrator).
+**Checkpoint**: §6 observed live 2026-08-25 against the real extension — all steps pass
+except one residual eyeball item (media attach on the mined card, extension-side). T012
+flips to [x] when the user confirms that one observation. Push to remote after TG3
+(orchestrator).
 
 ---
 
