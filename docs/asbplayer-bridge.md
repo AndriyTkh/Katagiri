@@ -43,7 +43,23 @@ occupied" below).
 
 ## Pointing the extension at the bridge
 
-In the asbplayer extension's settings, set the WebSocket server URL to:
+**If you're using the vendored extension build** (`vendor/asbplayer-extension/`,
+see `vendor/README.md`), there is nothing to configure: that build's
+defaults are already baked in — WebSocket server URL
+`ws://127.0.0.1:8766/ws` and Anki Connect URL `http://127.0.0.1:8766` — so a
+fresh "Load unpacked" install points at this bridge out of the box. The
+installer wizard's "asbplayer browser extension (optional)" step
+(`katagiri.installer.step_asbplayer_extension`) verifies both URLs are
+present in the build, offers to open `chrome://extensions`, and prints the
+"Load unpacked" steps; `python -m katagiri.installer --check`'s doctor
+table carries the same verification as a read-only row ("asbplayer
+extension (vendored build)").
+
+**If you installed asbplayer from its official Chrome Web Store listing (or
+any other upstream build)** instead of the vendored one, its defaults point
+at the *old* AnkiConnect port and won't have the WebSocket client enabled,
+so you still need to edit its settings by hand. In the extension's
+settings, set the WebSocket server URL to:
 
 ```
 ws://127.0.0.1:8766/ws

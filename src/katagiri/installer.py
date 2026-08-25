@@ -101,6 +101,7 @@ STEP_LABELS = (
     "Backup rehearsal",
     "Irodori study schedule (optional)",
     "Browser companion check (optional)",
+    "asbplayer browser extension (optional)",
 )
 
 
@@ -939,6 +940,76 @@ def probe_asbplayer_bridge(cfg: RawConfig) -> ComponentStatus:
     return ComponentStatus("asbplayer bridge", status, detail)
 
 
+# Bridge URLs baked into the vendored asbplayer build's settings-provider
+# defaults (see vendor/README.md "asbplayer extension (Chrome unpacked
+# build)"). Read-only checks against these: this module never patches the
+# bundle -- if either is missing, the wizard/doctor report it and point at
+# rebuilding from the asbplayer checkout instead.
+_ASBPLAYER_EXT_WS_URL: Final = "ws://127.0.0.1:8766/ws"
+_ASBPLAYER_EXT_ANKI_URL: Final = "http://127.0.0.1:8766"
+
+
+def _asbplayer_extension_dir(repo_root: Path) -> Path:
+    return repo_root / "vendor" / "asbplayer-extension"
+
+
+def _verify_asbplayer_extension_build(ext_dir: Path) -> tuple[bool, bool]:
+    """Scan the build's ``.js`` files for both baked-in bridge URLs.
+
+    Returns ``(ws_url_found, anki_url_found)``. Purely read-only -- never
+    writes to or patches the bundle; a missing URL is reported by the
+    caller, not fixed here.
+    """
+    ws_found = False
+    anki_found = False
+    try:
+        js_paths = ext_dir.rglob("*.js")
+    except OSError:
+        return False, False
+    for js_path in js_paths:
+        try:
+            text = js_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        ws_found = ws_found or _ASBPLAYER_EXT_WS_URL in text
+        anki_found = anki_found or _ASBPLAYER_EXT_ANKI_URL in text
+        if ws_found and anki_found:
+            break
+    return ws_found, anki_found
+
+
+def probe_asbplayer_extension(repo_root: Path) -> ComponentStatus:
+    """Vendored asbplayer unpacked-extension build doctor row.
+
+    Purely read-only (``--check``'s contract, 008 FR-009 precedent): never
+    launches Chrome, never writes anything. ``READY`` only when the manifest
+    exists *and* both baked-in bridge URLs are found in the build's ``.js``
+    files; ``MANUAL STEP`` otherwise, naming what's missing.
+    """
+    ext_dir = _asbplayer_extension_dir(repo_root)
+    name = "asbplayer extension (vendored build)"
+    if not (ext_dir / "manifest.json").exists():
+        return ComponentStatus(
+            name, "MANUAL STEP", "vendored extension build absent (copy vendor/ data first)"
+        )
+
+    ws_found, anki_found = _verify_asbplayer_extension_build(ext_dir)
+    if ws_found and anki_found:
+        return ComponentStatus(name, "READY", f"manifest + bridge URLs verified in {ext_dir}")
+
+    missing = [
+        url
+        for url, found in (
+            (_ASBPLAYER_EXT_WS_URL, ws_found),
+            (_ASBPLAYER_EXT_ANKI_URL, anki_found),
+        )
+        if not found
+    ]
+    return ComponentStatus(
+        name, "MANUAL STEP", f"bundle missing baked-in URL(s): {', '.join(missing)}"
+    )
+
+
 _COMPANION_FALLBACK_NAMES: Final = ("Yomitan", "asbplayer", "mokuro page-change bridge")
 
 
@@ -1001,6 +1072,7 @@ def collect_doctor_statuses(cfg: RawConfig, repo_root: Path) -> list[ComponentSt
         probe_backup(cfg),
         probe_irodori(cfg.db_path),
         probe_asbplayer_bridge(cfg),
+        probe_asbplayer_extension(repo_root),
         *probe_companions(cfg),
     ]
 
@@ -1605,6 +1677,100 @@ def step_companions(cfg: RawConfig, *, assume_yes: bool, prompt: Any = input) ->
     return StepResult("OK", _companion_step_detail(statuses))
 
 
+def _open_chrome_extensions_page() -> bool:
+    """Best-effort open ``chrome://extensions`` in Chrome.
+
+    Windows only: ``os.startfile`` has no registered handler for a
+    ``chrome://`` URL, so this shells out to ``start chrome ...`` instead
+    (``shell=True``-equivalent via ``cmd /c start``). Never raises -- any
+    failure here is non-fatal, since the printed manual instructions cover
+    opening the page by hand either way. Returns whether it actually tried
+    to launch Chrome (``True`` on Windows, regardless of whether the launch
+    itself succeeded); the step prints a fallback line when this is
+    ``False`` or the subprocess call raised.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        subprocess.run(
+            ["cmd", "/c", "start", "chrome", "chrome://extensions"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        pass
+    return True
+
+
+def _print_asbplayer_manual_instructions(ext_dir: Path) -> None:
+    print(
+        "  1. Enable \"Developer mode\" (top right of the extensions page).\n"
+        "  2. Click \"Load unpacked\".\n"
+        f"  3. Select this folder: {ext_dir}\n"
+        "  4. Done -- the extension ships preconfigured for the Katagiri bridge\n"
+        "     (Anki url http://127.0.0.1:8766, WebSocket ws://127.0.0.1:8766/ws),\n"
+        "     no settings to edit. Mining works while Katagiri is running."
+    )
+
+
+def step_asbplayer_extension(repo_root: Path, *, prompt: Any = input) -> StepResult:
+    """Offer to install the vendored, prebuilt asbplayer browser extension.
+
+    Always asks -- even under ``--yes`` -- same pattern as ``step_irodori``:
+    installing a browser extension is not something this wizard should do
+    unattended, so it needs its own explicit yes regardless of ``--yes``.
+    Declining, or hitting EOF/Ctrl-C (the shape a closed stdin under
+    ``--yes`` takes), skips silently after printing the manual steps so the
+    operator can do it later -- this never blocks an unattended run.
+
+    The vendored build's bridge URLs are checked but never patched: a
+    missing URL means the build needs rebuilding from the asbplayer
+    checkout (vendor/README.md), not something this installer can fix, so
+    that case is reported as ACTION NEEDED before any prompt.
+    """
+    ext_dir = _asbplayer_extension_dir(repo_root)
+    if not (ext_dir / "manifest.json").exists():
+        return StepResult("SKIP", "vendored extension build absent (copy vendor/ data first)")
+
+    ws_found, anki_found = _verify_asbplayer_extension_build(ext_dir)
+    if not (ws_found and anki_found):
+        missing = [
+            url
+            for url, found in (
+                (_ASBPLAYER_EXT_WS_URL, ws_found),
+                (_ASBPLAYER_EXT_ANKI_URL, anki_found),
+            )
+            if not found
+        ]
+        return StepResult(
+            "ACTION NEEDED",
+            f"vendored bundle missing baked-in URL(s): {', '.join(missing)} -- "
+            "rebuild it from the asbplayer checkout (see vendor/README.md); "
+            "the installer does not patch the bundle",
+        )
+
+    print(
+        "  The vendored asbplayer browser extension ships preconfigured for the\n"
+        "  Katagiri bridge (no settings to edit): Anki url http://127.0.0.1:8766,\n"
+        "  WebSocket ws://127.0.0.1:8766/ws."
+    )
+    try:
+        answer = prompt("  Install the asbplayer browser extension now? [y/N]: ")
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if (answer or "").strip().lower() != "y":
+        _print_asbplayer_manual_instructions(ext_dir)
+        return StepResult("SKIP", "declined")
+
+    if _open_chrome_extensions_page():
+        print("  Opened chrome://extensions.")
+    else:
+        print("  Open chrome://extensions manually.")
+    _print_asbplayer_manual_instructions(ext_dir)
+    return StepResult("OK", f"instructions printed; vendored build at {ext_dir}")
+
+
 # ---------------------------------------------------------------------------
 # Wizard runner
 # ---------------------------------------------------------------------------
@@ -1646,7 +1812,7 @@ _RETRY_HINTS = {
 def _wizard_step_runners(
     cfg_path: Path, repo_root: Path, *, assume_yes: bool
 ) -> list[tuple[str, Any]]:
-    """The eleven wizard steps as ``(label, thunk)`` pairs, in execution order.
+    """The twelve wizard steps as ``(label, thunk)`` pairs, in execution order.
 
     Each thunk re-reads config.toml when invoked, so re-running a step (via
     Retry or the post-setup menu) after the Config step changed a path sees
@@ -1668,6 +1834,7 @@ def _wizard_step_runners(
         (STEP_LABELS[8], lambda: step_backup()),
         (STEP_LABELS[9], lambda: step_irodori(_cfg().db_path)),
         (STEP_LABELS[10], lambda: step_companions(_cfg(), assume_yes=assume_yes)),
+        (STEP_LABELS[11], lambda: step_asbplayer_extension(repo_root)),
     ]
 
 

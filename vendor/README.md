@@ -41,6 +41,7 @@ This directory holds large third-party data files that Katagiri needs at runtime
 | `vendor/jlpt/n<1-5>-vocab-*.anki` | tanos JLPT vocabulary lists, one file per level | ~8 MB total |
 | `vendor/irodori/` | Irodori (Japan Foundation) PDF/MP3 lesson materials — **hand-acquired, never committed** | varies |
 | `vendor/taekim/` | Tae Kim's Guide to Japanese Grammar extracts — CC BY-NC-SA, **committable with attribution** | small (HTML/text extracts) |
+| `vendor/asbplayer-extension/` | Custom asbplayer Chrome unpacked extension build, Katagiri-bridge defaults baked in | ~9 MB |
 
 jreadability, BCCWJ, and the tanos JLPT lists are the **difficulty-for-me**
 datasets (D-10 policy, `docs/dev-plan.md` D2). They are *optional*:
@@ -205,6 +206,31 @@ the first time.
 2. Review the extract and the `CHECKSUMS.sha256` diff before committing either
    — unlike every other vendored component, these files are allowed into the
    repository.
+
+### asbplayer extension (Chrome unpacked build)
+
+* **Source**: local checkout at `C:\ProjectsC\RandomPr\asbplayer` — the user's
+  fork of asbplayer, carrying uncommitted playback-state additions on top of
+  upstream. Not a public release artifact; this vendor copy is a build output,
+  not a downloaded dependency, and (like the rest of this directory) is not
+  committed to the Katagiri repo.
+* **Defaults changed for Katagiri**: before building, `common/settings/settings-provider.ts`
+  was edited so a fresh install points at the Katagiri bridge out of the box —
+  `ankiConnectUrl: 'http://127.0.0.1:8766'` (was `8765`, the standard
+  AnkiConnect port; `8766` is Katagiri's AnkiConnect proxy) and
+  `webSocketClientEnabled: true` (was `false`), pairing with the pre-existing
+  `webSocketServerUrl: 'ws://127.0.0.1:8766/ws'`.
+* **Build command**: from the asbplayer checkout root,
+  `node .yarn/releases/yarn-3.2.0.cjs workspace @project/extension run build`
+  (wxt build; yarn is vendored in-repo as a Berry release, no global yarn
+  install needed). Output lands in `extension/.output/chrome-mv3/` and is
+  mirrored here with `robocopy ... /MIR`.
+* **Version pinned**: built 2026-08-25 from the fork's working tree as it
+  stood that day (uncommitted changes included) — this is a snapshot, not a
+  tagged release; rebuild from the same checkout to refresh it.
+* **Loading it**: `chrome://extensions` → enable Developer mode → "Load
+  unpacked" → select `vendor/asbplayer-extension/` (the directory containing
+  `manifest.json`).
 
 ## Recording checksums
 

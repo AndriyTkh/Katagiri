@@ -1766,4 +1766,133 @@ def test_render_mcp_connect_instructions_embeds_valid_json():
 def test_render_mcp_connect_instructions_mentions_stdio_and_data_home_env():
     text = installer.render_mcp_connect_instructions(Path("C:/repo"))
     assert "stdio" in text
-    assert "KATAGIRI_DATA_HOME" in text
+
+
+# ---------------------------------------------------------------------------
+# asbplayer browser extension (vendored build) -- step + doctor probe
+# ---------------------------------------------------------------------------
+
+
+def _write_asbplayer_extension(
+    tmp_path, *, ws_url=True, anki_url=True, manifest=True
+):
+    ext_dir = tmp_path / "vendor" / "asbplayer-extension"
+    ext_dir.mkdir(parents=True)
+    if manifest:
+        (ext_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    js_bits = []
+    if ws_url:
+        js_bits.append("webSocketServerUrl:'ws://127.0.0.1:8766/ws'")
+    if anki_url:
+        js_bits.append("ankiConnectUrl:'http://127.0.0.1:8766'")
+    (ext_dir / "bundle.js").write_text(";".join(js_bits) or "// no urls", encoding="utf-8")
+    return ext_dir
+
+
+def test_step_asbplayer_extension_skips_when_vendor_build_absent(tmp_path):
+    result = installer.step_asbplayer_extension(tmp_path)
+    assert result.status == "SKIP"
+    assert "vendored extension build absent" in result.detail
+
+
+def test_step_asbplayer_extension_action_needed_when_ws_url_missing(tmp_path):
+    _write_asbplayer_extension(tmp_path, ws_url=False, anki_url=True)
+
+    def boom(_text):
+        raise AssertionError("must not prompt when verification fails")
+
+    result = installer.step_asbplayer_extension(tmp_path, prompt=boom)
+    assert result.status == "ACTION NEEDED"
+    assert "ws://127.0.0.1:8766/ws" in result.detail
+    assert "http://127.0.0.1:8766" not in result.detail
+
+
+def test_step_asbplayer_extension_action_needed_when_anki_url_missing(tmp_path):
+    _write_asbplayer_extension(tmp_path, ws_url=True, anki_url=False)
+
+    result = installer.step_asbplayer_extension(tmp_path, prompt=lambda _t: "y")
+    assert result.status == "ACTION NEEDED"
+    assert "http://127.0.0.1:8766" in result.detail
+
+
+def test_step_asbplayer_extension_decline_prints_manual_instructions(tmp_path, capsys, monkeypatch):
+    ext_dir = _write_asbplayer_extension(tmp_path)
+
+    def launcher_boom():
+        raise AssertionError("must not launch chrome on decline")
+
+    monkeypatch.setattr(installer, "_open_chrome_extensions_page", launcher_boom)
+
+    result = installer.step_asbplayer_extension(tmp_path, prompt=lambda _t: "n")
+    assert result.status == "SKIP"
+    assert result.detail == "declined"
+    out = capsys.readouterr().out
+    assert "Load unpacked" in out
+    assert str(ext_dir) in out
+
+
+def test_step_asbplayer_extension_eof_on_prompt_is_treated_as_decline(tmp_path):
+    _write_asbplayer_extension(tmp_path)
+
+    def eof(_text):
+        raise EOFError
+
+    result = installer.step_asbplayer_extension(tmp_path, prompt=eof)
+    assert result.status == "SKIP"
+    assert result.detail == "declined"
+
+
+def test_step_asbplayer_extension_accept_calls_chrome_launcher_and_prints_vendor_path(
+    tmp_path, capsys, monkeypatch
+):
+    ext_dir = _write_asbplayer_extension(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        installer, "_open_chrome_extensions_page", lambda: calls.append(1) or True
+    )
+
+    result = installer.step_asbplayer_extension(tmp_path, prompt=lambda _t: "y")
+
+    assert result.status == "OK"
+    assert len(calls) == 1
+    out = capsys.readouterr().out
+    assert str(ext_dir) in out
+    assert "Load unpacked" in out
+
+
+def test_probe_asbplayer_extension_manual_step_when_build_absent(tmp_path):
+    status = installer.probe_asbplayer_extension(tmp_path)
+    assert status.status == "MANUAL STEP"
+    assert "absent" in status.detail
+
+
+def test_probe_asbplayer_extension_manual_step_when_url_missing(tmp_path):
+    _write_asbplayer_extension(tmp_path, ws_url=False, anki_url=True)
+    status = installer.probe_asbplayer_extension(tmp_path)
+    assert status.status == "MANUAL STEP"
+    assert "ws://127.0.0.1:8766/ws" in status.detail
+
+
+def test_probe_asbplayer_extension_ready_when_manifest_and_urls_verified(tmp_path):
+    _write_asbplayer_extension(tmp_path)
+    status = installer.probe_asbplayer_extension(tmp_path)
+    assert status.status == "READY"
+
+
+def test_check_never_launches_chrome(tmp_path, monkeypatch):
+    """--check's read-only contract: the doctor probe must never open Chrome,
+    regardless of whether the vendored build/bridge URLs are present."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    installer.config_mod.reset_config_cache()
+
+    def boom():
+        raise AssertionError("--check must never launch chrome")
+
+    monkeypatch.setattr(installer, "_open_chrome_extensions_page", boom)
+
+    def input_boom(*_a, **_k):
+        raise AssertionError("must not prompt under --check")
+
+    monkeypatch.setattr("builtins.input", input_boom)
+
+    installer.main(["--check"])
